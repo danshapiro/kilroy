@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -429,6 +430,12 @@ func toResponsesTools(tools []llm.ToolDefinition) []map[string]any {
 		if params == nil {
 			params = map[string]any{"type": "object", "properties": map[string]any{}}
 		}
+		// OpenAI strict mode requires a fully-specified JSON Schema:
+		// - object schemas must set additionalProperties=false
+		// - required must include every key in properties (even for "optional" fields)
+		// See API validation errors like:
+		// "Invalid schema for function 'read_file': ... 'required' ... Missing 'limit'."
+		params = strictifyJSONSchema(params)
 		out = append(out, map[string]any{
 			"type":        "function",
 			"name":        t.Name,
@@ -439,6 +446,87 @@ func toResponsesTools(tools []llm.ToolDefinition) []map[string]any {
 		})
 	}
 	return out
+}
+
+func strictifyJSONSchema(in map[string]any) map[string]any {
+	// Best-effort deep copy + strictification for OpenAI tool schemas.
+	// This intentionally handles only the constructs we emit (object/array) and is safe to
+	// apply repeatedly (idempotent for our shapes).
+	cp := deepCopyAny(in).(map[string]any)
+	strictifyJSONSchemaInPlace(cp)
+	return cp
+}
+
+func strictifyJSONSchemaInPlace(m map[string]any) {
+	if m == nil {
+		return
+	}
+	typ, _ := m["type"].(string)
+	switch typ {
+	case "object":
+		// OpenAI strict mode requires this be present and false.
+		m["additionalProperties"] = false
+
+		props, _ := m["properties"].(map[string]any)
+		if props == nil {
+			props = map[string]any{}
+			m["properties"] = props
+		}
+		// Required must include all properties keys (even for "optional" fields).
+		keys := make([]string, 0, len(props))
+		for k := range props {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		m["required"] = keys
+
+		// Recurse into property schemas.
+		for _, k := range keys {
+			if child, ok := props[k].(map[string]any); ok {
+				strictifyJSONSchemaInPlace(child)
+			}
+		}
+	case "array":
+		if items, ok := m["items"].(map[string]any); ok {
+			strictifyJSONSchemaInPlace(items)
+		}
+	}
+
+	// If the schema uses combinators, strictify any subschemas we can find.
+	for _, comb := range []string{"anyOf", "oneOf", "allOf"} {
+		raw, ok := m[comb]
+		if !ok || raw == nil {
+			continue
+		}
+		arr, ok := raw.([]any)
+		if !ok {
+			continue
+		}
+		for _, it := range arr {
+			if child, ok := it.(map[string]any); ok {
+				strictifyJSONSchemaInPlace(child)
+			}
+		}
+	}
+}
+
+func deepCopyAny(v any) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, vv := range x {
+			out[k] = deepCopyAny(vv)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i := range x {
+			out[i] = deepCopyAny(x[i])
+		}
+		return out
+	default:
+		return v
+	}
 }
 
 func toResponsesToolChoice(tc llm.ToolChoice) (any, error) {
