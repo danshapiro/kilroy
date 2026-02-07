@@ -41,8 +41,9 @@ cat > "$OUT_DIR/cxdb_fake.go" <<'GO'
 package main
 
 import (
-  "fmt"
+  "encoding/binary"
   "encoding/json"
+  "fmt"
   "io"
   "log"
   "net"
@@ -50,13 +51,18 @@ import (
   "strconv"
   "strings"
   "sync"
+  "sync/atomic"
+
+  "github.com/zeebo/blake3"
 )
 
 type srvState struct {
   mu sync.Mutex
   nextContextID int
   nextTurnID int
+  nextSessionID atomic.Uint64
   contexts map[string]*ctxState
+  blobs map[[32]byte][]byte
 }
 
 type ctxState struct {
@@ -65,8 +71,149 @@ type ctxState struct {
   HeadDepth int
 }
 
+type binFrameHeader struct {
+  Len uint32
+  MsgType uint16
+  Flags uint16
+  ReqID uint64
+}
+
+func readBinFrame(r io.Reader) (binFrameHeader, []byte, error) {
+  var hdrBuf [16]byte
+  if _, err := io.ReadFull(r, hdrBuf[:]); err != nil {
+    return binFrameHeader{}, nil, err
+  }
+  h := binFrameHeader{
+    Len: binary.LittleEndian.Uint32(hdrBuf[0:4]),
+    MsgType: binary.LittleEndian.Uint16(hdrBuf[4:6]),
+    Flags: binary.LittleEndian.Uint16(hdrBuf[6:8]),
+    ReqID: binary.LittleEndian.Uint64(hdrBuf[8:16]),
+  }
+  payload := make([]byte, int(h.Len))
+  if _, err := io.ReadFull(r, payload); err != nil {
+    return binFrameHeader{}, nil, err
+  }
+  return h, payload, nil
+}
+
+func writeBinFrame(w io.Writer, msgType uint16, flags uint16, reqID uint64, payload []byte) error {
+  var hdrBuf [16]byte
+  binary.LittleEndian.PutUint32(hdrBuf[0:4], uint32(len(payload)))
+  binary.LittleEndian.PutUint16(hdrBuf[4:6], msgType)
+  binary.LittleEndian.PutUint16(hdrBuf[6:8], flags)
+  binary.LittleEndian.PutUint64(hdrBuf[8:16], reqID)
+  if _, err := w.Write(hdrBuf[:]); err != nil {
+    return err
+  }
+  if len(payload) > 0 {
+    _, err := w.Write(payload)
+    return err
+  }
+  return nil
+}
+
+func writeBinError(w io.Writer, reqID uint64, code uint32, detail string) error {
+  detailBytes := []byte(detail)
+  payload := make([]byte, 8+len(detailBytes))
+  binary.LittleEndian.PutUint32(payload[0:4], code)
+  binary.LittleEndian.PutUint32(payload[4:8], uint32(len(detailBytes)))
+  copy(payload[8:], detailBytes)
+  return writeBinFrame(w, 255, 0, reqID, payload)
+}
+
+func serveBinary(ln net.Listener, st *srvState) {
+  for {
+    conn, err := ln.Accept()
+    if err != nil {
+      return
+    }
+    go handleBinaryConn(conn, st)
+  }
+}
+
+func handleBinaryConn(conn net.Conn, st *srvState) {
+  defer func() { _ = conn.Close() }()
+  for {
+    h, payload, err := readBinFrame(conn)
+    if err != nil {
+      return
+    }
+    switch h.MsgType {
+    case 1: // HELLO
+      if len(payload) < 8 {
+        _ = writeBinError(conn, h.ReqID, 400, "hello: short payload")
+        continue
+      }
+      ver := binary.LittleEndian.Uint32(payload[0:4])
+      tagLen := binary.LittleEndian.Uint32(payload[4:8])
+      if ver != 1 {
+        _ = writeBinError(conn, h.ReqID, 422, fmt.Sprintf("hello: unsupported protocol_version=%d", ver))
+        continue
+      }
+      if int(8+tagLen) > len(payload) {
+        _ = writeBinError(conn, h.ReqID, 400, "hello: client_tag_len out of range")
+        continue
+      }
+      _ = payload[8 : 8+tagLen] // ignore client tag
+
+      sessionID := st.nextSessionID.Add(1)
+      serverTag := []byte("cxdb-fake")
+
+      resp := make([]byte, 4+8+4+len(serverTag))
+      binary.LittleEndian.PutUint32(resp[0:4], 1)
+      binary.LittleEndian.PutUint64(resp[4:12], sessionID)
+      binary.LittleEndian.PutUint32(resp[12:16], uint32(len(serverTag)))
+      copy(resp[16:], serverTag)
+      _ = writeBinFrame(conn, 1, 0, h.ReqID, resp)
+
+    case 11: // PUT_BLOB
+      if len(payload) < 36 {
+        _ = writeBinError(conn, h.ReqID, 400, "put_blob: short payload")
+        continue
+      }
+      var wantHash [32]byte
+      copy(wantHash[:], payload[0:32])
+      rawLen := binary.LittleEndian.Uint32(payload[32:36])
+      if int(36+rawLen) != len(payload) {
+        _ = writeBinError(conn, h.ReqID, 400, "put_blob: len mismatch")
+        continue
+      }
+      raw := payload[36:]
+      gotHash := blake3.Sum256(raw)
+      if gotHash != wantHash {
+        _ = writeBinError(conn, h.ReqID, 409, "put_blob: hash mismatch")
+        continue
+      }
+
+      st.mu.Lock()
+      _, existed := st.blobs[wantHash]
+      if !existed {
+        st.blobs[wantHash] = append([]byte{}, raw...)
+      }
+      st.mu.Unlock()
+
+      resp := make([]byte, 33)
+      copy(resp[0:32], wantHash[:])
+      if existed {
+        resp[32] = 0
+      } else {
+        resp[32] = 1
+      }
+      _ = writeBinFrame(conn, 11, 0, h.ReqID, resp)
+
+    default:
+      _ = writeBinError(conn, h.ReqID, 400, fmt.Sprintf("unsupported msg_type=%d", h.MsgType))
+    }
+  }
+}
+
 func main() {
-  st := &srvState{nextContextID: 1, nextTurnID: 1, contexts: map[string]*ctxState{}}
+  st := &srvState{
+    nextContextID: 1,
+    nextTurnID: 1,
+    contexts: map[string]*ctxState{},
+    blobs: map[[32]byte][]byte{},
+  }
 
   mux := http.NewServeMux()
   mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
@@ -74,7 +221,8 @@ func main() {
     if r.Method != http.MethodPut { w.WriteHeader(http.StatusMethodNotAllowed); return }
     w.WriteHeader(http.StatusCreated)
   })
-  mux.HandleFunc("/v1/contexts", func(w http.ResponseWriter, r *http.Request) {
+
+  handleContextCreate := func(w http.ResponseWriter, r *http.Request) {
     if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
     baseTurnID := "0"
     b, _ := io.ReadAll(r.Body)
@@ -102,14 +250,21 @@ func main() {
       "head_turn_id": ci.HeadTurnID,
       "head_depth": ci.HeadDepth,
     })
+  }
+  mux.HandleFunc("/v1/contexts/create", handleContextCreate)
+  mux.HandleFunc("/v1/contexts/fork", handleContextCreate)
+  mux.HandleFunc("/v1/contexts", func(w http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
+    handleContextCreate(w, r)
   })
   mux.HandleFunc("/v1/contexts/", func(w http.ResponseWriter, r *http.Request) {
     rest := strings.TrimPrefix(r.URL.Path, "/v1/contexts/")
     parts := strings.Split(rest, "/")
-    if len(parts) < 2 || parts[1] != "turns" { w.WriteHeader(http.StatusNotFound); return }
+    if len(parts) < 2 { w.WriteHeader(http.StatusNotFound); return }
     ctxID := strings.TrimSpace(parts[0])
     if ctxID == "" { w.WriteHeader(http.StatusNotFound); return }
     if r.Method != http.MethodPost { w.WriteHeader(http.StatusMethodNotAllowed); return }
+    if parts[1] != "append" && parts[1] != "turns" { w.WriteHeader(http.StatusNotFound); return }
 
     st.mu.Lock()
     ci := st.contexts[ctxID]
@@ -132,16 +287,23 @@ func main() {
     })
   })
 
-  l, err := net.Listen("tcp", "127.0.0.1:0")
+  httpLn, err := net.Listen("tcp", "127.0.0.1:0")
   if err != nil { log.Fatal(err) }
-  addr := l.Addr().String()
-  log.Printf("listening=%s", addr)
-  // Print base URL for shell parsing.
-  fmt.Println("http://" + addr)
+  binLn, err := net.Listen("tcp", "127.0.0.1:0")
+  if err != nil { log.Fatal(err) }
 
-  if err := http.Serve(l, mux); err != nil {
-    log.Fatal(err)
-  }
+  // Print base URLs for shell parsing.
+  fmt.Println("http://" + httpLn.Addr().String())
+  fmt.Println(binLn.Addr().String())
+
+  go func() {
+    if err := http.Serve(httpLn, mux); err != nil {
+      log.Fatal(err)
+    }
+  }()
+  go serveBinary(binLn, st)
+
+  select {}
 }
 GO
 
@@ -157,20 +319,30 @@ cleanup() {
 trap cleanup EXIT
 
 # Wait for URL to appear.
-for _ in {1..50}; do
+CXDB_URL=""
+CXDB_BIN_ADDR=""
+for _ in {1..200}; do
   if [[ -s "$CXDB_URL_FILE" ]]; then
-    break
+    CXDB_URL="$(sed -n '1p' "$CXDB_URL_FILE" | tr -d '\r' | tr -d '\n' | xargs || true)"
+    CXDB_BIN_ADDR="$(sed -n '2p' "$CXDB_URL_FILE" | tr -d '\r' | tr -d '\n' | xargs || true)"
+    if [[ -n "$CXDB_URL" && -n "$CXDB_BIN_ADDR" ]]; then
+      break
+    fi
   fi
-  sleep 0.1
+  sleep 0.05
 done
 
-CXDB_URL="$(tail -n 1 "$CXDB_URL_FILE" | tr -d '\r' | tr -d '\n' | xargs)"
-if [[ -z "$CXDB_URL" ]]; then
-  echo "failed to start fake cxdb" >&2
+if [[ -z "$CXDB_URL" || -z "$CXDB_BIN_ADDR" ]]; then
+  echo "failed to start fake cxdb (missing endpoints)" >&2
+  echo "--- cxdb output ---" >&2
+  sed -n '1,5p' "$CXDB_URL_FILE" >&2 || true
+  echo "--- cxdb log ---" >&2
+  sed -n '1,50p' "$OUT_DIR/cxdb.log" >&2 || true
   exit 1
 fi
 
 echo "cxdb_url=$CXDB_URL"
+echo "cxdb_bin_addr=$CXDB_BIN_ADDR"
 
 run_one() {
   local dot="$1"
@@ -216,7 +388,7 @@ PY
       echo "KILROY_BENCH_OVERRIDE_PROVIDER is set to an unsupported value: ${KILROY_BENCH_OVERRIDE_PROVIDER} (supported: openai)" >&2
       exit 1
     fi
-    base_model="${KILROY_BENCH_OVERRIDE_MODEL_BASE:-gpt-5.3-codex}"
+    base_model="${KILROY_BENCH_OVERRIDE_MODEL_BASE:-gpt-5.2-codex}"
     hard_model="${KILROY_BENCH_OVERRIDE_MODEL_HARD:-$base_model}"
     verify_model="${KILROY_BENCH_OVERRIDE_MODEL_VERIFY:-$base_model}"
     review_model="${KILROY_BENCH_OVERRIDE_MODEL_REVIEW:-$hard_model}"
@@ -268,13 +440,22 @@ for p in sorted(providers):
 PY
 )" || return 1
 
+  # Fail fast if the graph references an unsupported provider.
+  while read -r p; do
+    [[ -z "$p" ]] && continue
+    case "$p" in
+      openai|anthropic|google) : ;;
+      *) echo "unsupported provider in graph: $p" >&2; exit 1 ;;
+    esac
+  done <<< "$providers"
+
   local cfg="$workdir/run.yaml"
   cat > "$cfg" <<YAML
 version: 1
 repo:
   path: $repo
 cxdb:
-  binary_addr: 127.0.0.1:9009
+  binary_addr: $CXDB_BIN_ADDR
   http_base_url: $CXDB_URL
 modeldb:
   litellm_catalog_path: $PINNED_CATALOG
@@ -285,21 +466,22 @@ git:
 llm:
   providers:
 YAML
+  # Configure all supported providers so engine-level failover can work when API keys are present.
+  # This does not change the DOT contract: the graph still selects the primary provider/model.
+  echo "NOTE: benchmark run config includes failover-capable providers: openai, anthropic, google"
   local backend_default="${KILROY_BENCH_BACKEND_DEFAULT:-api}"
-  while read -r p; do
-    [[ -z "$p" ]] && continue
+  for p in openai anthropic google; do
     local backend="$backend_default"
     case "$p" in
       openai) backend="${KILROY_BENCH_BACKEND_OPENAI:-$backend}" ;;
       anthropic) backend="${KILROY_BENCH_BACKEND_ANTHROPIC:-$backend}" ;;
       google) backend="${KILROY_BENCH_BACKEND_GOOGLE:-$backend}" ;;
-      *) echo "unsupported provider in graph: $p" >&2; exit 1 ;;
     esac
     cat >> "$cfg" <<YAML
     $p:
       backend: $backend
 YAML
-  done <<< "$providers"
+  done
 
   local run_id="bench-$name-$STAMP"
   local logs_root="$workdir/logs"

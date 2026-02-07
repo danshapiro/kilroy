@@ -6,10 +6,10 @@ digraph solitaire {
         retry_target="impl_setup",
         fallback_retry_target="impl_game_logic",
         model_stylesheet="
-            * { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: medium; }
-            .hard { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: high; }
-            .verify { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: medium; }
-            .review { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: high; }
+            * { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: medium; }
+            .hard { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: high; }
+            .verify { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: medium; }
+            .review { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: high; }
         "
     ]
 
@@ -51,7 +51,7 @@ Read .ai/spec.md. Set up the project structure based on the chosen language:
 Create the basic directory structure and configuration files needed.
 
 Run the appropriate build command:
-- Python: python -m py_compile src/*.py (or pytest --collect-only if tests exist)
+- Python: python3 -m py_compile src/*.py (or pytest --collect-only if tests exist)
 - Go: go build ./...
 - Rust: cargo build
 
@@ -67,11 +67,14 @@ Write status.json: outcome=success if project structure is created and builds, o
 Run:
 1. Check that project configuration file exists (pyproject.toml/requirements.txt, go.mod, or Cargo.toml)
 2. Check that source directories exist
-3. Run build command appropriate to language
+3. Run build command appropriate to language (ONLY one):
+   - Python: python3 -m py_compile src/*.py
+   - Go: go build ./...
+   - Rust: cargo build
 4. Verify no syntax errors
 
 Write results to .ai/verify_setup.md.
-Write status.json: outcome=success if ALL checks pass, outcome=fail with details otherwise."
+Write status.json: outcome=success if ALL checks pass, outcome=fail with failure_reason otherwise."
     ]
 
     check_setup [shape=diamond, label="Setup OK?"]
@@ -93,7 +96,7 @@ Implement the core game data structures:
 Include basic validation methods and unit tests for each structure.
 
 Run appropriate test command:
-- Python: pytest tests/
+- Python: python3 -m pytest tests/
 - Go: go test ./...
 - Rust: cargo test
 
@@ -107,13 +110,19 @@ Write status.json: outcome=success if all tests pass, outcome=fail with failure_
         prompt="Verify data structures implementation.
 
 Run:
-1. Build command for the language
-2. Run all unit tests
+1. Build command for the language (ONLY one):
+   - Python: python3 -m py_compile src/*.py
+   - Go: go build ./...
+   - Rust: cargo build
+2. Run all unit tests for the chosen language (ONLY one):
+   - Python: python3 -m pytest tests/
+   - Go: go test ./...
+   - Rust: cargo test
 3. Check that Card, Deck, and Pile types are defined
 4. Verify basic operations work (create deck, shuffle, deal)
 
 Write results to .ai/verify_data_structures.md.
-Write status.json: outcome=success if all pass, outcome=fail with details."
+Write status.json: outcome=success if all pass, outcome=fail with failure_reason."
     ]
 
     check_data_structures [shape=diamond, label="Data structures OK?"]
@@ -141,8 +150,8 @@ Create comprehensive tests covering:
 - Win detection
 - Edge cases (empty piles, king placement)
 
-Run tests:
-- Python: pytest tests/ -v
+Run tests for the chosen language ONLY (do not run other language commands):
+- Python: python3 -m pytest tests/ -v
 - Go: go test ./... -v
 - Rust: cargo test -- --nocapture
 
@@ -156,14 +165,20 @@ Write status.json: outcome=success if all tests pass, outcome=fail with failure_
         prompt="Verify game logic implementation.
 
 Run:
-1. Build command
-2. Run all tests with verbose output
+1. Build command (ONLY one):
+   - Python: python3 -m py_compile src/*.py
+   - Go: go build ./...
+   - Rust: cargo build
+2. Run all tests with verbose output for the chosen language (ONLY one):
+   - Python: python3 -m pytest tests/ -v
+   - Go: go test ./... -v
+   - Rust: cargo test -- --nocapture
 3. Verify move validation works correctly
 4. Check win condition detection
 5. Test undo functionality
 
 Write results to .ai/verify_game_logic.md.
-Write status.json: outcome=success if all pass, outcome=fail with details."
+Write status.json: outcome=success if all pass, outcome=fail with failure_reason."
     ]
 
     check_game_logic [shape=diamond, label="Game logic OK?"]
@@ -194,8 +209,8 @@ Use appropriate library:
 
 Create integration tests that verify UI components render without crashing.
 
-Run:
-- Python: pytest tests/ && python -m mypy src/ (if using type hints)
+Run for the chosen language ONLY (do not run other language commands):
+- Python: python3 -m pytest tests/ && python3 -m mypy src/ (if using type hints)
 - Go: go build ./... && go test ./...
 - Rust: cargo build && cargo test
 
@@ -209,14 +224,20 @@ Write status.json: outcome=success if builds and tests pass, outcome=fail with f
         prompt="Verify terminal UI implementation.
 
 Run:
-1. Build the executable
-2. Run all tests
+1. Build the executable (ONLY one):
+   - Python: python3 -m py_compile src/*.py
+   - Go: go build ./...
+   - Rust: cargo build
+2. Run all tests for the chosen language (ONLY one):
+   - Python: python3 -m pytest tests/
+   - Go: go test ./...
+   - Rust: cargo test
 3. Verify UI components exist (renderer, input handler)
 4. Check that game can be instantiated
 5. Test that rendering doesn't crash with empty game state
 
 Write results to .ai/verify_terminal_ui.md.
-Write status.json: outcome=success if all pass, outcome=fail with details."
+Write status.json: outcome=success if all pass, outcome=fail with failure_reason."
     ]
 
     check_terminal_ui [shape=diamond, label="Terminal UI OK?"]
@@ -243,7 +264,8 @@ Test the complete game:
 - Check that undo works across multiple moves
 
 Run:
-- Python: python src/main.py (manual test) && pytest tests/
+IMPORTANT: Run for the chosen language ONLY (do not run other language commands):
+- Python: python3 src/main.py (manual test) && python3 -m pytest tests/
 - Go: go build ./cmd/solitaire && go test ./...
 - Rust: cargo build --release && cargo test
 
@@ -257,14 +279,20 @@ Write status.json: outcome=success if game runs and all tests pass, outcome=fail
         prompt="Verify integration is complete.
 
 Run:
-1. Build the final executable
-2. Run all tests
+1. Build the final executable (ONLY one):
+   - Python: python3 -m py_compile src/*.py
+   - Go: go build ./...
+   - Rust: cargo build
+2. Run all tests for the chosen language (ONLY one):
+   - Python: python3 -m pytest tests/
+   - Go: go test ./...
+   - Rust: cargo test
 3. Check README exists with instructions
 4. Verify the game binary can be executed
 5. Test that game starts without errors
 
 Write results to .ai/verify_integration.md.
-Write status.json: outcome=success if all pass, outcome=fail with details."
+Write status.json: outcome=success if all pass, outcome=fail with failure_reason."
     ]
 
     check_integration [shape=diamond, label="Integration OK?"]
@@ -329,5 +357,5 @@ Write status.json: outcome=success if the game is complete and playable per spec
 
     review -> check_review
     check_review -> exit            [condition="outcome=success"]
-    check_review -> impl_integration [condition="outcome=fail", label="fix"]
+    check_review -> impl_terminal_ui [condition="outcome=fail", label="fix"]
 }

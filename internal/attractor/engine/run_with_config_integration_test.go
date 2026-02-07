@@ -12,6 +12,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/strongdm/kilroy/internal/attractor/runtime"
 )
 
 func TestRunWithConfig_CLIBackend_CapturesInvocationAndPersistsArtifactsToCXDB(t *testing.T) {
@@ -51,6 +53,11 @@ if [[ -n "$out" ]]; then
 fi
 
 echo 'from_cli' > cli_wrote.txt
+
+# Simulate an agent producing a status.json in its working directory (the worktree).
+cat > status.json <<'JSON'
+{"status":"success","notes":"from_cli"}
+JSON
 
 echo '{"type":"start"}'
 echo '{"type":"done","text":"ok"}'
@@ -286,7 +293,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, reasoning_effort=low, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, reasoning_effort=low, auto_status=true, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -353,7 +360,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, codergen_mode=one_shot, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, codergen_mode=one_shot, auto_status=true, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -367,6 +374,90 @@ digraph G {
 
 	assertExists(t, filepath.Join(res.LogsRoot, "a", "api_request.json"))
 	assertExists(t, filepath.Join(res.LogsRoot, "a", "api_response.json"))
+}
+
+func TestRunWithConfig_APIBackend_AutoStatusFalse_FailsWhenNoStatusWritten(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+
+	pinned := writePinnedCatalog(t)
+	cxdbSrv := newCXDBTestServer(t)
+
+	openaiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "id": "resp_1",
+  "model": "gpt-5.2",
+  "output": [{"type": "message", "content": [{"type":"output_text", "text":"Hello"}]}],
+  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
+}`))
+	}))
+	t.Cleanup(openaiSrv.Close)
+
+	t.Setenv("OPENAI_API_KEY", "k")
+	t.Setenv("OPENAI_BASE_URL", openaiSrv.URL)
+
+	cfg := &RunConfigFile{Version: 1}
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
+	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
+	cfg.LLM.Providers = map[string]struct {
+		Backend BackendKind `json:"backend" yaml:"backend"`
+	}{
+		"openai": {Backend: BackendAPI},
+	}
+	cfg.ModelDB.LiteLLMCatalogPath = pinned
+	cfg.ModelDB.LiteLLMCatalogUpdatePolicy = "pinned"
+	cfg.Git.RunBranchPrefix = "attractor/run"
+
+	dot := []byte(`
+digraph G {
+  graph [goal="test"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, codergen_mode=one_shot, prompt="say hi"]
+  fix [shape=parallelogram, tool_command="echo fixed > fixed.txt"]
+
+  start -> a
+  a -> fix  [condition="outcome=fail"]
+  a -> exit [condition="outcome=success"]
+  fix -> exit
+}
+`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "test-run-api-autostatus-false", LogsRoot: logsRoot})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+
+	// API backend does not produce a status.json signal by itself; without auto_status=true,
+	// codergen must fail to preserve the contract.
+	b, err := os.ReadFile(filepath.Join(res.LogsRoot, "a", "status.json"))
+	if err != nil {
+		t.Fatalf("read a/status.json: %v", err)
+	}
+	out, err := runtime.DecodeOutcomeJSON(b)
+	if err != nil {
+		t.Fatalf("decode a/status.json: %v", err)
+	}
+	if out.Status != runtime.StatusFail {
+		t.Fatalf("a status: got %q want %q (out=%+v)", out.Status, runtime.StatusFail, out)
+	}
+	if !strings.Contains(out.FailureReason, "missing status.json") {
+		t.Fatalf("a failure_reason: got %q want to mention missing status.json", out.FailureReason)
+	}
+
+	// Ensure the fail edge executed and produced the expected committed artifact.
+	if got := strings.TrimSpace(runCmdOut(t, repo, "git", "show", res.FinalCommitSHA+":fixed.txt")); got != "fixed" {
+		t.Fatalf("fixed.txt: got %q want %q", got, "fixed")
+	}
 }
 
 func initTestRepo(t *testing.T) string {

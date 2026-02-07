@@ -129,6 +129,9 @@ func attractorRun(args []string) {
 	fmt.Printf("worktree=%s\n", res.WorktreeDir)
 	fmt.Printf("run_branch=%s\n", res.RunBranch)
 	fmt.Printf("final_commit=%s\n", res.FinalCommitSHA)
+	for _, w := range res.Warnings {
+		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
+	}
 
 	if string(res.FinalStatus) == "success" {
 		os.Exit(0)

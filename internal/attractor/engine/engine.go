@@ -99,6 +99,8 @@ type Engine struct {
 	warningsMu sync.Mutex
 	Warnings   []string
 
+	progressMu sync.Mutex
+
 	// Fidelity/session resolution state.
 	incomingEdge          *model.Edge // edge used to reach the current node (nil for start)
 	forceNextFidelity     string      // non-empty => override resolved fidelity for the next LLM node
@@ -118,6 +120,10 @@ func (e *Engine) Warn(msg string) {
 	e.warningsMu.Lock()
 	e.Warnings = append(e.Warnings, msg)
 	e.warningsMu.Unlock()
+	e.appendProgress(map[string]any{
+		"event":   "warning",
+		"message": msg,
+	})
 }
 
 func (e *Engine) warningsCopy() []string {
@@ -136,6 +142,7 @@ type Result struct {
 	RunBranch      string
 	FinalStatus    runtime.FinalStatus
 	FinalCommitSHA string
+	Warnings       []string
 }
 
 type PrepareOptions struct {
@@ -391,6 +398,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 				RunBranch:      e.RunBranch,
 				FinalStatus:    runtime.FinalSuccess,
 				FinalCommitSHA: sha,
+				Warnings:       e.warningsCopy(),
 			}, nil
 		}
 
@@ -409,6 +417,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		e.Context.ApplyUpdates(out.ContextUpdates)
 		e.Context.Set("outcome", string(out.Status))
 		e.Context.Set("preferred_label", out.PreferredLabel)
+		e.Context.Set("failure_reason", out.FailureReason)
 
 		// Checkpoint (git commit + checkpoint.json).
 		sha, err := e.checkpoint(node.ID, out, completed, nodeRetries)
@@ -506,8 +515,16 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 				RunBranch:      e.RunBranch,
 				FinalStatus:    runtime.FinalSuccess,
 				FinalCommitSHA: sha,
+				Warnings:       e.warningsCopy(),
 			}, nil
 		}
+		e.appendProgress(map[string]any{
+			"event":     "edge_selected",
+			"from_node": node.ID,
+			"to_node":   next.To,
+			"label":     next.Label(),
+			"condition": next.Condition(),
+		})
 
 		// loop_restart is not supported in v1 beyond basic detection (metaspec prohibits auto restart semantics).
 		if strings.EqualFold(next.Attr("loop_restart", "false"), "true") {
@@ -587,6 +604,13 @@ func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Out
 	if out.SuggestedNextIDs == nil {
 		out.SuggestedNextIDs = []string{}
 	}
+	// Enforce metaspec: failure_reason must be non-empty when status=fail|retry.
+	// Don't abort the run for a contract violation; coerce into a spec-compliant outcome.
+	if err := out.Validate(); err != nil {
+		if (out.Status == runtime.StatusFail || out.Status == runtime.StatusRetry) && strings.TrimSpace(out.FailureReason) == "" {
+			out.FailureReason = err.Error()
+		}
+	}
 
 	// Write status.json (canonical metaspec shape).
 	_ = writeJSON(filepath.Join(stageDir, "status.json"), out)
@@ -594,6 +618,28 @@ func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Out
 }
 
 func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries map[string]int) (runtime.Outcome, error) {
+	// Spec: conditional nodes are pass-through routing points. Retrying them based on
+	// a prior stage's FAIL/RETRY just burns retry budget and can create misleading
+	// "max retries exceeded" failures. Execute exactly once.
+	if resolvedHandlerType(node) == "conditional" {
+		e.appendProgress(map[string]any{
+			"event":   "stage_attempt_start",
+			"node_id": node.ID,
+			"attempt": 1,
+			"max":     1,
+		})
+		out, _ := e.executeNode(ctx, node)
+		e.appendProgress(map[string]any{
+			"event":          "stage_attempt_end",
+			"node_id":        node.ID,
+			"attempt":        1,
+			"max":            1,
+			"status":         string(out.Status),
+			"failure_reason": out.FailureReason,
+		})
+		return out, nil
+	}
+
 	maxRetries := parseInt(node.Attr("max_retries", ""), 0)
 	if maxRetries == 0 {
 		maxRetries = parseInt(e.Graph.Attrs["default_max_retry"], 0)
@@ -607,7 +653,21 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 	stageDir := filepath.Join(e.LogsRoot, node.ID)
 
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		e.appendProgress(map[string]any{
+			"event":   "stage_attempt_start",
+			"node_id": node.ID,
+			"attempt": attempt,
+			"max":     maxAttempts,
+		})
 		out, _ := e.executeNode(ctx, node)
+		e.appendProgress(map[string]any{
+			"event":          "stage_attempt_end",
+			"node_id":        node.ID,
+			"attempt":        attempt,
+			"max":            maxAttempts,
+			"status":         string(out.Status),
+			"failure_reason": out.FailureReason,
+		})
 		if out.Status == runtime.StatusSuccess || out.Status == runtime.StatusPartialSuccess || out.Status == runtime.StatusSkipped {
 			retries[node.ID] = 0
 			return out, nil
@@ -616,6 +676,14 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		if attempt < maxAttempts {
 			retries[node.ID]++
 			delay := backoffDelayForNode(e.Options.RunID, e.Graph, node, attempt)
+			e.appendProgress(map[string]any{
+				"event":     "stage_retry_sleep",
+				"node_id":   node.ID,
+				"attempt":   attempt,
+				"delay_ms":  delay.Milliseconds(),
+				"retries":   retries[node.ID],
+				"max_retry": maxRetries,
+			})
 			time.Sleep(delay)
 			continue
 		}

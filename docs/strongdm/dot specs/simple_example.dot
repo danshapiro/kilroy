@@ -3,7 +3,7 @@ digraph Simple {
         goal="Run tests and report",
         rankdir=LR,
         model_stylesheet="
-            * { llm_model: gpt-5.3-codex; llm_provider: openai; }
+            * { llm_model: gpt-5.2-codex; llm_provider: openai; }
         "
     ]
 

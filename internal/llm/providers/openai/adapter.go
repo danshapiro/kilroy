@@ -45,7 +45,8 @@ func NewFromEnv() (*Adapter, error) {
 	return &Adapter{
 		APIKey:  key,
 		BaseURL: strings.TrimRight(base, "/"),
-		Client:  &http.Client{Timeout: 120 * time.Second},
+		// Avoid short client-level timeouts; rely on request context deadlines instead.
+		Client: &http.Client{Timeout: 0},
 	}, nil
 }
 
@@ -53,7 +54,8 @@ func (a *Adapter) Name() string { return "openai" }
 
 func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
 	if a.Client == nil {
-		a.Client = &http.Client{Timeout: 120 * time.Second}
+		// Avoid short client-level timeouts; rely on request context deadlines instead.
+		a.Client = &http.Client{Timeout: 0}
 	}
 
 	instructions, inputItems, err := toResponsesInput(req.Messages)

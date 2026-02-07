@@ -6,10 +6,10 @@ digraph linkcheck {
         retry_target="impl_setup",
         fallback_retry_target="impl_crawler",
         model_stylesheet="
-            * { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: medium; }
-            .hard { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: high; }
-            .verify { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: medium; }
-            .review { llm_model: gpt-5.3-codex; llm_provider: openai; reasoning_effort: high; }
+            * { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: medium; }
+            .hard { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: high; }
+            .verify { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: medium; }
+            .review { llm_model: gpt-5.2-codex; llm_provider: openai; reasoning_effort: high; }
         "
     ]
 

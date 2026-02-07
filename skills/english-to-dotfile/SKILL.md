@@ -21,6 +21,97 @@ When invoked interactively (in conversation), you may include explanatory text.
 
 ## Process
 
+### Phase 0: Pick Models + Executors + Parallelism + Thinking (Before Writing Any DOT)
+
+This phase exists to translate ambiguous requests (or partial constraints like "make it parallel with gemini") into a concrete, runnable model/executor plan.
+
+**Override rule:** The user's commands override everything. Use the information below to fulfill them as best you can (while still ensuring the result is runnable in the current environment).
+
+- **Interactive mode:** present options and wait for the user's choice/overrides. Do not emit any `.dot` until chosen.
+- **Programmatic mode (CLI ingest / machine-parseable output):** you cannot ask questions. Apply the same selection process, default to the **Medium** option, and then emit only the `.dot`.
+
+#### Step 0.1: Capture User Constraints (If Any)
+
+Parse the user's message for constraints, including:
+- Required providers/models (e.g., "gemini", "opus", "codex", "only anthropic", "no openai")
+- Parallelism intent (e.g., "parallel", "consensus", "3-way", "fan-out")
+- Executor intent (e.g., "api only", "cli only")
+- Thinking intent (e.g., "fast/cheap", "max thinking", "default")
+
+Treat constraints as requirements to satisfy when possible, but still run the full process below to pick concrete model IDs and settings.
+
+#### Step 0.2: Detect Provider Access (API and CLI for All Three)
+
+Determine, for each provider, whether **API** and/or **CLI** execution is feasible in this environment:
+- OpenAI: API key present? CLI executable present?
+- Anthropic: API key present? CLI executable present?
+- Gemini/Google: API key present? CLI executable present?
+
+If a provider has neither API nor CLI available, you MUST NOT propose models from that provider.
+
+#### Step 0.3: Fetch "What's Current Today" (Weather Report)
+
+Fetch:
+- `curl -fsSL https://factory.strongdm.ai/weather-report`
+
+Extract the "Today's Models" list and treat it as the source of **current** model lines for each provider (including any consensus entries). Also extract any per-model parameter guidance (the Weather Report "Parameters" column) to inform thinking.
+
+#### Step 0.4: Fetch Token Costs (Latest LiteLLM Catalog)
+
+Fetch:
+- `curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`
+
+You MUST only use model IDs that exist in this catalog. Never invent model IDs.
+
+#### Step 0.5: Resolve Weather Report Names to Real Model IDs (Best-Effort, Verified)
+
+Weather Report names may not exactly match LiteLLM keys.
+
+For each Weather Report model name:
+- Find a matching LiteLLM key by searching the catalog (best-effort string normalization is OK).
+- Prefer exact/near-exact matches and "latest" variants when present.
+- Reject anything you cannot verify exists as a catalog key.
+
+#### Step 0.6: Define "Current" and "Cheapest (Current-Only)"
+
+- **Current models** are the resolved Weather Report models (after filtering by provider access).
+- **Cheapest** must be chosen **only from current model lines** (do not pick older generations just because they are cheaper).
+  - If you need "cheaper", reduce thinking and parallelism first.
+
+#### Step 0.7: Decide Thinking (No Fixed Mapping Table)
+
+Choose a thinking level for each option using:
+- Weather Report parameter guidance (when present), and
+- Otherwise, the option's intent (Low = minimal, Medium = strong/default, High = maximum).
+
+Do not hardcode a brittle mapping. Use best judgment and keep it consistent with the option's cost/quality goal.
+
+#### Step 0.8: Produce a Simple 3-Row Options Table (Then Ask, Then Stop)
+
+Before generating DOT, present exactly these three options in a single table:
+
+- **Low:** cheapest current model plan (no older models). Minimal thinking. No parallelism.
+- **Medium:** best current model plan (avoid "middle" choices when there's a clear best and a clear cheapest). Thinking per Weather Report / strong defaults. No parallelism.
+- **High:** 3 best current models in parallel for thinking-heavy stages (plan/review), then synthesize. Maximum thinking.
+
+The table MUST include:
+- Which model(s) you'd use for `impl`, `verify`, and `review` (and for High, the 3 parallel branches + the synthesis model).
+- Parallelism behavior (none vs 3-way).
+- Thinking approach (brief).
+- Executor availability and recommendation **for OpenAI, Anthropic, and Gemini** (account for both API+CLI where available; pick a preferred one consistent with constraints).
+
+After the table, ask:
+"Pick `low`, `medium`, or `high`, or reply with overrides (providers/models/executor/parallel/thinking)."
+
+STOP (interactive mode). Do not emit `.dot` until the user replies.
+
+#### Step 0.9: After Selection, Generate DOT
+
+Once the choice/overrides are known:
+- Encode the chosen models via `model_stylesheet` and/or explicit node attrs.
+- If High (or the user requested parallel), implement 3-way parallel planning/review with a fan-out + fan-in + synthesis pattern.
+- Keep the rest of the pipeline generation process unchanged.
+
 ### Phase 1: Requirements Expansion
 
 If the input is short/vague, expand into a structured spec covering: what the software is, language/platform, inputs/outputs, core features, acceptance criteria. Write the expanded spec to `.ai/spec.md` locally (for your reference while building the graph).
@@ -72,10 +163,10 @@ digraph project_name {
         retry_target="<first implementation node>",
         fallback_retry_target="<second implementation node>",
         model_stylesheet="
-            * { llm_model: claude-sonnet-4-5; llm_provider: anthropic; }
-            .hard { llm_model: claude-opus-4-6; llm_provider: anthropic; }
-            .verify { llm_model: claude-sonnet-4-5; llm_provider: anthropic; reasoning_effort: medium; }
-            .review { llm_model: claude-opus-4-6; llm_provider: anthropic; reasoning_effort: high; }
+            * { llm_model: DEFAULT_MODEL_ID; llm_provider: DEFAULT_PROVIDER; }
+            .hard { llm_model: HARD_MODEL_ID; llm_provider: HARD_PROVIDER; }
+            .verify { llm_model: VERIFY_MODEL_ID; llm_provider: VERIFY_PROVIDER; reasoning_effort: VERIFY_REASONING; }
+            .review { llm_model: REVIEW_MODEL_ID; llm_provider: REVIEW_PROVIDER; reasoning_effort: REVIEW_REASONING; }
         "
     ]
 
@@ -197,14 +288,10 @@ Use language-appropriate commands: `go build`/`go test` for Go, `cargo build`/`c
 
 ### Phase 5: Model Selection
 
-Assign `class` attributes based on Phase 2 complexity:
+Use Phase 0 to decide concrete model IDs, providers, executor plan, parallelism, and thinking. Then:
 
-| Complexity | Class | Model | Use for |
-|------------|-------|-------|---------|
-| Simple | (default) | Sonnet | Boilerplate, types, CLI wiring |
-| Hard | `hard` | Opus | Algorithms, complex logic |
-| Verify | `verify` | Sonnet medium | Verification nodes |
-| Review | `review` | Opus high | Final review, integration |
+- Assign `class` attributes based on Phase 2 complexity and node role: default, `hard`, `verify`, `review`.
+- Encode the chosen plan in the graph `model_stylesheet` so nodes inherit `llm_provider`, `llm_model`, and (optionally) `reasoning_effort`.
 
 ## Kilroy DSL Quick Reference
 
@@ -254,7 +341,7 @@ Custom outcome values work: `outcome=port`, `outcome=skip`, `outcome=needs_fix`.
 9. **No timeout.** Every codergen node needs `timeout`. Implementation: 1200. Verification: 300. Review: 600. Expand spec: 600.
 10. **Build files after implementation.** Project setup (module file, directory structure) must be the FIRST implementation node.
 11. **Catastrophic review rollback.** Review failure (`check_review -> impl_X`) must target a LATE node (integration, CLI, or the last major impl). Never loop `check_review` back to `impl_setup` — this throws away all work. Target the last integration or polish node.
-12. **Missing verify class.** Every verify node MUST have `class="verify"` so the model stylesheet applies medium reasoning effort.
+12. **Missing verify class.** Every verify node MUST have `class="verify"` so the model stylesheet applies your intended verify model and thinking.
 13. **Missing expand_spec for vague input.** If no spec file exists in the repo, the pipeline MUST include an `expand_spec` node. Without it, `impl_setup` references `.ai/spec.md` that doesn't exist in the fresh worktree.
 14. **Hardcoding language commands.** Use the correct build/test/lint commands for the project's language. Don't write `go build` for a Python project.
 
@@ -269,10 +356,10 @@ digraph linkcheck {
         retry_target="impl_setup",
         fallback_retry_target="impl_core",
         model_stylesheet="
-            * { llm_model: claude-sonnet-4-5; llm_provider: anthropic; }
-            .hard { llm_model: claude-opus-4-6; llm_provider: anthropic; }
-            .verify { llm_model: claude-sonnet-4-5; llm_provider: anthropic; reasoning_effort: medium; }
-            .review { llm_model: claude-opus-4-6; llm_provider: anthropic; reasoning_effort: high; }
+            * { llm_model: DEFAULT_MODEL_ID; llm_provider: DEFAULT_PROVIDER; }
+            .hard { llm_model: HARD_MODEL_ID; llm_provider: HARD_PROVIDER; }
+            .verify { llm_model: VERIFY_MODEL_ID; llm_provider: VERIFY_PROVIDER; reasoning_effort: VERIFY_REASONING; }
+            .review { llm_model: REVIEW_MODEL_ID; llm_provider: REVIEW_PROVIDER; reasoning_effort: REVIEW_REASONING; }
         "
     ]
 

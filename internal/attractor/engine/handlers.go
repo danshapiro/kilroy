@@ -123,16 +123,19 @@ func (h *ConditionalHandler) Execute(ctx context.Context, exec *Execution, node 
 	// on those values.
 	prevStatus := runtime.StatusSuccess
 	prevPreferred := ""
+	prevFailure := ""
 	if exec != nil && exec.Context != nil {
 		if st, err := runtime.ParseStageStatus(exec.Context.GetString("outcome", "")); err == nil && st != "" {
 			prevStatus = st
 		}
 		prevPreferred = exec.Context.GetString("preferred_label", "")
+		prevFailure = exec.Context.GetString("failure_reason", "")
 	}
 
 	return runtime.Outcome{
 		Status:         prevStatus,
 		PreferredLabel: prevPreferred,
+		FailureReason:  prevFailure,
 		Notes:          "conditional pass-through",
 	}, nil
 }
@@ -147,13 +150,15 @@ func (b *SimulatedCodergenBackend) Run(ctx context.Context, exec *Execution, nod
 	_ = ctx
 	_ = exec
 	_ = node
-	return "[Simulated] " + prompt, nil, nil
+	out := runtime.Outcome{Status: runtime.StatusSuccess, Notes: "simulated codergen completed"}
+	return "[Simulated] " + prompt, &out, nil
 }
 
 type CodergenHandler struct{}
 
 func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
 	stageDir := filepath.Join(exec.LogsRoot, node.ID)
+	stageStatusPath := filepath.Join(stageDir, "status.json")
 	// Many DOT specs instruct the agent to "Write status.json" without specifying a path.
 	// The codergen backends run in the worktree, so treat a worktree-root status.json as a
 	// best-effort status-file contract signal and move/copy it into the stage directory.
@@ -215,9 +220,9 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 	// If the backend/agent wrote a worktree-root status.json, surface it to the engine by
 	// copying it into the authoritative stage directory location.
 	if worktreeStatusPath != "" {
-		if _, statErr := os.Stat(filepath.Join(stageDir, "status.json")); statErr != nil {
+		if _, statErr := os.Stat(stageStatusPath); statErr != nil {
 			if b, readErr := os.ReadFile(worktreeStatusPath); readErr == nil {
-				if writeErr := os.WriteFile(filepath.Join(stageDir, "status.json"), b, 0o644); writeErr != nil {
+				if writeErr := os.WriteFile(stageStatusPath, b, 0o644); writeErr != nil {
 					return runtime.Outcome{Status: runtime.StatusFail, FailureReason: writeErr.Error()}, nil
 				}
 				_ = os.Remove(worktreeStatusPath)
@@ -228,9 +233,28 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 	if out != nil {
 		return *out, nil
 	}
+
+	// If the backend didn't return an explicit outcome, require a status.json signal unless
+	// auto_status is explicitly enabled.
+	if _, err := os.Stat(stageStatusPath); err == nil {
+		// The engine will parse the status.json after the handler returns.
+		return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "codergen completed (status.json written)"}, nil
+	}
+	autoStatus := strings.EqualFold(node.Attr("auto_status", "false"), "true")
+	if autoStatus {
+		return runtime.Outcome{
+			Status: runtime.StatusSuccess,
+			Notes:  "auto-status: handler completed without writing status",
+			ContextUpdates: map[string]any{
+				"last_stage":    node.ID,
+				"last_response": truncate(resp, 200),
+			},
+		}, nil
+	}
 	return runtime.Outcome{
-		Status: runtime.StatusSuccess,
-		Notes:  "codergen completed",
+		Status:        runtime.StatusFail,
+		FailureReason: "missing status.json (auto_status=false)",
+		Notes:         "codergen completed without an outcome or status.json",
 		ContextUpdates: map[string]any{
 			"last_stage":    node.ID,
 			"last_response": truncate(resp, 200),

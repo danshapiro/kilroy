@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -105,87 +106,473 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 
 	switch mode {
 	case "one_shot":
-		req := llm.Request{
-			Provider:        provider,
-			Model:           modelID,
-			Messages:        []llm.Message{llm.User(prompt)},
-			ReasoningEffort: reasoningPtr,
-		}
-		if err := writeJSON(filepath.Join(stageDir, "api_request.json"), req); err != nil {
-			warnEngine(execCtx, fmt.Sprintf("write api_request.json: %v", err))
-		}
-		resp, err := client.Complete(ctx, req)
+		text, used, err := r.withFailoverText(ctx, execCtx, node, client, provider, modelID, func(prov string, mid string) (string, error) {
+			req := llm.Request{
+				Provider:        prov,
+				Model:           mid,
+				Messages:        []llm.Message{llm.User(prompt)},
+				ReasoningEffort: reasoningPtr,
+			}
+			if err := writeJSON(filepath.Join(stageDir, "api_request.json"), req); err != nil {
+				warnEngine(execCtx, fmt.Sprintf("write api_request.json: %v", err))
+			}
+			policy := attractorLLMRetryPolicy(execCtx, node.ID, prov, mid)
+			resp, err := llm.Retry(ctx, policy, nil, nil, func() (llm.Response, error) {
+				return client.Complete(ctx, req)
+			})
+			if err != nil {
+				return "", err
+			}
+			if err := writeJSON(filepath.Join(stageDir, "api_response.json"), resp.Raw); err != nil {
+				warnEngine(execCtx, fmt.Sprintf("write api_response.json: %v", err))
+			}
+			return resp.Text(), nil
+		})
 		if err != nil {
 			return "", nil, err
 		}
-		if err := writeJSON(filepath.Join(stageDir, "api_response.json"), resp.Raw); err != nil {
-			warnEngine(execCtx, fmt.Sprintf("write api_response.json: %v", err))
-		}
-		return resp.Text(), nil, nil
+		_ = writeJSON(filepath.Join(stageDir, "provider_used.json"), map[string]any{
+			"backend":  "api",
+			"mode":     mode,
+			"provider": used.Provider,
+			"model":    used.Model,
+		})
+		return text, nil, nil
 	case "agent_loop":
 		env := agent.NewLocalExecutionEnvironment(execCtx.WorktreeDir)
-		profile, err := profileForProvider(provider, modelID)
-		if err != nil {
-			return "", nil, err
-		}
-		sessCfg := agent.SessionConfig{}
-		if reasoning != "" {
-			sessCfg.ReasoningEffort = reasoning
-		}
-		if v := parseInt(node.Attr("max_agent_turns", ""), 0); v > 0 {
-			sessCfg.MaxTurns = v
-		}
-		sess, err := agent.NewSession(client, profile, env, sessCfg)
-		if err != nil {
-			return "", nil, err
-		}
-		eventsPath := filepath.Join(stageDir, "events.ndjson")
-		eventsJSONPath := filepath.Join(stageDir, "events.json")
-		eventsFile, err := os.Create(eventsPath)
-		if err != nil {
-			return "", &runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
-		}
-		defer func() { _ = eventsFile.Close() }()
-
-		var eventsMu sync.Mutex
-		var events []agent.SessionEvent
-		done := make(chan struct{})
-		go func() {
-			enc := json.NewEncoder(eventsFile)
-			encodeFailed := false
-			for ev := range sess.Events() {
-				if !encodeFailed {
-					if err := enc.Encode(ev); err != nil {
-						encodeFailed = true
-						warnEngine(execCtx, fmt.Sprintf("write %s: %v", eventsPath, err))
-					}
-				}
-				// Best-effort: emit normalized tool call/result turns to CXDB.
-				if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
-					emitCXDBToolTurns(ctx, execCtx.Engine, node.ID, ev)
-				}
-				eventsMu.Lock()
-				events = append(events, ev)
-				eventsMu.Unlock()
+		text, used, err := r.withFailoverText(ctx, execCtx, node, client, provider, modelID, func(prov string, mid string) (string, error) {
+			profile, err := profileForProvider(prov, mid)
+			if err != nil {
+				return "", err
 			}
-			close(done)
-		}()
+			sessCfg := agent.SessionConfig{}
+			if reasoning != "" {
+				sessCfg.ReasoningEffort = reasoning
+			}
+			if v := parseInt(node.Attr("max_agent_turns", ""), 0); v > 0 {
+				sessCfg.MaxTurns = v
+			}
+			// Give lots of room for transient LLM errors before failing the stage.
+			policy := attractorLLMRetryPolicy(execCtx, node.ID, prov, mid)
+			sessCfg.LLMRetryPolicy = &policy
+			sess, err := agent.NewSession(client, profile, env, sessCfg)
+			if err != nil {
+				return "", err
+			}
 
-		text, runErr := sess.ProcessInput(ctx, prompt)
-		sess.Close()
-		<-done
-		eventsMu.Lock()
-		if err := writeJSON(eventsJSONPath, events); err != nil {
-			warnEngine(execCtx, fmt.Sprintf("write %s: %v", eventsJSONPath, err))
+			eventsPath := filepath.Join(stageDir, "events.ndjson")
+			eventsJSONPath := filepath.Join(stageDir, "events.json")
+			eventsFile, err := os.Create(eventsPath)
+			if err != nil {
+				return "", err
+			}
+			defer func() { _ = eventsFile.Close() }()
+
+			var eventsMu sync.Mutex
+			var events []agent.SessionEvent
+			done := make(chan struct{})
+			go func() {
+				enc := json.NewEncoder(eventsFile)
+				encodeFailed := false
+				for ev := range sess.Events() {
+					if !encodeFailed {
+						if err := enc.Encode(ev); err != nil {
+							encodeFailed = true
+							warnEngine(execCtx, fmt.Sprintf("write %s: %v", eventsPath, err))
+						}
+					}
+					// Best-effort: emit normalized tool call/result turns to CXDB.
+					if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
+						emitCXDBToolTurns(ctx, execCtx.Engine, node.ID, ev)
+					}
+					eventsMu.Lock()
+					events = append(events, ev)
+					eventsMu.Unlock()
+				}
+				close(done)
+			}()
+
+			text, runErr := sess.ProcessInput(ctx, prompt)
+			sess.Close()
+			<-done
+			eventsMu.Lock()
+			if err := writeJSON(eventsJSONPath, events); err != nil {
+				warnEngine(execCtx, fmt.Sprintf("write %s: %v", eventsJSONPath, err))
+			}
+			eventsMu.Unlock()
+			if runErr != nil {
+				return text, runErr
+			}
+			return text, nil
+		})
+		if err != nil {
+			return "", nil, err
 		}
-		eventsMu.Unlock()
-		if runErr != nil {
-			return text, nil, runErr
-		}
+		_ = writeJSON(filepath.Join(stageDir, "provider_used.json"), map[string]any{
+			"backend":  "api",
+			"mode":     mode,
+			"provider": used.Provider,
+			"model":    used.Model,
+		})
 		return text, nil, nil
 	default:
 		return "", nil, fmt.Errorf("invalid codergen_mode: %q (want one_shot|agent_loop)", mode)
 	}
+}
+
+type providerModel struct {
+	Provider string
+	Model    string
+}
+
+func (r *CodergenRouter) withFailoverText(
+	ctx context.Context,
+	execCtx *Execution,
+	node *model.Node,
+	client *llm.Client,
+	primaryProvider string,
+	primaryModel string,
+	attempt func(provider string, model string) (string, error),
+) (string, providerModel, error) {
+	primaryProvider = normalizeProviderKey(primaryProvider)
+	primaryModel = strings.TrimSpace(primaryModel)
+
+	available := map[string]bool{}
+	if client != nil {
+		for _, p := range client.ProviderNames() {
+			available[normalizeProviderKey(p)] = true
+		}
+	}
+
+	cands := []providerModel{{Provider: primaryProvider, Model: primaryModel}}
+	for _, p := range failoverOrder(primaryProvider) {
+		p = normalizeProviderKey(p)
+		if p == "" || p == primaryProvider {
+			continue
+		}
+		if r.backendForProvider(p) != BackendAPI {
+			continue
+		}
+		if len(available) > 0 && !available[p] {
+			continue
+		}
+		m := pickFailoverModel(p, r.catalog)
+		if strings.TrimSpace(m) == "" {
+			continue
+		}
+		cands = append(cands, providerModel{Provider: p, Model: m})
+	}
+
+	var lastErr error
+	for i, c := range cands {
+		if ctx.Err() != nil {
+			return "", providerModel{}, ctx.Err()
+		}
+		if i > 0 {
+			if lastErr == nil || !shouldFailoverLLMError(lastErr) {
+				break
+			}
+			prev := cands[i-1]
+			msg := fmt.Sprintf("FAILOVER: node=%s provider=%s model=%s -> provider=%s model=%s (reason=%v)", node.ID, prev.Provider, prev.Model, c.Provider, c.Model, lastErr)
+			warnEngine(execCtx, msg)
+			// Noisy by design: failover is preferable to hard failure, but should be visible.
+			_, _ = fmt.Fprintln(os.Stderr, msg)
+			if execCtx != nil && execCtx.Engine != nil {
+				execCtx.Engine.appendProgress(map[string]any{
+					"event":         "llm_failover",
+					"node_id":       node.ID,
+					"from_provider": prev.Provider,
+					"from_model":    prev.Model,
+					"to_provider":   c.Provider,
+					"to_model":      c.Model,
+					"reason":        fmt.Sprint(lastErr),
+				})
+			}
+		}
+		txt, err := attempt(c.Provider, c.Model)
+		if err == nil {
+			return txt, c, nil
+		}
+		lastErr = err
+		if !shouldFailoverLLMError(err) {
+			return "", c, err
+		}
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("llm call failed (no attempts made)")
+	}
+	return "", cands[0], lastErr
+}
+
+func attractorLLMRetryPolicy(execCtx *Execution, nodeID string, provider string, modelID string) llm.RetryPolicy {
+	// DefaultUnifiedLLM retries are conservative; Attractor runs should allow more headroom.
+	p := llm.DefaultRetryPolicy()
+	p.MaxRetries = 6
+	p.BaseDelay = 2 * time.Second
+	p.MaxDelay = 120 * time.Second
+	p.BackoffMultiplier = 2.0
+	p.Jitter = true
+	maxRetries := p.MaxRetries
+	p.OnRetry = func(err error, attempt int, delay time.Duration) {
+		msg := fmt.Sprintf("llm retry (node=%s provider=%s model=%s attempt=%d/%d delay=%s): %v", nodeID, provider, modelID, attempt, maxRetries+1, delay, err)
+		warnEngine(execCtx, msg)
+		if execCtx != nil && execCtx.Engine != nil {
+			execCtx.Engine.appendProgress(map[string]any{
+				"event":     "llm_retry",
+				"node_id":   nodeID,
+				"provider":  provider,
+				"model":     modelID,
+				"attempt":   attempt,
+				"max":       maxRetries + 1,
+				"delay_ms":  delay.Milliseconds(),
+				"error":     fmt.Sprint(err),
+				"retryable": true,
+			})
+		}
+	}
+	return p
+}
+
+func shouldFailoverLLMError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var ce *llm.ConfigurationError
+	if errors.As(err, &ce) {
+		return false
+	}
+	var ae *llm.AuthenticationError
+	if errors.As(err, &ae) {
+		return false
+	}
+	var ade *llm.AccessDeniedError
+	if errors.As(err, &ade) {
+		return false
+	}
+	var ire *llm.InvalidRequestError
+	if errors.As(err, &ire) {
+		return false
+	}
+	var cle *llm.ContextLengthError
+	if errors.As(err, &cle) {
+		return false
+	}
+	// Timeouts, rate limits, server errors, and unknown transport errors can be
+	// provider-specific; failover is often better than hard failure.
+	return true
+}
+
+func failoverOrder(primary string) []string {
+	switch normalizeProviderKey(primary) {
+	case "openai":
+		return []string{"anthropic", "google"}
+	case "anthropic":
+		return []string{"openai", "google"}
+	case "google":
+		return []string{"openai", "anthropic"}
+	default:
+		return []string{"openai", "anthropic", "google"}
+	}
+}
+
+func pickFailoverModel(provider string, catalog *modeldb.LiteLLMCatalog) string {
+	provider = normalizeProviderKey(provider)
+	switch provider {
+	case "openai":
+		// Prefer the repo's pinned default, even if the catalog doesn't contain it yet.
+		if catalog != nil && catalog.Models != nil {
+			if _, ok := catalog.Models["gpt-5.2-codex"]; ok {
+				return "gpt-5.2-codex"
+			}
+			if _, ok := catalog.Models["codex-mini-latest"]; ok {
+				return "codex-mini-latest"
+			}
+		}
+		return "gpt-5.2-codex"
+	case "anthropic":
+		best := ""
+		for _, id := range modelIDsForProvider(catalog, "anthropic") {
+			if best == "" || betterAnthropicModel(id, best) {
+				best = id
+			}
+		}
+		return providerModelIDFromCatalogKey("anthropic", best)
+	case "google":
+		// Prefer a known good "pro" model when present.
+		for _, want := range []string{
+			"gemini/gemini-2.5-pro",
+			"gemini/gemini-2.5-pro-preview-06-05",
+			"gemini/gemini-2.5-pro-preview-05-06",
+			"gemini/gemini-2.5-pro-preview-03-25",
+		} {
+			if hasModelID(catalog, "google", want) {
+				return providerModelIDFromCatalogKey("google", want)
+			}
+		}
+		best := ""
+		for _, id := range modelIDsForProvider(catalog, "google") {
+			if best == "" || betterGoogleModel(id, best) {
+				best = id
+			}
+		}
+		return providerModelIDFromCatalogKey("google", best)
+	default:
+		return ""
+	}
+}
+
+func modelIDsForProvider(catalog *modeldb.LiteLLMCatalog, provider string) []string {
+	if catalog == nil || catalog.Models == nil {
+		return nil
+	}
+	provider = normalizeProviderKey(provider)
+	out := []string{}
+	for id, entry := range catalog.Models {
+		if normalizeProviderKey(entry.LiteLLMProvider) != provider {
+			continue
+		}
+		out = append(out, id)
+	}
+	return out
+}
+
+func hasModelID(catalog *modeldb.LiteLLMCatalog, provider string, id string) bool {
+	if catalog == nil || catalog.Models == nil {
+		return false
+	}
+	provider = normalizeProviderKey(provider)
+	entry, ok := catalog.Models[id]
+	if !ok {
+		return false
+	}
+	return normalizeProviderKey(entry.LiteLLMProvider) == provider
+}
+
+func providerModelIDFromCatalogKey(provider string, id string) string {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return ""
+	}
+	switch normalizeProviderKey(provider) {
+	case "google":
+		return strings.TrimPrefix(id, "gemini/")
+	case "anthropic":
+		if i := strings.LastIndex(id, "/"); i >= 0 {
+			return id[i+1:]
+		}
+		return id
+	default:
+		return id
+	}
+}
+
+func betterAnthropicModel(a string, b string) bool {
+	// Higher rank is better:
+	// 1) family: opus > sonnet > haiku
+	// 2) numeric tokens (version/date) lexicographically
+	// 3) prefer non-region keys
+	ra := anthropicFamilyRank(a)
+	rb := anthropicFamilyRank(b)
+	if ra != rb {
+		return ra > rb
+	}
+	cmp := compareIntSlices(numericTokens(a), numericTokens(b))
+	if cmp != 0 {
+		return cmp > 0
+	}
+	pa := strings.Contains(a, "/")
+	pb := strings.Contains(b, "/")
+	if pa != pb {
+		return !pa
+	}
+	return a > b
+}
+
+func anthropicFamilyRank(id string) int {
+	s := strings.ToLower(id)
+	switch {
+	case strings.Contains(s, "opus"):
+		return 3
+	case strings.Contains(s, "sonnet"):
+		return 2
+	case strings.Contains(s, "haiku"):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func betterGoogleModel(a string, b string) bool {
+	ra := googleFamilyRank(a)
+	rb := googleFamilyRank(b)
+	if ra != rb {
+		return ra > rb
+	}
+	cmp := compareIntSlices(numericTokens(a), numericTokens(b))
+	if cmp != 0 {
+		return cmp > 0
+	}
+	return a > b
+}
+
+func googleFamilyRank(id string) int {
+	s := strings.ToLower(id)
+	switch {
+	case strings.Contains(s, "-pro"):
+		return 3
+	case strings.Contains(s, "flash"):
+		return 2
+	case strings.Contains(s, "lite"):
+		return 1
+	default:
+		return 0
+	}
+}
+
+func numericTokens(s string) []int {
+	out := []int{}
+	n := 0
+	in := false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= '0' && c <= '9' {
+			in = true
+			n = n*10 + int(c-'0')
+			continue
+		}
+		if in {
+			out = append(out, n)
+			n = 0
+			in = false
+		}
+	}
+	if in {
+		out = append(out, n)
+	}
+	return out
+}
+
+func compareIntSlices(a []int, b []int) int {
+	n := len(a)
+	if len(b) < n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		if a[i] == b[i] {
+			continue
+		}
+		if a[i] < b[i] {
+			return -1
+		}
+		return 1
+	}
+	if len(a) == len(b) {
+		return 0
+	}
+	if len(a) < len(b) {
+		return -1
+	}
+	return 1
 }
 
 func profileForProvider(provider string, modelID string) (agent.ProviderProfile, error) {
