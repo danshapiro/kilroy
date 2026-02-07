@@ -36,7 +36,7 @@ echo '{"type":"done","text":"ok"}'
 
 	cfg := &RunConfigFile{Version: 1}
 	cfg.Repo.Path = repo
-	cfg.CXDB.BinaryAddr = "127.0.0.1:9009"
+	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
 	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
 	cfg.LLM.Providers = map[string]struct {
 		Backend BackendKind `json:"backend" yaml:"backend"`
