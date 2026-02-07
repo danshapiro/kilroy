@@ -519,6 +519,17 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 }
 
 func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Outcome, error) {
+	// Node-level timeout (attractor-spec timeout attribute).
+	// Note: parseDuration accepts both explicit duration strings (e.g., "900s") and
+	// bare integers (treated as seconds) for compatibility with existing DOT files.
+	if node != nil {
+		if nodeTimeout := parseDuration(node.Attr("timeout", ""), 0); nodeTimeout > 0 {
+			cctx, cancel := context.WithTimeout(ctx, nodeTimeout)
+			defer cancel()
+			ctx = cctx
+		}
+	}
+
 	h := e.Registry.Resolve(node)
 	stageDir := filepath.Join(e.LogsRoot, node.ID)
 	if err := os.MkdirAll(stageDir, 0o755); err != nil {

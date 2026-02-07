@@ -132,6 +132,9 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		if reasoning != "" {
 			sessCfg.ReasoningEffort = reasoning
 		}
+		if v := parseInt(node.Attr("max_agent_turns", ""), 0); v > 0 {
+			sessCfg.MaxTurns = v
+		}
 		sess, err := agent.NewSession(client, profile, env, sessCfg)
 		if err != nil {
 			return "", nil, err

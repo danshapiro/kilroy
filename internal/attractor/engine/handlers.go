@@ -154,6 +154,16 @@ type CodergenHandler struct{}
 
 func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
 	stageDir := filepath.Join(exec.LogsRoot, node.ID)
+	// Many DOT specs instruct the agent to "Write status.json" without specifying a path.
+	// The codergen backends run in the worktree, so treat a worktree-root status.json as a
+	// best-effort status-file contract signal and move/copy it into the stage directory.
+	worktreeStatusPath := ""
+	if exec != nil && strings.TrimSpace(exec.WorktreeDir) != "" {
+		worktreeStatusPath = filepath.Join(exec.WorktreeDir, "status.json")
+		// Clear any stale file from a prior stage so we don't accidentally attribute it.
+		_ = os.Remove(worktreeStatusPath)
+	}
+
 	basePrompt := strings.TrimSpace(node.Prompt())
 	if basePrompt == "" {
 		basePrompt = node.Label()
@@ -201,6 +211,20 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 	if strings.TrimSpace(resp) != "" {
 		_ = os.WriteFile(filepath.Join(stageDir, "response.md"), []byte(resp), 0o644)
 	}
+
+	// If the backend/agent wrote a worktree-root status.json, surface it to the engine by
+	// copying it into the authoritative stage directory location.
+	if worktreeStatusPath != "" {
+		if _, statErr := os.Stat(filepath.Join(stageDir, "status.json")); statErr != nil {
+			if b, readErr := os.ReadFile(worktreeStatusPath); readErr == nil {
+				if writeErr := os.WriteFile(filepath.Join(stageDir, "status.json"), b, 0o644); writeErr != nil {
+					return runtime.Outcome{Status: runtime.StatusFail, FailureReason: writeErr.Error()}, nil
+				}
+				_ = os.Remove(worktreeStatusPath)
+			}
+		}
+	}
+
 	if out != nil {
 		return *out, nil
 	}
@@ -469,6 +493,10 @@ func parseDuration(s string, def time.Duration) time.Duration {
 		if ok {
 			return time.Duration(base) * 24 * time.Hour
 		}
+	}
+	// Common shorthand in DOT specs: bare integers mean seconds.
+	if base, ok := parseIntPrefix(s); ok {
+		return time.Duration(base) * time.Second
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
