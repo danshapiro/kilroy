@@ -14,6 +14,7 @@ echo "== validate contract dotfiles =="
 DOTS=(
   "docs/strongdm/dot specs/consensus_task.dot"
   "docs/strongdm/dot specs/semport.dot"
+  "docs/strongdm/dot specs/simple_example.dot"
   "research/green-test-vague.dot"
   "research/green-test-moderate.dot"
   "research/green-test-complex.dot"

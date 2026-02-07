@@ -1,12 +1,17 @@
 digraph Simple {
-    graph [goal="Run tests and report"]
-    rankdir=LR
+    graph [
+        goal="Run tests and report",
+        rankdir=LR,
+        model_stylesheet="
+            * { llm_model: gpt-5.2; llm_provider: openai; }
+        "
+    ]
 
     start [shape=Mdiamond, label="Start"]
     exit  [shape=Msquare, label="Exit"]
 
-    run_tests [label="Run Tests", prompt="Run the test suite and report results"]
-    report    [label="Report", prompt="Summarize the test results"]
+    run_tests [shape=box, label="Run Tests", prompt="Run the test suite and report results"]
+    report    [shape=box, label="Report", prompt="Summarize the test results"]
 
     start -> run_tests -> report -> exit
 }
