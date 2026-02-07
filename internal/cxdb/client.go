@@ -36,7 +36,7 @@ type ContextInfo struct {
 type AppendTurnRequest struct {
 	TypeID         string         `json:"type_id"`
 	TypeVersion    int            `json:"type_version"`
-	Payload        map[string]any `json:"payload"`
+	Data           map[string]any `json:"data"`
 	ParentTurnID   string         `json:"parent_turn_id,omitempty"`
 	IdempotencyKey string         `json:"idempotency_key,omitempty"`
 }
@@ -102,14 +102,14 @@ func (c *Client) Health(ctx context.Context) error {
 }
 
 func (c *Client) CreateContext(ctx context.Context, baseTurnID string) (ContextInfo, error) {
-	// Primary: POST /v1/contexts (CXDB public HTTP API)
-	ci, err := c.postContext(ctx, "/v1/contexts", baseTurnID)
+	// Primary: POST /v1/contexts/create (CXDB HTTP API)
+	ci, err := c.postContext(ctx, "/v1/contexts/create", baseTurnID)
 	if err == nil {
 		return ci, nil
 	}
-	// Backward-compat: older internal paths (if present).
+	// Backward-compat: alternate path (if present).
 	if shouldTryCompat(err) {
-		if ci2, err2 := c.postContext(ctx, "/v1/contexts/create", baseTurnID); err2 == nil {
+		if ci2, err2 := c.postContext(ctx, "/v1/contexts", baseTurnID); err2 == nil {
 			return ci2, nil
 		}
 	}
@@ -117,14 +117,14 @@ func (c *Client) CreateContext(ctx context.Context, baseTurnID string) (ContextI
 }
 
 func (c *Client) ForkContext(ctx context.Context, baseTurnID string) (ContextInfo, error) {
-	// Forking is modeled as creating a context at a non-zero base turn.
-	ci, err := c.postContext(ctx, "/v1/contexts", baseTurnID)
+	// Primary: POST /v1/contexts/fork (CXDB HTTP API)
+	ci, err := c.postContext(ctx, "/v1/contexts/fork", baseTurnID)
 	if err == nil {
 		return ci, nil
 	}
-	// Backward-compat: older internal paths (if present).
+	// Backward-compat: alternate path (if present).
 	if shouldTryCompat(err) {
-		if ci2, err2 := c.postContext(ctx, "/v1/contexts/fork", baseTurnID); err2 == nil {
+		if ci2, err2 := c.postContext(ctx, "/v1/contexts", baseTurnID); err2 == nil {
 			return ci2, nil
 		}
 	}
@@ -135,20 +135,14 @@ func (c *Client) postContext(ctx context.Context, path string, baseTurnID string
 	if strings.TrimSpace(baseTurnID) == "" {
 		baseTurnID = "0"
 	}
-	var bodyReader io.Reader
-	// For base turn "0", CXDB supports an empty POST body (README quick start).
-	if strings.TrimSpace(baseTurnID) != "" && strings.TrimSpace(baseTurnID) != "0" {
-		body := map[string]string{"base_turn_id": baseTurnID}
-		b, _ := json.Marshal(body)
-		bodyReader = bytes.NewReader(b)
-	}
+	body := map[string]string{"base_turn_id": baseTurnID}
+	b, _ := json.Marshal(body)
+	bodyReader := bytes.NewReader(b)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bodyReader)
 	if err != nil {
 		return ContextInfo{}, err
 	}
-	if bodyReader != nil {
-		req.Header.Set("Content-Type", "application/json")
-	}
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http().Do(req)
 	if err != nil {
 		return ContextInfo{}, err
@@ -175,15 +169,15 @@ func (c *Client) AppendTurn(ctx context.Context, contextID string, reqBody Appen
 	if strings.TrimSpace(reqBody.TypeID) == "" || reqBody.TypeVersion <= 0 {
 		return AppendTurnResponse{}, fmt.Errorf("type_id and type_version are required")
 	}
-	if reqBody.Payload == nil {
-		reqBody.Payload = map[string]any{}
+	if reqBody.Data == nil {
+		reqBody.Data = map[string]any{}
 	}
-	b, err := json.Marshal(reqBody)
+	bAppend, err := json.Marshal(reqBody)
 	if err != nil {
 		return AppendTurnResponse{}, err
 	}
-	path := fmt.Sprintf("/v1/contexts/%s/turns", url.PathEscape(contextID))
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(b))
+	path := fmt.Sprintf("/v1/contexts/%s/append", url.PathEscape(contextID))
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(bAppend))
 	if err != nil {
 		return AppendTurnResponse{}, err
 	}
@@ -195,22 +189,35 @@ func (c *Client) AppendTurn(ctx context.Context, contextID string, reqBody Appen
 	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusMethodNotAllowed {
-		// Backward-compat: older internal path.
-		compatPath := fmt.Sprintf("/v1/contexts/%s/append", url.PathEscape(contextID))
-		httpReq2, err2 := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+compatPath, bytes.NewReader(b))
+		// Backward-compat: older servers used /turns with JSON "payload" rather than "data".
+		compatReq := map[string]any{
+			"type_id":      reqBody.TypeID,
+			"type_version": reqBody.TypeVersion,
+			"payload":      reqBody.Data,
+		}
+		if strings.TrimSpace(reqBody.ParentTurnID) != "" {
+			compatReq["parent_turn_id"] = reqBody.ParentTurnID
+		}
+		if strings.TrimSpace(reqBody.IdempotencyKey) != "" {
+			compatReq["idempotency_key"] = reqBody.IdempotencyKey
+		}
+		bCompat, _ := json.Marshal(compatReq)
+
+		compatPath := fmt.Sprintf("/v1/contexts/%s/turns", url.PathEscape(contextID))
+		httpReq2, err2 := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+compatPath, bytes.NewReader(bCompat))
 		if err2 != nil {
 			return AppendTurnResponse{}, err2
 		}
 		httpReq2.Header.Set("Content-Type", "application/json")
-			resp2, err2 := c.http().Do(httpReq2)
-			if err2 != nil {
-				return AppendTurnResponse{}, err2
-			}
-			defer func() { _ = resp2.Body.Close() }()
-			raw2, _ := io.ReadAll(resp2.Body)
-			if resp2.StatusCode < 200 || resp2.StatusCode >= 300 {
-				return AppendTurnResponse{}, httpErr(compatPath, resp2.StatusCode, raw2)
-			}
+		resp2, err2 := c.http().Do(httpReq2)
+		if err2 != nil {
+			return AppendTurnResponse{}, err2
+		}
+		defer func() { _ = resp2.Body.Close() }()
+		raw2, _ := io.ReadAll(resp2.Body)
+		if resp2.StatusCode < 200 || resp2.StatusCode >= 300 {
+			return AppendTurnResponse{}, httpErr(compatPath, resp2.StatusCode, raw2)
+		}
 		out, err := parseAppendTurnResponse(raw2)
 		if err != nil {
 			return AppendTurnResponse{}, err
@@ -452,12 +459,31 @@ func parseTurnMap(m map[string]any) Turn {
 	out.ParentTurnID = anyToString(m["parent_turn_id"])
 	out.TypeID = anyToString(m["type_id"])
 	out.TypeVersion = anyToInt(m["type_version"])
+	if out.TypeID == "" || out.TypeVersion == 0 {
+		// CXDB HTTP API view=typed uses nested declared_type/decoded_as objects.
+		if dt, ok := m["declared_type"].(map[string]any); ok {
+			if out.TypeID == "" {
+				out.TypeID = anyToString(dt["type_id"])
+			}
+			if out.TypeVersion == 0 {
+				out.TypeVersion = anyToInt(dt["type_version"])
+			}
+		}
+		if da, ok := m["decoded_as"].(map[string]any); ok {
+			if out.TypeID == "" {
+				out.TypeID = anyToString(da["type_id"])
+			}
+			if out.TypeVersion == 0 {
+				out.TypeVersion = anyToInt(da["type_version"])
+			}
+		}
+	}
 	out.Depth = anyToInt(m["depth"])
 	out.PayloadHash = anyToString(m["payload_hash"])
 	if v, ok := m["payload"].(map[string]any); ok {
 		out.Payload = v
 	} else if v, ok := m["data"].(map[string]any); ok {
-		// Backward-compat: some projections use "data".
+		// CXDB HTTP API uses "data" for typed view.
 		out.Payload = v
 	}
 	return out

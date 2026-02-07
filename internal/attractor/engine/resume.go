@@ -119,6 +119,11 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 			if err := cxdbClient.Health(ctx); err != nil {
 				return nil, err
 			}
+			bin, err := cxdb.DialBinary(ctx, cfg.CXDB.BinaryAddr, fmt.Sprintf("kilroy/%s", m.RunID))
+			if err != nil {
+				return nil, err
+			}
+			defer func() { _ = bin.Close() }()
 			bundleID, bundle, _, err := cxdb.KilroyAttractorRegistryBundle()
 			if err != nil {
 				return nil, err
@@ -130,7 +135,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 			if err != nil {
 				return nil, err
 			}
-			sink = NewCXDBSink(cxdbClient, m.RunID, contextID, ci.HeadTurnID, bundleID)
+			sink = NewCXDBSink(cxdbClient, bin, m.RunID, contextID, ci.HeadTurnID, bundleID)
 		}
 	}
 

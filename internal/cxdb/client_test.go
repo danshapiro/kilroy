@@ -18,18 +18,27 @@ func TestClient_CreateAndForkContext(t *testing.T) {
 		_ = r.Body.Close()
 		w.WriteHeader(http.StatusOK)
 	})
-	mux.HandleFunc("/v1/contexts", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/v1/contexts/create", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
 		b, _ := io.ReadAll(r.Body)
 		_ = r.Body.Close()
-
-		if len(strings.TrimSpace(string(b))) == 0 {
-			_ = json.NewEncoder(w).Encode(ContextInfo{ContextID: "1", HeadTurnID: "0", HeadDepth: 0})
+		var req map[string]any
+		_ = json.Unmarshal(b, &req)
+		if got := strings.TrimSpace(anyToString(req["base_turn_id"])); got != "0" {
+			t.Fatalf("base_turn_id: got %q want %q", got, "0")
+		}
+		_ = json.NewEncoder(w).Encode(ContextInfo{ContextID: "1", HeadTurnID: "0", HeadDepth: 0})
+	})
+	mux.HandleFunc("/v1/contexts/fork", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
 			return
 		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
 		var req map[string]any
 		_ = json.Unmarshal(b, &req)
 		if got := strings.TrimSpace(anyToString(req["base_turn_id"])); got != "123" {
@@ -67,45 +76,58 @@ func TestClient_CreateAndForkContext(t *testing.T) {
 
 func TestClient_AppendAndListTurns(t *testing.T) {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/contexts/1/append", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		var req map[string]any
+		if err := json.Unmarshal(b, &req); err != nil {
+			t.Fatalf("unmarshal append request: %v", err)
+		}
+		if req["payload"] != nil {
+			t.Fatalf("append request must not use legacy payload field")
+		}
+		if strings.TrimSpace(anyToString(req["type_id"])) == "" {
+			t.Fatalf("append request missing type_id")
+		}
+		if anyToInt(req["type_version"]) != 1 {
+			t.Fatalf("append request type_version: got %v", req["type_version"])
+		}
+		if _, ok := req["data"].(map[string]any); !ok {
+			t.Fatalf("append request missing data object")
+		}
+		_ = json.NewEncoder(w).Encode(AppendTurnResponse{
+			ContextID:   "1",
+			TurnID:      "10",
+			Depth:       1,
+			ContentHash: "abc123",
+		})
+	})
 	mux.HandleFunc("/v1/contexts/1/turns", func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
-		case http.MethodPost:
-			b, _ := io.ReadAll(r.Body)
-			_ = r.Body.Close()
-			var req map[string]any
-			if err := json.Unmarshal(b, &req); err != nil {
-				t.Fatalf("unmarshal append request: %v", err)
-			}
-			if req["data"] != nil {
-				t.Fatalf("append request must not use legacy data field")
-			}
-			if strings.TrimSpace(anyToString(req["type_id"])) == "" {
-				t.Fatalf("append request missing type_id")
-			}
-			if anyToInt(req["type_version"]) != 1 {
-				t.Fatalf("append request type_version: got %v", req["type_version"])
-			}
-			if _, ok := req["payload"].(map[string]any); !ok {
-				t.Fatalf("append request missing payload object")
-			}
-			_ = json.NewEncoder(w).Encode(AppendTurnResponse{
-				ContextID:   "1",
-				TurnID:      "10",
-				Depth:       1,
-				PayloadHash: "abc123",
-			})
 		case http.MethodGet:
-			_ = json.NewEncoder(w).Encode([]map[string]any{
-				{
-					"turn_id":        "10",
-					"parent_turn_id": "0",
-					"depth":          1,
-					"type_id":        "com.kilroy.attractor.RunStarted",
-					"type_version":   1,
-					"payload": map[string]any{
-						"run_id": "r1",
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"meta": map[string]any{
+					"context_id":   "1",
+					"head_turn_id": "10",
+					"head_depth":   1,
+				},
+				"turns": []map[string]any{
+					{
+						"turn_id":        "10",
+						"parent_turn_id": "0",
+						"depth":          1,
+						"declared_type": map[string]any{
+							"type_id":      "com.kilroy.attractor.RunStarted",
+							"type_version": 1,
+						},
+						"data": map[string]any{
+							"run_id": "r1",
+						},
 					},
-					"payload_hash": "abc123",
 				},
 			})
 		default:
@@ -124,7 +146,7 @@ func TestClient_AppendAndListTurns(t *testing.T) {
 	resp, err := c.AppendTurn(ctx, "1", AppendTurnRequest{
 		TypeID:       "com.kilroy.attractor.RunStarted",
 		TypeVersion:  1,
-		Payload:      map[string]any{"run_id": "r1"},
+		Data:         map[string]any{"run_id": "r1"},
 		ParentTurnID: "0",
 	})
 	if err != nil {
@@ -143,6 +165,64 @@ func TestClient_AppendAndListTurns(t *testing.T) {
 	}
 	if len(turns) != 1 || turns[0].TurnID != "10" || turns[0].TypeID != "com.kilroy.attractor.RunStarted" {
 		t.Fatalf("ListTurns: %+v", turns)
+	}
+}
+
+func TestClient_AppendTurn_FallsBackToTurnsWithPayload(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v1/contexts/1/append", func(w http.ResponseWriter, r *http.Request) {
+		// Force the fallback path.
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/v1/contexts/1/turns", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		var req map[string]any
+		if err := json.Unmarshal(b, &req); err != nil {
+			t.Fatalf("unmarshal append request: %v", err)
+		}
+		if req["data"] != nil {
+			t.Fatalf("append request must not use data field for /turns")
+		}
+		if _, ok := req["payload"].(map[string]any); !ok {
+			t.Fatalf("append request missing payload object")
+		}
+		if anyToString(req["parent_turn_id"]) != "0" {
+			t.Fatalf("parent_turn_id: got %q want %q", anyToString(req["parent_turn_id"]), "0")
+		}
+		_ = json.NewEncoder(w).Encode(AppendTurnResponse{
+			ContextID:   "1",
+			TurnID:      "11",
+			Depth:       2,
+			ContentHash: "def456",
+		})
+	})
+
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+
+	c := New(srv.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	resp, err := c.AppendTurn(ctx, "1", AppendTurnRequest{
+		TypeID:       "com.kilroy.attractor.RunStarted",
+		TypeVersion:  1,
+		Data:         map[string]any{"run_id": "r1"},
+		ParentTurnID: "0",
+	})
+	if err != nil {
+		t.Fatalf("AppendTurn: %v", err)
+	}
+	if resp.TurnID != "11" {
+		t.Fatalf("AppendTurn turn_id: got %q", resp.TurnID)
+	}
+	if resp.ContentHash != "def456" {
+		t.Fatalf("AppendTurn content hash: got %q want %q", resp.ContentHash, "def456")
 	}
 }
 

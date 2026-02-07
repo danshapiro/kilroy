@@ -87,6 +87,11 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if err := cxdbClient.Health(ctx); err != nil {
 		return nil, err
 	}
+	bin, err := cxdb.DialBinary(ctx, cfg.CXDB.BinaryAddr, fmt.Sprintf("kilroy/%s", opts.RunID))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = bin.Close() }()
 	bundleID, bundle, _, err := cxdb.KilroyAttractorRegistryBundle()
 	if err != nil {
 		return nil, err
@@ -98,7 +103,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if err != nil {
 		return nil, err
 	}
-	sink := NewCXDBSink(cxdbClient, opts.RunID, ci.ContextID, ci.HeadTurnID, bundleID)
+	sink := NewCXDBSink(cxdbClient, bin, opts.RunID, ci.ContextID, ci.HeadTurnID, bundleID)
 
 	eng := &Engine{
 		Graph:              g,

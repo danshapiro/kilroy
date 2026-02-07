@@ -128,7 +128,7 @@ Each run produces:
 - A **CXDB context** containing:
   - typed turns for all engine events + outcomes
   - blobs for all artifacts, including raw CLI streams and stage files
-  - a final head turn that corresponds to `PipelineCompleted` or `PipelineFailed`
+  - a final head turn that corresponds to `com.kilroy.attractor.RunCompleted` or `com.kilroy.attractor.RunFailed`
 - A machine-readable “final outcome” summary written to `{logs_root}/final.json` (Kilroy-specific addition):
   - final pipeline status
   - final git commit SHA
