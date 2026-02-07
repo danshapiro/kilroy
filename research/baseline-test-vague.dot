@@ -1,0 +1,105 @@
+digraph solitaire {
+    // Start node
+    start [label="start"];
+
+    // Planning phase
+    plan_game [
+        label="plan_game",
+        prompt="Design a solitaire (Klondike) card game. Specify the game rules, card layout, win conditions, and technical architecture. Decide on implementation approach: web-based (HTML/CSS/JS), desktop (Python), or other. Output a detailed technical specification."
+    ];
+
+    // Core implementation nodes
+    setup_project [
+        label="setup_project",
+        prompt="Based on the technical specification, set up the project structure. Create necessary files, directories, package configuration (package.json, requirements.txt, etc.), and initial boilerplate code."
+    ];
+
+    implement_card_model [
+        label="implement_card_model",
+        prompt="Implement the card and deck data structures. Create classes/modules for Card (suit, rank, face up/down state) and Deck (52 cards, shuffling, dealing). Include proper encapsulation and methods."
+    ];
+
+    implement_game_state [
+        label="implement_game_state",
+        prompt="Implement the game state management. Create structures for the tableau (7 piles), foundation (4 suit piles), stock pile, and waste pile. Implement game initialization and state tracking."
+    ];
+
+    implement_game_logic [
+        label="implement_game_logic",
+        prompt="Implement core game logic: card movement rules, valid move checking, card stacking rules (alternating colors, descending rank), foundation building (same suit, ascending rank), win condition detection, and undo functionality."
+    ];
+
+    implement_ui [
+        label="implement_ui",
+        prompt="Create the user interface for the solitaire game. Implement card rendering, drag-and-drop or click-to-move interactions, visual feedback for valid/invalid moves, game controls (new game, restart, undo), and responsive layout."
+    ];
+
+    implement_game_features [
+        label="implement_game_features",
+        prompt="Add additional game features: score tracking, timer, move counter, hint system, statistics, and game options (draw 1 or 3 cards from stock). Ensure smooth user experience."
+    ];
+
+    // Testing and validation
+    test_game [
+        label="test_game",
+        prompt="Create and run tests for the solitaire game. Test game logic, move validation, win conditions, edge cases, and UI interactions. Fix any bugs discovered. Verify the game is playable and follows standard Klondike rules."
+    ];
+
+    // Documentation and polish
+    finalize [
+        label="finalize",
+        prompt="Add final polish to the solitaire game. Create README with setup and play instructions, add code comments, ensure code quality, optimize performance, and prepare for deployment/distribution."
+    ];
+
+    // Exit node
+    exit [label="exit"];
+
+    // Success/failure routing
+    plan_failed [
+        label="plan_failed",
+        prompt="The planning phase failed. Analyze the error and create a simplified specification for a basic solitaire game with minimal features."
+    ];
+
+    implementation_failed [
+        label="implementation_failed",
+        prompt="Implementation encountered errors. Debug the issues, identify root causes, and either fix the problems or create a simplified working version with reduced features."
+    ];
+
+    test_failed [
+        label="test_failed",
+        prompt="Testing revealed critical issues. Review test failures, prioritize bugs by severity, fix critical bugs that prevent gameplay, and document known issues for non-critical problems."
+    ];
+
+    // Flow edges - main success path
+    start -> plan_game;
+    plan_game -> setup_project [label="success"];
+    setup_project -> implement_card_model [label="success"];
+    implement_card_model -> implement_game_state [label="success"];
+    implement_game_state -> implement_game_logic [label="success"];
+    implement_game_logic -> implement_ui [label="success"];
+    implement_ui -> implement_game_features [label="success"];
+    implement_game_features -> test_game [label="success"];
+    test_game -> finalize [label="success"];
+    finalize -> exit [label="success"];
+
+    // Failure handling edges
+    plan_game -> plan_failed [label="failure"];
+    plan_failed -> setup_project [label="retry"];
+    plan_failed -> exit [label="critical_failure"];
+
+    setup_project -> implementation_failed [label="failure"];
+    implement_card_model -> implementation_failed [label="failure"];
+    implement_game_state -> implementation_failed [label="failure"];
+    implement_game_logic -> implementation_failed [label="failure"];
+    implement_ui -> implementation_failed [label="failure"];
+    implement_game_features -> implementation_failed [label="failure"];
+
+    implementation_failed -> test_game [label="fixed"];
+    implementation_failed -> exit [label="critical_failure"];
+
+    test_game -> test_failed [label="failure"];
+    test_failed -> finalize [label="fixed"];
+    test_failed -> exit [label="acceptable"];
+
+    finalize -> exit [label="failure"];
+}

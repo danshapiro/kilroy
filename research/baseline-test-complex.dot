@@ -1,0 +1,573 @@
+digraph dttf_pipeline {
+    // DTTF (Direct To The Font) - AI-driven software factory pipeline
+    // Builds a bitmap-to-TrueType font converter with custom tracer
+
+    // Entry point
+    start [label="start"];
+
+    // Phase 1: Project setup and core architecture
+    setup_project [
+        label="Setup Project Structure"
+        prompt="Create a Go project for DTTF with the following structure:
+        - cmd/dttf/ for CLI
+        - pkg/dttf/ for core library
+        - pkg/tracer/ for bitmap-to-vector tracing
+        - pkg/ttf/ for TrueType font assembly
+        - pkg/rasterize/ for font-to-bitmap rasterizer
+        - pkg/quality/ for quality metrics (SSIM, validation)
+        - test/ for test harness
+        Initialize go.mod with module name 'dttf'. Create a basic README explaining the project purpose."
+    ];
+
+    // Phase 2: Core data structures
+    define_types [
+        label="Define Core Types"
+        prompt="Implement the core data structures in pkg/dttf/types.go:
+        - GlyphBitmap (codepoint, pixels, width, height)
+        - Point (X, Y, OnCurve for quadratic Bezier)
+        - Contour (slice of Points)
+        - TracedGlyph (codepoint, contours, metrics, bounding box)
+        - FontMetadata (family name, style, units per em, ascender, descender)
+        - Options struct for configurable parameters
+        Include proper documentation for each type."
+    ];
+
+    // Phase 3: Input loading
+    implement_loader [
+        label="Implement Glyph Loader"
+        prompt="Create pkg/dttf/loader.go that:
+        - Scans a directory for PNG files
+        - Parses filenames to extract Unicode codepoints (U+XXXX pattern)
+        - Loads PNG images using Go's image/png package
+        - Converts images to grayscale
+        - Optionally loads font.json metadata with defaults if absent
+        - Returns []GlyphBitmap and *FontMetadata
+        - Handles errors: skip invalid files with warnings, fatal if zero valid glyphs
+        Implement LoadGlyphs(inputDir string) ([]GlyphBitmap, *FontMetadata, error)"
+    ];
+
+    // Phase 4: Bitmap preprocessing
+    implement_preprocessing [
+        label="Implement Bitmap Preprocessing"
+        prompt="Create pkg/tracer/preprocess.go that:
+        - Converts grayscale images to binary (1-bit) using configurable threshold (default 128)
+        - Validates that images aren't all-white or all-black
+        - Returns preprocessed binary image ready for tracing
+        Implement Threshold(pixels [][]uint8, threshold uint8) ([][]bool, error)"
+    ];
+
+    // Phase 5: Tracer - Path decomposition
+    implement_path_decomposition [
+        label="Implement Path Decomposition"
+        prompt="Create pkg/tracer/paths.go implementing Phase 1 of Potrace algorithm:
+        - Use contour-following algorithm to extract closed boundary paths from binary image
+        - Identify outer contours (clockwise) and inner contours/counters (counter-clockwise)
+        - Return a set of pixel-coordinate paths
+        Implement DecomposePaths(binary [][]bool) ([][]PixelPoint, error)
+        Keep it focused on boundary extraction, not curve fitting yet."
+    ];
+
+    // Phase 6: Tracer - Polygon approximation
+    implement_polygon_fit [
+        label="Implement Polygon Approximation"
+        prompt="Create pkg/tracer/polygon.go implementing Phase 2 of Potrace:
+        - Convert pixel staircase paths into optimal polygon approximations
+        - Use Douglas-Peucker or similar algorithm to minimize segments while preserving shape
+        - Apply corner detection using corner_threshold parameter
+        Implement FitPolygon(path []PixelPoint, opts TraceOptions) ([]PixelPoint, error)"
+    ];
+
+    // Phase 7: Tracer - Quadratic Bezier fitting
+    implement_bezier_fit [
+        label="Implement Quadratic Bezier Fitting"
+        prompt="Create pkg/tracer/bezier.go implementing Phase 3:
+        - Fit quadratic Bezier curves (not cubic) directly to polygon segments
+        - Use least-squares fitting for each segment
+        - Each curve has 3 control points (on-curve, off-curve, on-curve)
+        - Output TrueType-native quadratic splines
+        - Use optimization_tolerance parameter for error threshold
+        Implement FitQuadraticBeziers(polygon []PixelPoint, tolerance float64) ([]Point, error)"
+    ];
+
+    // Phase 8: Tracer - Font-aware optimization
+    implement_font_optimization [
+        label="Implement Font-Aware Optimization"
+        prompt="Create pkg/tracer/optimize.go implementing Phase 4:
+        - Insert points at curve extrema (required by OpenType spec)
+        - Ensure correct winding direction (outer=CW, inner=CCW)
+        - Remove self-intersections using segment intersection tests
+        - Eliminate short segments (< 2 font units)
+        - Enforce hard cap of 1000 control points per glyph
+        - Minimize point count while maintaining constraints
+        Implement Optimize(contours []Contour, opts TraceOptions) ([]Contour, error)"
+    ];
+
+    // Phase 9: Tracer - Coordinate mapping
+    implement_coordinate_mapping [
+        label="Implement Coordinate Mapping"
+        prompt="Create pkg/tracer/coordinates.go that:
+        - Maps pixel coordinates to font units based on UPEm
+        - Applies baseline_ratio to position glyphs correctly
+        - Formula: font_x = (pixel_x / image_width) * advance_width
+        - Formula: font_y = ((image_height - pixel_y) / image_height) * (ascender - descender) + descender
+        - All outputs are int16 font unit coordinates
+        Implement PixelsToFontUnits(pixelPt PixelPoint, imgWidth, imgHeight int, meta *FontMetadata) Point"
+    ];
+
+    // Phase 10: Tracer integration
+    integrate_tracer [
+        label="Integrate Tracer Pipeline"
+        prompt="Create pkg/tracer/tracer.go that ties together all tracing phases:
+        - Preprocess → Path Decomposition → Polygon → Bezier → Optimize → Coordinate Mapping
+        - Compute glyph metrics (advance width, left sidebearing, bounding box)
+        - Make parallelizable across glyphs
+        Implement TraceGlyph(bitmap GlyphBitmap, meta *FontMetadata, opts TraceOptions) (*TracedGlyph, error)
+        Include TraceOptions struct with threshold, corner_threshold, min_segment, optimization_tolerance, turd_size"
+    ];
+
+    // Phase 11: TrueType table assembly - head
+    implement_head_table [
+        label="Implement 'head' Table"
+        prompt="Create pkg/ttf/head.go that:
+        - Generates the font header table with UPEm, creation date, flags, font bounding box
+        - Uses TrueType format version 1.0
+        - Leaves checksumAdjustment as 0 initially (filled later)
+        - Returns properly formatted 54-byte head table
+        Follow OpenType spec exactly."
+    ];
+
+    // Phase 12: TrueType table assembly - maxp, hhea
+    implement_metrics_tables [
+        label="Implement 'maxp' and 'hhea' Tables"
+        prompt="Create pkg/ttf/metrics.go that:
+        - maxp: version 1.0, glyph count, max points/contours from traced glyphs
+        - hhea: ascender, descender, line gap (0), max advance width
+        Both tables are straightforward binary serialization.
+        Return properly formatted byte slices."
+    ];
+
+    // Phase 13: TrueType table assembly - hmtx
+    implement_hmtx_table [
+        label="Implement 'hmtx' Table"
+        prompt="Create pkg/ttf/hmtx.go that:
+        - Generates horizontal metrics table with advance width and LSB per glyph
+        - Format: array of (uint16 advanceWidth, int16 lsb) pairs
+        - One entry per glyph in font order
+        Use TracedGlyph metrics."
+    ];
+
+    // Phase 14: TrueType table assembly - OS/2
+    implement_os2_table [
+        label="Implement 'OS/2' Table"
+        prompt="Create pkg/ttf/os2.go that:
+        - Generates OS/2 table version 4 with platform metrics
+        - Set weight class 400 (Regular), width class 5 (Medium)
+        - Panose: all zeros (generic classification)
+        - Unicode ranges: compute from actual glyphs present
+        - Vertical metrics: sTypoAscender, sTypoDescender, sTypoLineGap = ascender, descender, 0
+        - usWinAscent = ascender, usWinDescent = abs(descender)
+        - Set fsSelection bit 7 (USE_TYPO_METRICS)
+        Return properly formatted 96-byte OS/2 table."
+    ];
+
+    // Phase 15: TrueType table assembly - name
+    implement_name_table [
+        label="Implement 'name' Table"
+        prompt="Create pkg/ttf/name.go that:
+        - Generates naming table with family name, style, full name, version, copyright
+        - Use format 0 (simple name records)
+        - Include platform IDs: Windows (3,1) and Mac (1,0)
+        - Encode strings in UTF-16BE for Windows, MacRoman for Mac
+        Minimum name IDs: 1 (family), 2 (style), 4 (full name), 5 (version), 6 (PostScript name)"
+    ];
+
+    // Phase 16: TrueType table assembly - post
+    implement_post_table [
+        label="Implement 'post' Table"
+        prompt="Create pkg/ttf/post.go that:
+        - Generates PostScript table format 3.0 (no glyph names)
+        - Fixed 32-byte table: version 3.0, italic angle 0, underline position/thickness, fixed-pitch flag
+        - Simplest post table format, DTTF v1 doesn't need glyph names"
+    ];
+
+    // Phase 17: TrueType table assembly - cmap
+    implement_cmap_table [
+        label="Implement 'cmap' Table"
+        prompt="Create pkg/ttf/cmap.go that:
+        - Generates character-to-glyph mapping using format 4 (BMP Unicode)
+        - Build segments of contiguous codepoint ranges mapped to contiguous glyph indices
+        - Sort segments, compute searchRange/entrySelector/rangeShift for binary search
+        - Include platform IDs: Windows (3,1) and Mac (1,0)
+        - Use codepoint-to-glyph-index mapping from traced glyphs
+        Format 4 is complex but well-specified in OpenType spec."
+    ];
+
+    // Phase 18: TrueType table assembly - glyf and loca
+    implement_glyf_loca_tables [
+        label="Implement 'glyf' and 'loca' Tables"
+        prompt="Create pkg/ttf/glyf.go that:
+        - Encodes glyph outlines using TrueType format
+        - For each glyph: numberOfContours, bounding box, endPtsOfContours, flags, coordinates
+        - Use flag byte packing with repeat optimization
+        - Delta-encode coordinates (variable-length uint8 or int16 per flag)
+        - No hinting (instructionLength = 0)
+        - Generate loca table: offsets into glyf table (use long format, 32-bit offsets)
+        - Always include .notdef glyph (index 0) as empty rectangle
+        This is the most complex table. Follow OpenType spec carefully."
+    ];
+
+    // Phase 19: TrueType table assembly - gasp
+    implement_gasp_table [
+        label="Implement 'gasp' Table (Optional)"
+        prompt="Create pkg/ttf/gasp.go that:
+        - Generates grid-fitting and scan-conversion table (12 bytes)
+        - Single range entry: 0xFFFF (all sizes) with flags for grayscale and symmetric smoothing
+        - Dramatically improves Windows rendering for unhinted fonts
+        Optional but highly recommended for quality."
+    ];
+
+    // Phase 20: Font assembly integration
+    implement_font_assembly [
+        label="Implement Font Assembly"
+        prompt="Create pkg/ttf/assemble.go that:
+        - Takes []TracedGlyph and *FontMetadata
+        - Calls all table generation functions
+        - Sorts tables alphabetically by tag
+        - Builds offset table and table directory
+        - Computes checksums for each table (sum of uint32 words)
+        - Computes checksumAdjustment for head table: 0xB1B0AFBA - file_checksum
+        - Pads tables to 4-byte boundaries
+        - Returns complete *Font struct ready for writing
+        Implement AssembleFont(glyphs []TracedGlyph, meta *FontMetadata) (*Font, error)"
+    ];
+
+    // Phase 21: Font file writing
+    implement_font_writer [
+        label="Implement Font Writer"
+        prompt="Create pkg/ttf/writer.go that:
+        - Takes *Font struct and output path
+        - Writes binary TrueType file format
+        - Offset table → table directory → table data (padded)
+        - Uses binary.BigEndian for all multi-byte integers
+        Implement WriteFont(font *Font, outputPath string) error"
+    ];
+
+    // Phase 22: Core pipeline integration
+    implement_pipeline [
+        label="Implement Core Pipeline"
+        prompt="Create pkg/dttf/build.go that orchestrates the full pipeline:
+        - LoadGlyphs(inputDir) → []GlyphBitmap, *FontMetadata
+        - Parallelize: TraceGlyph for each bitmap → []TracedGlyph
+        - AssembleFont(tracedGlyphs, metadata) → *Font
+        - WriteFont(font, outputPath)
+        - Include error handling: skip invalid glyphs with warnings, fatal if zero valid
+        Implement Build(inputDir string, outputPath string, opts Options) error"
+    ];
+
+    // Phase 23: Rasterizer implementation
+    implement_rasterizer [
+        label="Implement Font Rasterizer"
+        prompt="Create pkg/rasterize/rasterize.go that:
+        - Loads TTF/OTF font using golang.org/x/image/font/sfnt
+        - Rasterizes glyphs using golang.org/x/image/font/opentype
+        - Renders black-on-white PNGs at specified height (default 400px/em)
+        - Supports charset selection: ASCII, all glyphs, specific chars, Unicode ranges
+        - Generates DTTF-compatible filenames: FontName-GlyphLabel-U+XXXX.png
+        - Extracts and writes font.json with real metrics
+        - Computes baseline_ratio from ascender/descender
+        Implement Rasterize(fontPath string, outputDir string, opts RasterizeOptions) error"
+    ];
+
+    // Phase 24: Quality validation layer 1
+    implement_validation [
+        label="Implement Font Validation"
+        prompt="Create pkg/quality/validate.go that:
+        - Loads font using golang.org/x/image/font/sfnt (tests parseability)
+        - Verifies all contours are closed (last point == first point)
+        - Checks winding direction using signed area (negative=CW outer, positive=CCW inner)
+        - Tests for self-intersections (segment-segment intersection)
+        - Verifies points at extrema (check curve derivatives)
+        Returns bool valid and []string errors
+        Implement Validate(fontPath string) (bool, []string, error)"
+    ];
+
+    // Phase 25: SSIM implementation
+    implement_ssim [
+        label="Implement SSIM Metric"
+        prompt="Create pkg/quality/ssim.go that:
+        - Implements Structural Similarity Index (SSIM) between two grayscale images
+        - Formula: SSIM = (2μxμy + c1)(2σxy + c2) / ((μx² + μy²+ c1)(σx² + σy² + c2))
+        - Uses sliding window (8x8 or 11x11 Gaussian)
+        - Returns float64 in range 0.0-1.0 (higher = more similar)
+        - Handles images of different sizes by resizing or cropping to common size
+        Implement SSIM(img1, img2 *image.Gray) (float64, error)"
+    ];
+
+    // Phase 26: Round-trip test harness
+    implement_test_harness [
+        label="Implement Round-Trip Test Harness"
+        prompt="Create pkg/quality/roundtrip.go that:
+        - Takes reference font path
+        - Rasterizes all glyphs at 400px/em → temp directory
+        - Runs DTTF Build() on rasterized PNGs → output font
+        - Rasterizes output font glyphs at same size
+        - Computes SSIM per glyph between reference and output
+        - Aggregates scores and reports failures below threshold
+        - Optionally test at multiple sizes (12, 16, 24, 48, 96px)
+        Implement RoundTripTest(refFont string, opts TestOptions) (*TestReport, error)"
+    ];
+
+    // Phase 27: CLI build command
+    implement_cli_build [
+        label="Implement CLI 'build' Command"
+        prompt="Create cmd/dttf/build.go that:
+        - Parses command: dttf build <input-dir> [flags]
+        - Flags: -o/--output, --family, --style, --units-per-em, --threshold, --corner-threshold, --optimization-tolerance, --verbose
+        - Calls dttf.Build() with parsed options
+        - Reports progress and errors to stderr
+        - Exit 0 on success, 1 on failure
+        Use a CLI library like cobra or flag package."
+    ];
+
+    // Phase 28: CLI rasterize command
+    implement_cli_rasterize [
+        label="Implement CLI 'rasterize' Command"
+        prompt="Create cmd/dttf/rasterize.go that:
+        - Parses command: dttf rasterize <font.ttf> [flags]
+        - Flags: -o/--output-dir, --ascii, --all, --chars, --range, --height, --verbose
+        - Calls rasterize.Rasterize() with parsed options
+        - Reports progress and errors
+        Use same CLI framework as build command."
+    ];
+
+    // Phase 29: CLI validate command
+    implement_cli_validate [
+        label="Implement CLI 'validate' Command"
+        prompt="Create cmd/dttf/validate.go that:
+        - Parses command: dttf validate <font.ttf>
+        - Calls quality.Validate()
+        - Prints validation results (pass/fail per check)
+        - Exit 0 if valid, 1 if invalid"
+    ];
+
+    // Phase 30: CLI test command
+    implement_cli_test [
+        label="Implement CLI 'test' Command"
+        prompt="Create cmd/dttf/test.go that:
+        - Parses command: dttf test --reference <font> or --reference-dir <dir>
+        - Flags: --sizes, --threshold, --output-dir
+        - Calls quality.RoundTripTest() for each reference font
+        - Prints per-glyph and aggregate scores
+        - Exit 0 if all pass threshold, 1 if any fail"
+    ];
+
+    // Phase 31: CLI main
+    implement_cli_main [
+        label="Implement CLI Main Entry"
+        prompt="Create cmd/dttf/main.go that:
+        - Sets up root command with subcommands: build, rasterize, validate, test
+        - Includes version, help, usage information
+        - Handles global flags if any
+        - Entry point for the dttf executable"
+    ];
+
+    // Phase 32: Unit tests - loader
+    implement_test_loader [
+        label="Write Tests for Loader"
+        prompt="Create test/loader_test.go that:
+        - Tests PNG loading with valid/invalid files
+        - Tests filename parsing for various formats
+        - Tests font.json loading with/without file
+        - Tests error handling for empty directories
+        Use Go testing package with table-driven tests."
+    ];
+
+    // Phase 33: Unit tests - tracer
+    implement_test_tracer [
+        label="Write Tests for Tracer"
+        prompt="Create test/tracer_test.go that:
+        - Tests each tracer phase with synthetic inputs
+        - Tests coordinate mapping with known values
+        - Tests optimization constraints (max points, winding direction)
+        - Tests edge cases: single pixel glyphs, all-white, all-black
+        Use golden files for complex trace outputs."
+    ];
+
+    // Phase 34: Unit tests - TTF assembly
+    implement_test_ttf [
+        label="Write Tests for TrueType Assembly"
+        prompt="Create test/ttf_test.go that:
+        - Tests each table generation with known inputs
+        - Tests checksum computation
+        - Tests file structure (offset table, directory, padding)
+        - Validates output can be parsed by sfnt package
+        Compare against reference binary outputs."
+    ];
+
+    // Phase 35: Integration test
+    implement_integration_test [
+        label="Write Integration Test"
+        prompt="Create test/integration_test.go that:
+        - Creates a minimal test font (A-Z, a-z, 0-9)
+        - Runs full pipeline: rasterize reference → DTTF build → validate
+        - Checks that output font loads and renders
+        - Computes SSIM and asserts > 0.90
+        - Uses embedded test font or downloads Roboto
+        This is the end-to-end smoke test."
+    ];
+
+    // Phase 36: Documentation
+    write_documentation [
+        label="Write Documentation"
+        prompt="Create comprehensive documentation:
+        - README.md: overview, installation, quick start, examples
+        - ARCHITECTURE.md: explain tracer algorithm, TrueType assembly, quality metrics
+        - API.md: document all exported functions with examples
+        - TESTING.md: how to run tests, add reference fonts
+        - Examples: example input directories, expected outputs
+        Include diagrams where helpful (pipeline flow, table structure)."
+    ];
+
+    // Phase 37: Build system
+    implement_build_system [
+        label="Implement Build System"
+        prompt="Create build tooling:
+        - Makefile or justfile with targets: build, test, install, clean, lint
+        - go.mod with all dependencies
+        - CI configuration (GitHub Actions) for: test, lint, build on Linux/Mac/Windows
+        - Release script for versioned binaries
+        Ensure 'go build' produces working dttf executable."
+    ];
+
+    // Final validation and exit
+    final_validation [
+        label="Final Validation"
+        prompt="Perform final validation:
+        - Build the dttf executable: go build ./cmd/dttf
+        - Run integration test suite: go test ./test/...
+        - Test CLI commands manually with sample fonts
+        - Run round-trip test with Roboto: dttf test --reference Roboto-Regular.ttf
+        - Verify SSIM scores are reasonable (> 0.90)
+        - Check that generated fonts load in font viewers and text editors
+        - Fix any critical bugs discovered
+        Report final status: PASS/FAIL with summary."
+    ];
+
+    exit [label="exit"];
+
+    // Flow: Linear pipeline with validation checkpoints
+    start -> setup_project;
+    setup_project -> define_types [label="success"];
+    setup_project -> exit [label="failure"];
+
+    define_types -> implement_loader [label="success"];
+    define_types -> exit [label="failure"];
+
+    implement_loader -> implement_preprocessing [label="success"];
+    implement_loader -> exit [label="failure"];
+
+    implement_preprocessing -> implement_path_decomposition [label="success"];
+    implement_preprocessing -> exit [label="failure"];
+
+    implement_path_decomposition -> implement_polygon_fit [label="success"];
+    implement_path_decomposition -> exit [label="failure"];
+
+    implement_polygon_fit -> implement_bezier_fit [label="success"];
+    implement_polygon_fit -> exit [label="failure"];
+
+    implement_bezier_fit -> implement_font_optimization [label="success"];
+    implement_bezier_fit -> exit [label="failure"];
+
+    implement_font_optimization -> implement_coordinate_mapping [label="success"];
+    implement_font_optimization -> exit [label="failure"];
+
+    implement_coordinate_mapping -> integrate_tracer [label="success"];
+    implement_coordinate_mapping -> exit [label="failure"];
+
+    integrate_tracer -> implement_head_table [label="success"];
+    integrate_tracer -> exit [label="failure"];
+
+    implement_head_table -> implement_metrics_tables [label="success"];
+    implement_head_table -> exit [label="failure"];
+
+    implement_metrics_tables -> implement_hmtx_table [label="success"];
+    implement_metrics_tables -> exit [label="failure"];
+
+    implement_hmtx_table -> implement_os2_table [label="success"];
+    implement_hmtx_table -> exit [label="failure"];
+
+    implement_os2_table -> implement_name_table [label="success"];
+    implement_os2_table -> exit [label="failure"];
+
+    implement_name_table -> implement_post_table [label="success"];
+    implement_name_table -> exit [label="failure"];
+
+    implement_post_table -> implement_cmap_table [label="success"];
+    implement_post_table -> exit [label="failure"];
+
+    implement_cmap_table -> implement_glyf_loca_tables [label="success"];
+    implement_cmap_table -> exit [label="failure"];
+
+    implement_glyf_loca_tables -> implement_gasp_table [label="success"];
+    implement_glyf_loca_tables -> exit [label="failure"];
+
+    implement_gasp_table -> implement_font_assembly [label="success"];
+    implement_gasp_table -> exit [label="failure"];
+
+    implement_font_assembly -> implement_font_writer [label="success"];
+    implement_font_assembly -> exit [label="failure"];
+
+    implement_font_writer -> implement_pipeline [label="success"];
+    implement_font_writer -> exit [label="failure"];
+
+    implement_pipeline -> implement_rasterizer [label="success"];
+    implement_pipeline -> exit [label="failure"];
+
+    implement_rasterizer -> implement_validation [label="success"];
+    implement_rasterizer -> exit [label="failure"];
+
+    implement_validation -> implement_ssim [label="success"];
+    implement_validation -> exit [label="failure"];
+
+    implement_ssim -> implement_test_harness [label="success"];
+    implement_ssim -> exit [label="failure"];
+
+    implement_test_harness -> implement_cli_build [label="success"];
+    implement_test_harness -> exit [label="failure"];
+
+    implement_cli_build -> implement_cli_rasterize [label="success"];
+    implement_cli_build -> exit [label="failure"];
+
+    implement_cli_rasterize -> implement_cli_validate [label="success"];
+    implement_cli_rasterize -> exit [label="failure"];
+
+    implement_cli_validate -> implement_cli_test [label="success"];
+    implement_cli_validate -> exit [label="failure"];
+
+    implement_cli_test -> implement_cli_main [label="success"];
+    implement_cli_test -> exit [label="failure"];
+
+    implement_cli_main -> implement_test_loader [label="success"];
+    implement_cli_main -> exit [label="failure"];
+
+    implement_test_loader -> implement_test_tracer [label="success"];
+    implement_test_loader -> exit [label="failure"];
+
+    implement_test_tracer -> implement_test_ttf [label="success"];
+    implement_test_tracer -> exit [label="failure"];
+
+    implement_test_ttf -> implement_integration_test [label="success"];
+    implement_test_ttf -> exit [label="failure"];
+
+    implement_integration_test -> write_documentation [label="success"];
+    implement_integration_test -> exit [label="failure"];
+
+    write_documentation -> implement_build_system [label="success"];
+    write_documentation -> exit [label="failure"];
+
+    implement_build_system -> final_validation [label="success"];
+    implement_build_system -> exit [label="failure"];
+
+    final_validation -> exit [label="success"];
+    final_validation -> exit [label="failure"];
+}

@@ -1,0 +1,50 @@
+-- Test pipeline: plan -> implement -> review -> done
+DOT = """
+digraph test_pipeline {
+    graph [goal="Create a hello world Python script"]
+
+    start       [shape=Mdiamond]
+    plan        [shape=box, prompt="Plan how to create a hello world script for: $goal"]
+    implement   [shape=box, prompt="Write the code based on the plan", goal_gate=true]
+    review      [shape=box, prompt="Review the code for correctness"]
+    done        [shape=Msquare]
+
+    start -> plan
+    plan -> implement
+    implement -> review [condition="outcome=success"]
+    implement -> plan   [condition="outcome=fail", label="Retry"]
+    review -> done      [condition="outcome=success"]
+    review -> implement [condition="outcome=fail", label="Fix"]
+}
+"""
+
+-- 1. Parse
+graph = parse_dot(DOT)
+ASSERT graph.goal == "Create a hello world Python script"
+ASSERT LENGTH(graph.nodes) == 5
+ASSERT LENGTH(edges_total(graph)) == 6
+
+-- 2. Validate
+lint_results = validate(graph)
+ASSERT no error-severity results in lint_results
+
+-- 3. Execute with LLM callback
+context = Context()
+outcome = run_pipeline(graph, context, llm_callback = real_llm_callback)
+
+-- 4. Verify
+ASSERT outcome.status == "success"
+ASSERT "implement" in outcome.completed_nodes
+ASSERT artifacts_exist(logs_root, "plan", ["prompt.md", "response.md", "status.json"])
+ASSERT artifacts_exist(logs_root, "implement", ["prompt.md", "response.md", "status.json"])
+ASSERT artifacts_exist(logs_root, "review", ["prompt.md", "response.md", "status.json"])
+
+-- 5. Verify goal gate
+ASSERT goal_gate_satisfied(graph, outcome, "implement")
+
+-- 6. Verify checkpoint
+checkpoint = load_checkpoint(logs_root)
+ASSERT checkpoint.current_node == "done"
+ASSERT "plan" IN checkpoint.completed_nodes
+ASSERT "implement" IN checkpoint.completed_nodes
+ASSERT "review" IN checkpoint.completed_nodes

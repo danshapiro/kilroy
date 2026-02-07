@@ -1,0 +1,108 @@
+digraph linkcheck_builder {
+    // Start node
+    start [shape=circle, label="start"];
+
+    // Exit nodes
+    exit_success [shape=doublecircle, label="exit_success"];
+    exit_failure [shape=doublecircle, label="exit_failure"];
+
+    // Task nodes with AI prompts
+    design_architecture [
+        shape=box,
+        prompt="Design the architecture for a Go CLI tool called 'linkcheck'. Define the main packages: cmd (CLI), crawler (web crawling), checker (link validation), robots (robots.txt parser), and reporter (output formatting). Specify the data structures needed: Link, CheckResult, Report. Output a detailed architecture document with package responsibilities and interfaces."
+    ];
+
+    implement_robots_parser [
+        shape=box,
+        prompt="Implement the robots.txt parser package in Go. Create a RobotsParser that can fetch and parse robots.txt files, check if a URL is allowed to be crawled, and respect user-agent rules. Include error handling for missing or malformed robots.txt files. Write the code to robots/parser.go."
+    ];
+
+    implement_crawler [
+        shape=box,
+        prompt="Implement the web crawler package in Go. Create a Crawler that takes a URL and depth parameter, fetches HTML content, extracts all links (both relative and absolute), normalizes URLs, and respects the configurable crawl depth. Use the robots parser to check permissions before crawling. Handle HTTP errors gracefully. Write the code to crawler/crawler.go."
+    ];
+
+    implement_checker [
+        shape=box,
+        prompt="Implement the link checker package in Go. Create a LinkChecker that takes a list of URLs and performs HEAD requests to check HTTP status codes. Categorize links as working (2xx/3xx), broken (4xx/5xx), or error (network failures). Include timeout handling and concurrent checking with rate limiting. Write the code to checker/checker.go."
+    ];
+
+    implement_reporter [
+        shape=box,
+        prompt="Implement the reporter package in Go. Create formatters for both human-readable output (table format with colors using a library like fatih/color) and JSON output. The report should include: total links checked, broken links count, list of broken links with status codes and error messages. Write the code to reporter/reporter.go."
+    ];
+
+    implement_cli [
+        shape=box,
+        prompt="Implement the main CLI application using a library like cobra or urfave/cli. Create flags for: URL (required), depth (default 1), output format (text/json), timeout, and max concurrency. Wire together the robots parser, crawler, checker, and reporter. Handle errors and provide helpful usage messages. Write the code to cmd/linkcheck/main.go and main.go."
+    ];
+
+    create_tests [
+        shape=box,
+        prompt="Create comprehensive unit tests for all packages: robots parser, crawler, link checker, and reporter. Use Go's testing package and include table-driven tests. Create test fixtures for mock HTML pages and robots.txt files. Aim for >80% code coverage. Write test files (*_test.go) for each package."
+    ];
+
+    create_build_files [
+        shape=box,
+        prompt="Create the necessary build and dependency files. Generate go.mod with required dependencies (HTTP client, CLI framework, color output, HTML parser like golang.org/x/net/html). Create a Makefile with targets for build, test, install, and clean. Write a .gitignore for Go projects."
+    ];
+
+    create_documentation [
+        shape=box,
+        prompt="Create comprehensive documentation. Write a README.md with: project description, installation instructions, usage examples, configuration options, output format examples (both text and JSON), and development instructions. Add inline code documentation (godoc comments) to all public functions and types."
+    ];
+
+    integration_test [
+        shape=box,
+        prompt="Perform integration testing. Build the linkcheck binary and test it against real websites and edge cases: valid pages with working links, pages with broken links, robots.txt restrictions, various crawl depths (0, 1, 2), both output formats, timeout scenarios, and malformed URLs. Document any issues found and verify all features work end-to-end."
+    ];
+
+    fix_issues [
+        shape=box,
+        prompt="Review integration test results and fix any identified issues. Address bugs in error handling, edge cases in URL parsing, robots.txt compliance, or output formatting. Ensure all CLI flags work correctly and error messages are clear. Re-run tests to verify fixes."
+    ];
+
+    finalize [
+        shape=box,
+        prompt="Finalize the project. Run go fmt on all files, ensure go vet passes with no warnings, verify all tests pass, build the final binary, and create a release checklist. Confirm the tool meets all requirements: URL crawling, link checking, robots.txt respect, configurable depth, and dual output formats."
+    ];
+
+    // Flow edges
+    start -> design_architecture;
+    design_architecture -> implement_robots_parser [label="success"];
+    design_architecture -> exit_failure [label="failure"];
+
+    implement_robots_parser -> implement_crawler [label="success"];
+    implement_robots_parser -> exit_failure [label="failure"];
+
+    implement_crawler -> implement_checker [label="success"];
+    implement_crawler -> exit_failure [label="failure"];
+
+    implement_checker -> implement_reporter [label="success"];
+    implement_checker -> exit_failure [label="failure"];
+
+    implement_reporter -> implement_cli [label="success"];
+    implement_reporter -> exit_failure [label="failure"];
+
+    implement_cli -> create_tests [label="success"];
+    implement_cli -> exit_failure [label="failure"];
+
+    create_tests -> create_build_files [label="success"];
+    create_tests -> exit_failure [label="failure"];
+
+    create_build_files -> create_documentation [label="success"];
+    create_build_files -> exit_failure [label="failure"];
+
+    create_documentation -> integration_test [label="success"];
+    create_documentation -> exit_failure [label="failure"];
+
+    integration_test -> fix_issues [label="issues_found"];
+    integration_test -> finalize [label="all_passing"];
+    integration_test -> exit_failure [label="critical_failure"];
+
+    fix_issues -> integration_test [label="retry"];
+    fix_issues -> exit_failure [label="unfixable"];
+
+    finalize -> exit_success [label="complete"];
+    finalize -> exit_failure [label="validation_failed"];
+}
