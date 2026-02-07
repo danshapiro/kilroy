@@ -961,6 +961,46 @@ func TestAdapter_PromptCaching_AutoCacheDefaultAndDisable(t *testing.T) {
 	})
 }
 
+func TestAdapter_Stream_ContextDeadline_EmitsRequestTimeoutError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/messages" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusOK)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	st, err := a.Stream(ctx, llm.Request{Model: "claude-test", Messages: []llm.Message{llm.User("hi")}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer st.Close()
+
+	var sawErr error
+	for ev := range st.Events() {
+		if ev.Type == llm.StreamEventError && ev.Err != nil {
+			sawErr = ev.Err
+		}
+	}
+	if sawErr == nil {
+		t.Fatalf("expected stream error")
+	}
+	var rte *llm.RequestTimeoutError
+	if !errors.As(sawErr, &rte) {
+		t.Fatalf("expected RequestTimeoutError, got %T (%v)", sawErr, sawErr)
+	}
+}
+
 func TestAdapter_UsageCacheTokens_Mapped(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

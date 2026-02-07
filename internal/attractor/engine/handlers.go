@@ -304,24 +304,28 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 			"command": cmdStr,
 			"timeout": timeout.String(),
 		})
-		_, _, _ = execCtx.Engine.CXDB.Append(ctx, "com.kilroy.attractor.ToolCall", 1, map[string]any{
+		if _, _, err := execCtx.Engine.CXDB.Append(ctx, "com.kilroy.attractor.ToolCall", 1, map[string]any{
 			"run_id":         execCtx.Engine.Options.RunID,
 			"node_id":        node.ID,
 			"tool_name":      "shell",
 			"call_id":        callID,
 			"arguments_json": string(argsJSON),
-		})
+		}); err != nil {
+			execCtx.Engine.Warn(fmt.Sprintf("cxdb append ToolCall failed (node=%s call_id=%s): %v", node.ID, callID, err))
+		}
 	}
 
-	_ = writeJSON(filepath.Join(stageDir, "tool_invocation.json"), map[string]any{
-		"tool":        "bash",
+	if err := writeJSON(filepath.Join(stageDir, "tool_invocation.json"), map[string]any{
+		"tool": "bash",
 		// Use a non-login, non-interactive shell to avoid sourcing user dotfiles.
 		"argv":        []string{"bash", "-c", cmdStr},
 		"command":     cmdStr,
 		"working_dir": execCtx.WorktreeDir,
 		"timeout_ms":  timeout.Milliseconds(),
 		"env_mode":    "inherit",
-	})
+	}); err != nil {
+		warnEngine(execCtx, fmt.Sprintf("write tool_invocation.json: %v", err))
+	}
 
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -331,70 +335,91 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	cmd.Stdin = strings.NewReader("")
 	stdoutPath := filepath.Join(stageDir, "stdout.log")
 	stderrPath := filepath.Join(stageDir, "stderr.log")
-	stdoutFile, _ := os.Create(stdoutPath)
-	stderrFile, _ := os.Create(stderrPath)
+	stdoutFile, err := os.Create(stdoutPath)
+	if err != nil {
+		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+	}
+	stderrFile, err := os.Create(stderrPath)
+	if err != nil {
+		_ = stdoutFile.Close()
+		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+	}
 	defer func() { _ = stdoutFile.Close(); _ = stderrFile.Close() }()
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
 
 	start := time.Now()
-	err := cmd.Run()
+	runErr := cmd.Run()
 	dur := time.Since(start)
 	exitCode := -1
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()
 	}
 	if cctx.Err() == context.DeadlineExceeded {
-		_ = writeJSON(filepath.Join(stageDir, "tool_timing.json"), map[string]any{
+		if err := writeJSON(filepath.Join(stageDir, "tool_timing.json"), map[string]any{
 			"duration_ms": dur.Milliseconds(),
 			"exit_code":   exitCode,
 			"timed_out":   true,
-		})
+		}); err != nil {
+			warnEngine(execCtx, fmt.Sprintf("write tool_timing.json: %v", err))
+		}
 		_ = writeDiffPatch(stageDir, execCtx.WorktreeDir)
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: fmt.Sprintf("tool_command timed out after %s", timeout)}, nil
 	}
 
-	_ = writeJSON(filepath.Join(stageDir, "tool_timing.json"), map[string]any{
+	if err := writeJSON(filepath.Join(stageDir, "tool_timing.json"), map[string]any{
 		"duration_ms": dur.Milliseconds(),
 		"exit_code":   exitCode,
 		"timed_out":   false,
-	})
+	}); err != nil {
+		warnEngine(execCtx, fmt.Sprintf("write tool_timing.json: %v", err))
+	}
 
 	// Capture diff for debug-by-default. This is stable because we checkpoint after each node.
 	_ = writeDiffPatch(stageDir, execCtx.WorktreeDir)
 
-	stdoutBytes, _ := os.ReadFile(stdoutPath)
-	stderrBytes, _ := os.ReadFile(stderrPath)
+	stdoutBytes, rerr := os.ReadFile(stdoutPath)
+	if rerr != nil {
+		warnEngine(execCtx, fmt.Sprintf("read stdout.log: %v", rerr))
+	}
+	stderrBytes, rerr := os.ReadFile(stderrPath)
+	if rerr != nil {
+		warnEngine(execCtx, fmt.Sprintf("read stderr.log: %v", rerr))
+	}
 	combined := append(append([]byte{}, stdoutBytes...), stderrBytes...)
 	combinedStr := string(combined)
-	if err != nil {
+	if runErr != nil {
 		if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
-			_, _, _ = execCtx.Engine.CXDB.Append(ctx, "com.kilroy.attractor.ToolResult", 1, map[string]any{
+			if _, _, err := execCtx.Engine.CXDB.Append(ctx, "com.kilroy.attractor.ToolResult", 1, map[string]any{
 				"run_id":    execCtx.Engine.Options.RunID,
 				"node_id":   node.ID,
 				"tool_name": "shell",
 				"call_id":   callID,
 				"output":    truncate(combinedStr, 8_000),
 				"is_error":  true,
-			})
+			}); err != nil {
+				execCtx.Engine.Warn(fmt.Sprintf("cxdb append ToolResult failed (node=%s call_id=%s): %v", node.ID, callID, err))
+			}
 		}
 		return runtime.Outcome{
 			Status:        runtime.StatusFail,
-			FailureReason: err.Error(),
+			FailureReason: runErr.Error(),
 			ContextUpdates: map[string]any{
 				"tool.output": truncate(combinedStr, 8_000),
 			},
 		}, nil
 	}
 	if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
-		_, _, _ = execCtx.Engine.CXDB.Append(ctx, "com.kilroy.attractor.ToolResult", 1, map[string]any{
+		if _, _, err := execCtx.Engine.CXDB.Append(ctx, "com.kilroy.attractor.ToolResult", 1, map[string]any{
 			"run_id":    execCtx.Engine.Options.RunID,
 			"node_id":   node.ID,
 			"tool_name": "shell",
 			"call_id":   callID,
 			"output":    truncate(combinedStr, 8_000),
 			"is_error":  false,
-		})
+		}); err != nil {
+			execCtx.Engine.Warn(fmt.Sprintf("cxdb append ToolResult failed (node=%s call_id=%s): %v", node.ID, callID, err))
+		}
 	}
 	return runtime.Outcome{
 		Status: runtime.StatusSuccess,

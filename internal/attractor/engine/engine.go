@@ -9,6 +9,7 @@ import (
 	rdebug "runtime/debug"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/strongdm/kilroy/internal/attractor/cond"
@@ -95,7 +96,8 @@ type Engine struct {
 	ModelCatalogSource string
 	ModelCatalogPath   string
 
-	Warnings []string
+	warningsMu sync.Mutex
+	Warnings   []string
 
 	// Fidelity/session resolution state.
 	incomingEdge          *model.Edge // edge used to reach the current node (nil for start)
@@ -103,6 +105,28 @@ type Engine struct {
 	forceNextFidelityUsed bool        // true once the override has been consumed
 	lastResolvedFidelity  string      // last resolved LLM fidelity for checkpoint/resume
 	lastResolvedThreadKey string      // thread key when fidelity=full (best-effort)
+}
+
+func (e *Engine) Warn(msg string) {
+	if e == nil {
+		return
+	}
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return
+	}
+	e.warningsMu.Lock()
+	e.Warnings = append(e.Warnings, msg)
+	e.warningsMu.Unlock()
+}
+
+func (e *Engine) warningsCopy() []string {
+	if e == nil {
+		return nil
+	}
+	e.warningsMu.Lock()
+	defer e.warningsMu.Unlock()
+	return append([]string{}, e.Warnings...)
 }
 
 type Result struct {
@@ -688,8 +712,8 @@ func (e *Engine) writeManifest(baseSHA string) error {
 			}
 		}(),
 	}
-	if len(e.Warnings) > 0 {
-		manifest["warnings"] = append([]string{}, e.Warnings...)
+	if ws := e.warningsCopy(); len(ws) > 0 {
+		manifest["warnings"] = ws
 	}
 	return writeJSON(filepath.Join(e.LogsRoot, "manifest.json"), manifest)
 }

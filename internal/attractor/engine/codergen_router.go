@@ -93,7 +93,9 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 	}
 
 	stageDir := filepath.Join(execCtx.LogsRoot, node.ID)
-	_ = os.MkdirAll(stageDir, 0o755)
+	if err := os.MkdirAll(stageDir, 0o755); err != nil {
+		return "", &runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+	}
 
 	reasoning := strings.TrimSpace(node.Attr("reasoning_effort", ""))
 	var reasoningPtr *string
@@ -109,12 +111,16 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			Messages:        []llm.Message{llm.User(prompt)},
 			ReasoningEffort: reasoningPtr,
 		}
-		_ = writeJSON(filepath.Join(stageDir, "api_request.json"), req)
+		if err := writeJSON(filepath.Join(stageDir, "api_request.json"), req); err != nil {
+			warnEngine(execCtx, fmt.Sprintf("write api_request.json: %v", err))
+		}
 		resp, err := client.Complete(ctx, req)
 		if err != nil {
 			return "", nil, err
 		}
-		_ = writeJSON(filepath.Join(stageDir, "api_response.json"), resp.Raw)
+		if err := writeJSON(filepath.Join(stageDir, "api_response.json"), resp.Raw); err != nil {
+			warnEngine(execCtx, fmt.Sprintf("write api_response.json: %v", err))
+		}
 		return resp.Text(), nil, nil
 	case "agent_loop":
 		env := agent.NewLocalExecutionEnvironment(execCtx.WorktreeDir)
@@ -132,7 +138,10 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		}
 		eventsPath := filepath.Join(stageDir, "events.ndjson")
 		eventsJSONPath := filepath.Join(stageDir, "events.json")
-		eventsFile, _ := os.Create(eventsPath)
+		eventsFile, err := os.Create(eventsPath)
+		if err != nil {
+			return "", &runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+		}
 		defer func() { _ = eventsFile.Close() }()
 
 		var eventsMu sync.Mutex
@@ -140,8 +149,14 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		done := make(chan struct{})
 		go func() {
 			enc := json.NewEncoder(eventsFile)
+			encodeFailed := false
 			for ev := range sess.Events() {
-				_ = enc.Encode(ev)
+				if !encodeFailed {
+					if err := enc.Encode(ev); err != nil {
+						encodeFailed = true
+						warnEngine(execCtx, fmt.Sprintf("write %s: %v", eventsPath, err))
+					}
+				}
 				// Best-effort: emit normalized tool call/result turns to CXDB.
 				if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
 					emitCXDBToolTurns(ctx, execCtx.Engine, node.ID, ev)
@@ -157,7 +172,9 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		sess.Close()
 		<-done
 		eventsMu.Lock()
-		_ = writeJSON(eventsJSONPath, events)
+		if err := writeJSON(eventsJSONPath, events); err != nil {
+			warnEngine(execCtx, fmt.Sprintf("write %s: %v", eventsJSONPath, err))
+		}
 		eventsMu.Unlock()
 		if runErr != nil {
 			return text, nil, runErr
@@ -183,7 +200,9 @@ func profileForProvider(provider string, modelID string) (agent.ProviderProfile,
 
 func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *model.Node, provider string, modelID string, prompt string) (string, *runtime.Outcome, error) {
 	stageDir := filepath.Join(execCtx.LogsRoot, node.ID)
-	_ = os.MkdirAll(stageDir, 0o755)
+	if err := os.MkdirAll(stageDir, 0o755); err != nil {
+		return "", &runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+	}
 
 	exe, args := defaultCLIInvocation(provider, modelID, execCtx.WorktreeDir)
 	if exe == "" {
@@ -239,7 +258,9 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	if structuredSchemaPath != "" {
 		inv["structured_output_schema_path"] = structuredSchemaPath
 	}
-	_ = writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv)
+	if err := writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv); err != nil {
+		return "", &runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+	}
 
 	cmd := exec.CommandContext(ctx, exe, actualArgs...)
 	cmd.Dir = execCtx.WorktreeDir
@@ -251,14 +272,21 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	}
 	stdoutPath := filepath.Join(stageDir, "stdout.log")
 	stderrPath := filepath.Join(stageDir, "stderr.log")
-	stdoutFile, _ := os.Create(stdoutPath)
-	stderrFile, _ := os.Create(stderrPath)
+	stdoutFile, err := os.Create(stdoutPath)
+	if err != nil {
+		return "", &runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+	}
+	stderrFile, err := os.Create(stderrPath)
+	if err != nil {
+		_ = stdoutFile.Close()
+		return "", &runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+	}
 	defer func() { _ = stdoutFile.Close(); _ = stderrFile.Close() }()
 	cmd.Stdout = stdoutFile
 	cmd.Stderr = stderrFile
 
 	start := time.Now()
-	err := cmd.Run()
+	runErr := cmd.Run()
 	dur := time.Since(start)
 	exitCode := -1
 	if cmd.ProcessState != nil {
@@ -266,16 +294,28 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	}
 
 	// Best-effort: treat stdout as ndjson if it parses line-by-line.
-	_ = bestEffortNDJSON(stageDir, stdoutPath)
-	_ = writeJSON(filepath.Join(stageDir, "cli_timing.json"), map[string]any{
+	wroteJSON, hadContent, ndErr := bestEffortNDJSON(stageDir, stdoutPath)
+	if ndErr != nil {
+		return "", &runtime.Outcome{Status: runtime.StatusFail, FailureReason: ndErr.Error()}, nil
+	}
+	if hadContent && !wroteJSON {
+		warnEngine(execCtx, "stdout was not valid ndjson; wrote events.ndjson only")
+	}
+	if err := writeJSON(filepath.Join(stageDir, "cli_timing.json"), map[string]any{
 		"duration_ms": dur.Milliseconds(),
 		"exit_code":   exitCode,
-	})
+	}); err != nil {
+		warnEngine(execCtx, fmt.Sprintf("write cli_timing.json: %v", err))
+	}
 
-	outBytes, _ := os.ReadFile(stdoutPath)
-	outStr := string(outBytes)
-	if err != nil {
-		return outStr, &runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+	outStr := ""
+	if outBytes, rerr := os.ReadFile(stdoutPath); rerr != nil {
+		warnEngine(execCtx, fmt.Sprintf("read stdout.log: %v", rerr))
+	} else {
+		outStr = string(outBytes)
+	}
+	if runErr != nil {
+		return outStr, &runtime.Outcome{Status: runtime.StatusFail, FailureReason: runErr.Error()}, nil
 	}
 	return outStr, nil, nil
 }
@@ -314,13 +354,15 @@ func emitCXDBToolTurns(ctx context.Context, eng *Engine, nodeID string, ev agent
 		if toolName == "" || callID == "" {
 			return
 		}
-		_, _, _ = eng.CXDB.Append(ctx, "com.kilroy.attractor.ToolCall", 1, map[string]any{
+		if _, _, err := eng.CXDB.Append(ctx, "com.kilroy.attractor.ToolCall", 1, map[string]any{
 			"run_id":         runID,
 			"node_id":        nodeID,
 			"tool_name":      toolName,
 			"call_id":        callID,
 			"arguments_json": argsJSON,
-		})
+		}); err != nil {
+			eng.Warn(fmt.Sprintf("cxdb append ToolCall failed (node=%s tool=%s call_id=%s): %v", nodeID, toolName, callID, err))
+		}
 	case agent.EventToolCallEnd:
 		toolName := strings.TrimSpace(fmt.Sprint(ev.Data["tool_name"]))
 		callID := strings.TrimSpace(fmt.Sprint(ev.Data["call_id"]))
@@ -329,14 +371,16 @@ func emitCXDBToolTurns(ctx context.Context, eng *Engine, nodeID string, ev agent
 		}
 		isErr, _ := ev.Data["is_error"].(bool)
 		fullOutput := fmt.Sprint(ev.Data["full_output"])
-		_, _, _ = eng.CXDB.Append(ctx, "com.kilroy.attractor.ToolResult", 1, map[string]any{
+		if _, _, err := eng.CXDB.Append(ctx, "com.kilroy.attractor.ToolResult", 1, map[string]any{
 			"run_id":    runID,
 			"node_id":   nodeID,
 			"tool_name": toolName,
 			"call_id":   callID,
 			"output":    truncate(fullOutput, 8_000),
 			"is_error":  isErr,
-		})
+		}); err != nil {
+			eng.Warn(fmt.Sprintf("cxdb append ToolResult failed (node=%s tool=%s call_id=%s): %v", nodeID, toolName, callID, err))
+		}
 	}
 }
 
@@ -384,14 +428,21 @@ const defaultCodexOutputSchema = `{
 }
 `
 
-func bestEffortNDJSON(stageDir string, stdoutPath string) error {
+// bestEffortNDJSON always writes events.ndjson (a copy of stdout.log) and, if the
+// file is valid ndjson, also writes events.json as a JSON array.
+//
+// Returns wroteJSON=true if events.json was written.
+func bestEffortNDJSON(stageDir string, stdoutPath string) (wroteJSON bool, hadContent bool, err error) {
 	b, err := os.ReadFile(stdoutPath)
 	if err != nil {
-		return err
+		return false, false, err
+	}
+	if err := os.WriteFile(filepath.Join(stageDir, "events.ndjson"), b, 0o644); err != nil {
+		return false, false, err
 	}
 	lines := strings.Split(strings.TrimSpace(string(b)), "\n")
 	if len(lines) == 0 {
-		return nil
+		return false, false, nil
 	}
 	var objs []any
 	for _, l := range lines {
@@ -399,16 +450,25 @@ func bestEffortNDJSON(stageDir string, stdoutPath string) error {
 		if l == "" {
 			continue
 		}
+		hadContent = true
 		var v any
 		if err := json.Unmarshal([]byte(l), &v); err != nil {
-			return nil
+			return false, hadContent, nil
 		}
 		objs = append(objs, v)
 	}
 	if len(objs) == 0 {
-		return nil
+		return false, hadContent, nil
 	}
-	_ = writeJSON(filepath.Join(stageDir, "events.json"), objs)
-	// Preserve original stream.
-	return os.WriteFile(filepath.Join(stageDir, "events.ndjson"), b, 0o644)
+	if err := writeJSON(filepath.Join(stageDir, "events.json"), objs); err != nil {
+		return false, hadContent, err
+	}
+	return true, hadContent, nil
+}
+
+func warnEngine(execCtx *Execution, msg string) {
+	if execCtx == nil || execCtx.Engine == nil {
+		return
+	}
+	execCtx.Engine.Warn(msg)
 }

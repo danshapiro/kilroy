@@ -299,7 +299,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, llm.WrapContextError("google", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer func() { _ = resp.Body.Close() }()
@@ -323,6 +323,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 
 		textID := "text_1"
 		textStarted := false
+		finished := false
 		var textBuf strings.Builder
 		var contentParts []llm.ContentPart
 		var usage llm.Usage
@@ -411,6 +412,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 						}
 						rp := r
 						s.Send(llm.StreamEvent{Type: llm.StreamEventFinish, FinishReason: &r.Finish, Usage: &r.Usage, Response: &rp})
+						finished = true
 						cancel()
 						return nil
 					}
@@ -425,8 +427,10 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 			return nil
 		})
 
-		if err := sctx.Err(); err != nil && err != context.Canceled {
-			s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.NewStreamError("google", err.Error())})
+		if !finished {
+			if err := sctx.Err(); err != nil {
+				s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.WrapContextError("google", err)})
+			}
 		}
 	}()
 

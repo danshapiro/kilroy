@@ -117,7 +117,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		ModelCatalogPath:   resolved.SnapshotPath,
 	}
 	if strings.TrimSpace(resolved.Warning) != "" {
-		eng.Warnings = append(eng.Warnings, resolved.Warning)
+		eng.Warn(resolved.Warning)
 		eng.Context.AppendLog(resolved.Warning)
 	}
 	eng.RunBranch = fmt.Sprintf("%s/%s", opts.RunBranchPrefix, opts.RunID)

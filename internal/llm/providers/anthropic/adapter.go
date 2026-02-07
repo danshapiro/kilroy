@@ -312,7 +312,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 	resp, err := a.Client.Do(httpReq)
 	if err != nil {
 		cancel()
-		return nil, err
+		return nil, llm.WrapContextError("anthropic", err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer func() { _ = resp.Body.Close() }()
@@ -334,6 +334,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 			s.CloseSend()
 		}()
 
+		finished := false
 		type blockState struct {
 			typ string
 
@@ -620,6 +621,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 				}
 				rp := r
 				s.Send(llm.StreamEvent{Type: llm.StreamEventFinish, FinishReason: &r.Finish, Usage: &r.Usage, Response: &rp})
+				finished = true
 				cancel()
 			default:
 				s.Send(llm.StreamEvent{Type: llm.StreamEventProviderEvent, Raw: payload})
@@ -627,8 +629,10 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 			return nil
 		})
 
-		if err := sctx.Err(); err != nil && err != context.Canceled {
-			s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.NewStreamError("anthropic", err.Error())})
+		if !finished {
+			if err := sctx.Err(); err != nil {
+				s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.WrapContextError("anthropic", err)})
+			}
 		}
 	}()
 
