@@ -159,17 +159,17 @@ Each requirement includes implementation intent, primary references, and verific
   Refs: `internal/attractor/engine/codergen_router.go`.  
   Verify: capability preflight tests with fake PATH.
 
-- `R030` Add online model availability probe (or explicit runtime map) for actually used provider/model pairs.  
-  Refs: provider adapters under `internal/llm/providers/*` and CLI adapters under `internal/attractor/engine/codergen_router.go`.  
-  Verify: model availability tests (mocked probes).
+- `R030` Validate provider/model availability for actually used provider/model pairs using deterministic sources first (pinned catalog/runtime mapping); optional online probes must be best-effort and class-aware.  
+  Refs: `internal/attractor/engine/run_with_config.go`, provider adapters under `internal/llm/providers/*`, and CLI adapters under `internal/attractor/engine/codergen_router.go`.  
+  Verify: preflight tests for deterministic mismatch plus transient probe outage.
 
 - `R031` Persist preflight report artifact in logs root.  
   Refs: `internal/attractor/engine/run_with_config.go`.  
   Verify: report artifact test.
 
-- `R032` Abort run as deterministic config error when preflight fails.  
-  Refs: `internal/attractor/engine/run_with_config.go`.  
-  Verify: deterministic classification tests.
+- `R032` Abort run on preflight failure with class-aware outcomes: deterministic for config/contract/model-unavailable violations; transient-infra for probe transport/network/timeouts.  
+  Refs: `internal/attractor/engine/run_with_config.go`, `internal/attractor/engine/loop_restart_policy.go`.  
+  Verify: class-aware preflight failure tests.
 
 - `R033` Standardize provider adapter error envelope (code/class/message/retryability).  
   Refs: `internal/attractor/engine/codergen_router.go`, provider adapters.  
@@ -183,9 +183,9 @@ Each requirement includes implementation intent, primary references, and verific
   Evidence: `.../parallel/.../02-impl_tracer_b/.../stderr.log`.  
   Verify: classifier tests.
 
-- `R036` Map transport/network/timeout failures to transient-infra class.  
-  Refs: `internal/attractor/engine/loop_restart_policy.go`.  
-  Verify: classification tests for known strings.
+- `R036` Map transport/network/timeout failures to transient-infra class at the adapter boundary; string matching is fallback-only for legacy unclassified errors.  
+  Refs: `internal/attractor/engine/codergen_router.go`, `internal/attractor/engine/loop_restart_policy.go`.  
+  Verify: precedence tests (explicit class wins, fallback only when class missing).
 
 - `R037` Preserve Codex state-db discrepancy fallback metadata and retry state-root traceability.  
   Evidence: `.../03-impl_tracer_c/.../cli_invocation.json`.  
@@ -319,8 +319,8 @@ Each requirement includes implementation intent, primary references, and verific
   Refs: `internal/attractor/engine/engine.go`.  
   Verify: event payload tests.
 
-- `R067` Docs must define detached launch and monitoring commands (`tail progress`, `cat final`).  
-  Refs: `docs/strongdm/attractor/README.md`, `AGENTS.md`.  
+- `R067` Operator docs must define detached launch and monitoring commands (`tail progress`, `cat final`).  
+  Refs: `docs/strongdm/attractor/README.md`.  
   Verify: docs review gate.
 
 - `R068` Docs must define restart/circuit-break semantics and deterministic blocking behavior.  
@@ -357,8 +357,8 @@ Each requirement includes implementation intent, primary references, and verific
   Refs: `scripts/e2e-guardrail-matrix.sh`.  
   Verify: script passes in CI.
 
-- `R076` CI gate must include `cmd/kilroy`, `internal/attractor/engine`, `internal/attractor/runtime`, and guardrail matrix script.  
-  Refs: CI config (to be added/updated).  
+- `R076` CI gate must include `cmd/kilroy`, `internal/attractor/engine`, `internal/attractor/runtime`, `internal/llm/providers/...`, and guardrail matrix script.  
+  Refs: `.github/workflows/attractor-reliability.yml` (or equivalent repo CI entrypoint).  
   Verify: CI pipeline updates.
 
 ### 2.13 Provider-Specific Hardening
@@ -375,15 +375,15 @@ Each requirement includes implementation intent, primary references, and verific
   Evidence: `...03-impl_tracer_c.../status.json`.  
   Verify: timeout classification tests.
 
-- `R080` Provider adapters must emit deterministic vs transient class explicitly, not inferred only from string matching.  
+- `R080` Provider adapters must emit deterministic vs transient class explicitly; fallback string classification may be used only for legacy unclassified adapter errors and must not override explicit class.  
   Refs: `internal/attractor/engine/codergen_router.go`.  
-  Verify: adapter output contract tests.
+  Verify: adapter output contract tests and explicit-vs-fallback precedence tests.
 
 ### 2.14 Repository Hygiene
 
-- `R081` `.gitignore` must not accidentally ignore source directories (`cmd/kilroy/*`).  
-  Evidence: `.gitignore` broad `kilroy` pattern impact.  
-  Verify: `git check-ignore` tests / policy check.
+- `R081` `.gitignore` must not accidentally ignore source directories (`cmd/kilroy/*`) while still ignoring the root `kilroy` binary artifact.  
+  Evidence: current `.gitignore` has `kilroy`; enforce this as root-binary-only policy and prevent wildcard regressions.  
+  Verify: `git check-ignore` assertions (`kilroy` ignored, `cmd/kilroy/*` not ignored).
 
 - `R082` Run-generated `restart-*` directories must not pollute tracked workspace state.  
   Refs: run root policy and test tooling.  
@@ -429,7 +429,7 @@ Each requirement includes implementation intent, primary references, and verific
 
 ### Task 1: Runtime Contract Hardening And Schema Tests
 
-**Requirements:** `R001-R010`, `R059-R062`, `R065-R068`, `R086-R087`  
+**Requirements:** `R001-R010`, `R059-R062`, `R065-R066`  
 **Files:**
 - Modify: `internal/attractor/runtime/status.go`
 - Modify: `internal/attractor/runtime/checkpoint.go`
@@ -487,7 +487,7 @@ Each requirement includes implementation intent, primary references, and verific
 **Steps:**
 1. Add failing tests for invalid loop params and missing provider/backends.
 2. Implement strict preflight and persist preflight report artifact.
-3. Ensure deterministic classification on preflight failure.
+3. Ensure class-aware preflight classification (deterministic misconfig vs transient probe outage).
 4. Run run-with-config tests.
 5. Commit.
 
@@ -502,7 +502,7 @@ Each requirement includes implementation intent, primary references, and verific
 
 **Steps:**
 1. Add failing tests for Anthropic contract mismatch mapping, Gemini model-not-found mapping, Codex timeout/state-db fallback classification.
-2. Implement adapter error envelope and class mapping contract.
+2. Implement adapter error envelope and class mapping contract with explicit-class precedence over fallback string heuristics.
 3. Add capability/model-availability preflight hooks and tests.
 4. Run adapter and provider tests.
 5. Commit.
@@ -596,15 +596,15 @@ Each requirement includes implementation intent, primary references, and verific
 
 ### Task 12: End-To-End And CI Gate Completion
 
-**Requirements:** `R069-R076`, `R084-R085`, `R090`  
+**Requirements:** `R067-R076`, `R084-R087`, `R090`  
 **Files:**
 - Modify: `scripts/e2e-guardrail-matrix.sh`
-- Modify: CI config (repo-specific pipeline files)
-- Modify docs: `docs/strongdm/attractor/README.md`, `AGENTS.md`
+- Create/Modify: `.github/workflows/attractor-reliability.yml`
+- Modify docs: `docs/strongdm/attractor/README.md`
 
 **Steps:**
 1. Expand guardrail matrix to include provider deterministic preflight scenarios.
-2. Wire mandatory suites into CI.
+2. Wire mandatory suites into CI at `.github/workflows/attractor-reliability.yml`.
 3. Update runbook docs to match exact behavior.
 4. Run full local gate.
 5. Commit.
@@ -618,8 +618,9 @@ Run all of the following before closing the branch:
 1. `go test ./cmd/kilroy -count=1`
 2. `go test ./internal/attractor/engine -count=1`
 3. `go test ./internal/attractor/runtime -count=1`
-4. `bash scripts/e2e-guardrail-matrix.sh`
-5. Real-CXDB deterministic-failure scenario must produce:
+4. `go test ./internal/llm/providers/... -count=1`
+5. `bash scripts/e2e-guardrail-matrix.sh`
+6. Real-CXDB deterministic-failure scenario must produce:
    - valid prefixed parallel branches,
    - zero restart storm,
    - explicit `loop_restart_blocked` event,
@@ -635,4 +636,3 @@ This plan is complete only when:
 2. All required tests are green locally and in CI.
 3. Real-CXDB validation reproduces expected deterministic-fast-fail behavior with complete artifacts.
 4. Documentation matches implementation behavior exactly.
-
