@@ -252,7 +252,7 @@ func (h *FanInHandler) Execute(ctx context.Context, exec *Execution, node *model
 
 	winner, ok := selectHeuristicWinner(results)
 	if !ok {
-		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: "all parallel branches failed"}, nil
+		return aggregateAllFailedParallelOutcome(results), nil
 	}
 
 	// Fast-forward the main run branch to the winner head.
@@ -365,6 +365,84 @@ func selectHeuristicWinner(results []parallelBranchResult) (parallelBranchResult
 		return cands[i].HeadSHA < cands[j].HeadSHA
 	})
 	return cands[0], true
+}
+
+func aggregateAllFailedParallelOutcome(results []parallelBranchResult) runtime.Outcome {
+	if len(results) == 0 {
+		out := runtime.Outcome{
+			Status:        runtime.StatusFail,
+			FailureReason: "all parallel branches failed",
+			Meta:          map[string]any{},
+		}
+		out.Meta[failureMetaClass] = string(failureClassDeterministic)
+		out.Meta[failureMetaSignature] = restartFailureSignature(out)
+		return out
+	}
+
+	ordered := append([]parallelBranchResult{}, results...)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].BranchKey != ordered[j].BranchKey {
+			return ordered[i].BranchKey < ordered[j].BranchKey
+		}
+		if ordered[i].BranchName != ordered[j].BranchName {
+			return ordered[i].BranchName < ordered[j].BranchName
+		}
+		return ordered[i].HeadSHA < ordered[j].HeadSHA
+	})
+
+	aggClass := failureClassTransientInfra
+	reasonParts := []string{}
+	signatureParts := []string{}
+	for _, r := range ordered {
+		out := r.Outcome
+		class := classifyFailureClass(out)
+		if class == failureClassDeterministic {
+			aggClass = failureClassDeterministic
+		}
+
+		branchID := strings.TrimSpace(r.BranchKey)
+		if branchID == "" {
+			branchID = strings.TrimSpace(r.BranchName)
+		}
+		if branchID == "" {
+			branchID = "branch"
+		}
+		reason := strings.TrimSpace(out.FailureReason)
+		if reason == "" {
+			reason = "unknown failure"
+		}
+		reasonParts = append(reasonParts, fmt.Sprintf("%s: %s", branchID, reason))
+
+		sig := ""
+		if out.Meta != nil {
+			sig = strings.TrimSpace(fmt.Sprint(out.Meta[failureMetaSignature]))
+		}
+		if sig == "" {
+			sig = restartFailureSignature(out)
+		}
+		signatureParts = append(signatureParts, fmt.Sprintf("%s=%s", branchID, sig))
+	}
+
+	reason := fmt.Sprintf("all parallel branches failed (class=%s): %s", aggClass, strings.Join(reasonParts, "; "))
+	sort.Strings(signatureParts)
+	signatureInput := fmt.Sprintf("all_fail|%s|%s", aggClass, strings.Join(signatureParts, "|"))
+	sigOutcome := runtime.Outcome{
+		Status:        runtime.StatusFail,
+		FailureReason: signatureInput,
+		Meta: map[string]any{
+			failureMetaClass: string(aggClass),
+		},
+	}
+
+	out := runtime.Outcome{
+		Status:        runtime.StatusFail,
+		FailureReason: reason,
+		Meta: map[string]any{
+			failureMetaClass:     string(aggClass),
+			failureMetaSignature: restartFailureSignature(sigOutcome),
+		},
+	}
+	return out
 }
 
 func findJoinFanInNode(g *model.Graph, branches []*model.Edge) (string, error) {
