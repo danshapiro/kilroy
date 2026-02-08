@@ -4,6 +4,75 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
 
+# Benchmark runs can take hours. This script is meant to be interruptible without
+# losing the location of partial artifacts (so you can `kilroy attractor resume`).
+CXDB_PID=""
+CURRENT_BENCH_DOT=""
+CURRENT_BENCH_WORKDIR=""
+CURRENT_BENCH_LOGS_ROOT=""
+CURRENT_BENCH_PID=""
+
+kill_pid_best_effort() {
+  local pid="$1"
+  [[ -z "$pid" ]] && return 0
+
+  if ! kill -0 "$pid" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  kill -TERM "$pid" >/dev/null 2>&1 || true
+  for _ in {1..50}; do
+    if ! kill -0 "$pid" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.1
+  done
+  kill -KILL "$pid" >/dev/null 2>&1 || true
+}
+
+cleanup() {
+  # Best-effort: if we're interrupted mid-run, kill the active Kilroy process.
+  kill_pid_best_effort "${CURRENT_BENCH_PID:-}"
+
+  # Always stop the fake CXDB server.
+  if [[ -n "${CXDB_PID:-}" ]]; then
+    kill "$CXDB_PID" >/dev/null 2>&1 || true
+  fi
+}
+
+on_signal() {
+  local sig="$1"
+
+  echo "BENCH INTERRUPTED ($sig)" >&2
+  if [[ -n "${CURRENT_BENCH_WORKDIR:-}" ]]; then
+    {
+      echo "interrupted=1"
+      echo "signal=$sig"
+      echo "dot=$CURRENT_BENCH_DOT"
+      echo "logs_root=$CURRENT_BENCH_LOGS_ROOT"
+      echo "resume_cmd=./kilroy attractor resume --logs-root $CURRENT_BENCH_LOGS_ROOT"
+    } > "$CURRENT_BENCH_WORKDIR/interrupted.txt" || true
+
+    # If the run didn't reach normal completion, ensure there's at least an
+    # exit_code breadcrumb.
+    if [[ ! -f "$CURRENT_BENCH_WORKDIR/exit_code.txt" ]]; then
+      echo "exit_code=interrupted" > "$CURRENT_BENCH_WORKDIR/exit_code.txt" || true
+    fi
+  fi
+
+  cleanup
+
+  case "$sig" in
+    SIGINT) exit 130 ;;
+    SIGTERM) exit 143 ;;
+    *) exit 1 ;;
+  esac
+}
+
+trap cleanup EXIT
+trap 'on_signal SIGINT' INT
+trap 'on_signal SIGTERM' TERM
+
 # Full agent capability benchmarks (current: refactor trio).
 # Runs with real LLM providers (as specified by the DOT graph) and a local fake CXDB.
 #
@@ -314,11 +383,6 @@ CXDB_URL_FILE="$OUT_DIR/cxdb_url.txt"
 "$CXDB_BIN" >"$CXDB_URL_FILE" 2>"$OUT_DIR/cxdb.log" &
 CXDB_PID=$!
 
-cleanup() {
-  kill "$CXDB_PID" >/dev/null 2>&1 || true
-}
-trap cleanup EXIT
-
 # Wait for URL to appear.
 CXDB_URL=""
 CXDB_BIN_ADDR=""
@@ -504,20 +568,36 @@ YAML
   echo "graph=$graph"
   echo "run_id=$run_id"
   echo "logs_root=$logs_root"
+  echo "run_out=$workdir/run.out"
 
   # Optional: overall per-run timeout (defaults to none; CLI runs may take hours).
   local run_timeout="${KILROY_BENCH_RUN_TIMEOUT:-0}"
   set +e
   if [[ "$run_timeout" == "0" ]]; then
-    ./kilroy attractor run --graph "$graph" --config "$cfg" --run-id "$run_id" --logs-root "$logs_root" | tee "$workdir/run.out"
-    local ec=${PIPESTATUS[0]}
+    CURRENT_BENCH_DOT="$dot"
+    CURRENT_BENCH_WORKDIR="$workdir"
+    CURRENT_BENCH_LOGS_ROOT="$logs_root"
+    : > "$workdir/run.out"
+    ./kilroy attractor run --graph "$graph" --config "$cfg" --run-id "$run_id" --logs-root "$logs_root" >"$workdir/run.out" 2>&1 &
+    CURRENT_BENCH_PID=$!
+    wait "$CURRENT_BENCH_PID"
+    local ec=$?
   else
-    timeout --preserve-status --signal=SIGTERM "$run_timeout" ./kilroy attractor run --graph "$graph" --config "$cfg" --run-id "$run_id" --logs-root "$logs_root" | tee "$workdir/run.out"
-    local ec=${PIPESTATUS[0]}
+    CURRENT_BENCH_DOT="$dot"
+    CURRENT_BENCH_WORKDIR="$workdir"
+    CURRENT_BENCH_LOGS_ROOT="$logs_root"
+    : > "$workdir/run.out"
+    timeout --preserve-status --signal=SIGTERM "$run_timeout" ./kilroy attractor run --graph "$graph" --config "$cfg" --run-id "$run_id" --logs-root "$logs_root" >"$workdir/run.out" 2>&1 &
+    CURRENT_BENCH_PID=$!
+    wait "$CURRENT_BENCH_PID"
+    local ec=$?
   fi
+  CURRENT_BENCH_PID=""
   set -e
 
-  echo "exit_code=$ec" | tee "$workdir/exit_code.txt"
+  echo "exit_code=$ec" | tee "$workdir/exit_code.txt" >/dev/null
+  echo "-- run.out (tail) --"
+  tail -n 25 "$workdir/run.out" || true
   echo
   return $ec
 }
