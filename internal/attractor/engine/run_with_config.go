@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -84,6 +85,20 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		return nil, err
 	}
 	if err := validateProviderModelPairs(g, cfg, catalog); err != nil {
+		report := &providerPreflightReport{
+			GeneratedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+			StrictCapabilities:  parseBool(strings.TrimSpace(os.Getenv("KILROY_PREFLIGHT_STRICT_CAPABILITIES")), false),
+			CapabilityProbeMode: capabilityProbeMode(),
+		}
+		report.addCheck(providerPreflightCheck{
+			Name:    "provider_model_catalog",
+			Status:  preflightStatusFail,
+			Message: err.Error(),
+		})
+		_ = writePreflightReport(opts.LogsRoot, report)
+		return nil, err
+	}
+	if _, err := runProviderCLIPreflight(ctx, g, cfg, opts); err != nil {
 		return nil, err
 	}
 
