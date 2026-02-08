@@ -32,3 +32,36 @@ digraph G {
 	}
 }
 
+func TestRunWithConfig_ReportsCXDBUIURL(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+	cxdbSrv := newCXDBTestServer(t)
+
+	dot := []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  start -> exit
+}
+`)
+	cfg := &RunConfigFile{}
+	cfg.Version = 1
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
+	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
+	cfg.CXDB.Autostart.UI.URL = "http://127.0.0.1:9020"
+	cfg.ModelDB.LiteLLMCatalogPath = pinned
+	cfg.ModelDB.LiteLLMCatalogUpdatePolicy = "pinned"
+	cfg.Git.RunBranchPrefix = "attractor/run"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "ui-url", LogsRoot: logsRoot})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if got, want := res.CXDBUIURL, "http://127.0.0.1:9020"; got != want {
+		t.Fatalf("res.CXDBUIURL=%q want %q", got, want)
+	}
+}

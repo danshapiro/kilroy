@@ -84,13 +84,12 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	}
 
 	// CXDB is required in v1 and must be reachable.
-	cxdbClient := cxdb.New(cfg.CXDB.HTTPBaseURL)
-	if err := cxdbClient.Health(ctx); err != nil {
-		return nil, err
-	}
-	bin, err := cxdb.DialBinary(ctx, cfg.CXDB.BinaryAddr, fmt.Sprintf("kilroy/%s", opts.RunID))
+	cxdbClient, bin, startup, err := ensureCXDBReady(ctx, cfg, opts.LogsRoot, opts.RunID)
 	if err != nil {
 		return nil, err
+	}
+	if startup != nil && overrides.OnCXDBStartup != nil {
+		overrides.OnCXDBStartup(*startup)
 	}
 	defer func() { _ = bin.Close() }()
 	bundleID, bundle, _, err := cxdb.KilroyAttractorRegistryBundle()
@@ -126,9 +125,21 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		eng.Warn(resolved.Warning)
 		eng.Context.AppendLog(resolved.Warning)
 	}
+	if startup != nil {
+		for _, w := range startup.Warnings {
+			eng.Warn(w)
+		}
+	}
 	eng.RunBranch = fmt.Sprintf("%s/%s", opts.RunBranchPrefix, opts.RunID)
 
-	return eng.run(ctx)
+	res, err := eng.run(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if startup != nil {
+		res.CXDBUIURL = strings.TrimSpace(startup.UIURL)
+	}
+	return res, nil
 }
 
 func hasProviderBackend(cfg *RunConfigFile, provider string) bool {

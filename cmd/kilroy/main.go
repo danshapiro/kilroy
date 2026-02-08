@@ -118,6 +118,16 @@ func attractorRun(args []string) {
 	res, err := engine.RunWithConfig(ctx, dotSource, cfg, engine.RunOptions{
 		RunID:    runID,
 		LogsRoot: logsRoot,
+		OnCXDBStartup: func(info engine.CXDBStartupInfo) {
+			if info.UIURL == "" {
+				return
+			}
+			if info.UIStarted {
+				fmt.Fprintf(os.Stderr, "CXDB UI starting at %s\n", info.UIURL)
+				return
+			}
+			fmt.Fprintf(os.Stderr, "CXDB UI available at %s\n", info.UIURL)
+		},
 	})
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -128,6 +138,9 @@ func attractorRun(args []string) {
 	fmt.Printf("worktree=%s\n", res.WorktreeDir)
 	fmt.Printf("run_branch=%s\n", res.RunBranch)
 	fmt.Printf("final_commit=%s\n", res.FinalCommitSHA)
+	if res.CXDBUIURL != "" {
+		fmt.Printf("cxdb_ui=%s\n", res.CXDBUIURL)
+	}
 	for _, w := range res.Warnings {
 		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
 	}
@@ -256,6 +269,9 @@ func attractorResume(args []string) {
 	fmt.Printf("worktree=%s\n", res.WorktreeDir)
 	fmt.Printf("run_branch=%s\n", res.RunBranch)
 	fmt.Printf("final_commit=%s\n", res.FinalCommitSHA)
+	if res.CXDBUIURL != "" {
+		fmt.Printf("cxdb_ui=%s\n", res.CXDBUIURL)
+	}
 
 	if string(res.FinalStatus) == "success" {
 		os.Exit(0)

@@ -1,57 +1,261 @@
 # Kilroy
 
-Kilroy is a local-first "software factory" CLI that turns English requirements into an **Attractor** pipeline (a directed graph in Graphviz DOT), then executes that pipeline node-by-node with tool-using coding agents in an isolated git worktree.
+Kilroy is a local-first CLI for running StrongDM-style Attractor pipelines in a git repo.
 
-## What Are Attractors?
+High-level flow:
 
-An **Attractor** is a DOT-based pipeline runner for multi-stage AI workflows:
+1. Convert English requirements to a Graphviz DOT pipeline (`attractor ingest`).
+2. Validate graph structure and semantics (`attractor validate`).
+3. Execute node-by-node with coding agents in an isolated git worktree (`attractor run`).
+4. Resume interrupted runs from logs, CXDB, or run branch (`attractor resume`).
 
-- A pipeline is a `digraph` written in Graphviz DOT syntax.
-- **Nodes** represent stages (LLM/coding-agent tasks, human gates, tool steps, conditionals, parallel fan-out, etc.).
-- **Edges** represent control flow, including conditions and retry loops.
-- The engine checkpoints progress and (in Kilroy) commits after each node so runs can be resumed and audited.
+## What Is CXDB?
 
-Spec references:
-- `docs/strongdm/attractor/attractor-spec.md` (graph DSL + engine semantics)
-- `docs/strongdm/attractor/coding-agent-loop-spec.md` (tool-using coding agent loop)
-- `docs/strongdm/attractor/unified-llm-spec.md` (provider-neutral LLM client)
-- `docs/strongdm/attractor/kilroy-metaspec.md` (this repo's pinned decisions)
+CXDB is the execution database Kilroy uses for observability and recovery.
 
-## StrongDM Links
+- Kilroy records typed run events (run started, stage finished, checkpoint saved, run completed/failed) to CXDB.
+- Kilroy stores artifacts (logs, outputs, archives) in CXDB blobs.
+- Resume-from-CXDB works because run metadata (like `logs_root` and checkpoint pointers) is written into this timeline.
 
-The Attractor + CXDB specs vendored into `docs/strongdm/` originate from StrongDM:
+Short version: git branch is code history; CXDB is run history.
 
-- StrongDM: https://strongdm.com/
-- CXDB: https://github.com/strongdm/cxdb
-- In-repo specs: `docs/strongdm/attractor/`
+## What Attractor Means Here
 
-## CLI Quickstart
+An Attractor pipeline is a `digraph` where:
+
+- Nodes are stages (`start`, `exit`, codergen tasks, conditionals, human gates, tool steps, parallel/fan-in).
+- Edges define control flow and optional conditions/retry behavior.
+- The engine checkpoints after each stage and routes to the next stage deterministically.
+
+In this repo, each completed node also creates a git checkpoint commit on a run branch.
+
+## StrongDM Attractor vs Kilroy Implementation
+
+This implementation is based on the Attractor specification by StrongDM at `https://github.com/strongdm/attractor`. Here's how Kilroy differs
+
+| Area | From StrongDM Attractor Specs | Kilroy-Specific in This Repo |
+|---|---|---|
+| Graph DSL + engine semantics | DOT schema, handler model, edge selection, retry, conditions, context fidelity | Concrete Go engine implementation details and defaults |
+| Coding-agent loop | Session model, tool loop behavior, provider-aligned tool concepts | Local tool execution wiring and CLI/API backend routing choices |
+| Unified LLM model | Provider-neutral request/response/tool/streaming contracts | Concrete provider adapters and environment wiring |
+| Provider support | Conceptual provider abstraction | v1 provider set: OpenAI, Anthropic, Google |
+| Backend selection | Spec allows flexible backend choices | Backend is mandatory per provider (`api`/`cli`), no implicit defaults |
+| Checkpointing + persistence | Attractor/CXDB contracts | Required git branch/worktree/commit-per-node and concrete artifact layout |
+| Ingestion | Ingestor behavior described in spec docs | `attractor ingest` implementation: Claude CLI + `english-to-dotfile` skill |
+
+## Prerequisites
+
+- Go 1.25+
+- Git repo with at least one commit
+- Clean working tree before `attractor run`/`resume`
+- CXDB reachable over binary + HTTP endpoints (or configure `cxdb.autostart`)
+- Provider access for any provider used in your graph
+- `claude` CLI for `attractor ingest` (or set `KILROY_CLAUDE_PATH`)
+
+## Quickstart
+
+### 1) Build
 
 ```bash
 go build -o kilroy ./cmd/kilroy
+```
 
-# Turn requirements into a pipeline graph
-./kilroy attractor ingest -o pipeline.dot "Build a Go CLI link checker with robots.txt support"
+### 2) Generate a pipeline from English
 
-# Validate DOT structure/syntax
+```bash
+./kilroy attractor ingest -o pipeline.dot "Solitaire plz"
+```
+
+Notes:
+
+- Ingest auto-detects `skills/english-to-dotfile/SKILL.md` under `--repo` (default: cwd).
+- Use `--skill <path>` if your skill file is elsewhere.
+
+### 3) Validate the pipeline
+
+```bash
 ./kilroy attractor validate --graph pipeline.dot
+```
 
-# Execute the pipeline (requires a run config; see metaspec)
+If you want to author a graph manually instead of using `ingest`, this minimal example is valid:
+
+```dot
+digraph Simple {
+  graph [
+    goal="Run tests and summarize results",
+    model_stylesheet="
+      * { llm_provider: openai; llm_model: gpt-5.2-codex; }
+    "
+  ]
+
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  run_tests [shape=box, prompt="Run tests and write status.json"]
+  summarize [shape=box, prompt="Summarize outcomes and write status.json"]
+
+  start -> run_tests -> summarize -> exit
+}
+```
+
+### 4) Create `run.yaml`
+
+```yaml
+version: 1
+
+repo:
+  path: /absolute/path/to/target/repo
+
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+  autostart:
+    enabled: true
+    # argv form; use "sh -lc" if you need shell features.
+    command: ["sh", "-lc", "./scripts/start-cxdb.sh"]
+    wait_timeout_ms: 20000
+    poll_interval_ms: 250
+    ui:
+      enabled: true
+      command: ["sh", "-lc", "./scripts/start-cxdb-ui.sh"]
+      url: "http://127.0.0.1:9020"
+
+llm:
+  providers:
+    openai:
+      backend: cli
+    anthropic:
+      backend: api
+    google:
+      backend: api
+
+modeldb:
+  litellm_catalog_path: /absolute/path/to/kilroy/internal/attractor/modeldb/pinned/model_prices_and_context_window.json
+  litellm_catalog_update_policy: on_run_start
+  litellm_catalog_url: https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
+  litellm_catalog_fetch_timeout_ms: 5000
+
+git:
+  require_clean: true
+  run_branch_prefix: attractor/run
+  commit_per_node: true
+```
+
+Important:
+
+- Any provider referenced by a node's `llm_provider` must have `llm.providers.<provider>.backend` configured.
+- `cxdb.binary_addr`, `cxdb.http_base_url`, and `modeldb.litellm_catalog_path` are required.
+- Config can be YAML or JSON.
+
+### 5) Run the pipeline
+
+```bash
 ./kilroy attractor run --graph pipeline.dot --config run.yaml
 ```
 
-For the `run.yaml` schema, CXDB requirements, and execution model, read `docs/strongdm/attractor/kilroy-metaspec.md`.
+On success, stdout includes:
 
-## Skills: "Use The Skill To Use This Repo"
+- `run_id=...`
+- `logs_root=...`
+- `worktree=...`
+- `run_branch=...`
+- `final_commit=...`
+- `cxdb_ui=...` (when `cxdb.autostart.ui.url` is configured)
 
-This repo ships Codex/Claude-style skill documents under `skills/`:
+If autostart is used, startup logs are written under `{logs_root}`:
 
-- `skills/using-kilroy/SKILL.md`: how to operate the `kilroy attractor` workflow (ingest/validate/run/resume).
-- `skills/english-to-dotfile/SKILL.md`: how to turn requirements into a valid `.dot` pipeline (used by `kilroy attractor ingest`).
+- `cxdb-autostart.log`
+- `cxdb-ui-autostart.log`
 
-To use them with a coding agent that supports `SKILL.md` documents:
+## CXDB Autostart Notes
 
-1. Add the skill(s) to your agent's skill search path (for example, copy or symlink `skills/using-kilroy/` into your agent's skills directory).
-2. In your prompt, tell the agent to use the `using-kilroy` skill when you want it to run Kilroy commands (and `english-to-dotfile` when you want a pipeline).
+- `cxdb.autostart.command` is required when `cxdb.autostart.enabled=true`.
+- `cxdb.autostart.ui.url` is optional; when omitted, Kilroy auto-detects it from `cxdb.http_base_url` if that endpoint serves HTML UI.
+- `cxdb.autostart.ui.command` is optional; Kilroy starts UI when a command is provided (config or `KILROY_CXDB_UI_COMMAND`).
+- Kilroy injects these env vars for autostart commands:
+  - `KILROY_RUN_ID`
+  - `KILROY_CXDB_HTTP_BASE_URL`
+  - `KILROY_CXDB_BINARY_ADDR`
+  - `KILROY_LOGS_ROOT`
+  - `KILROY_CXDB_UI_URL` (UI command only)
+- You can also set:
+  - `KILROY_CXDB_UI_URL` to force the printed UI link.
+  - `KILROY_CXDB_UI_COMMAND` as a shell command used to start UI by default.
+- If CXDB is unreachable and autostart is disabled, Kilroy fails fast with a remediation hint.
 
-If you're using Kilroy's ingestor directly, it will auto-detect `skills/english-to-dotfile/SKILL.md` unless you pass `--skill`.
+## Provider Setup
+
+CLI backend command mappings:
+
+- `openai` -> `codex exec --json --sandbox workspace-write ...`
+- `anthropic` -> `claude -p --output-format stream-json ...`
+- `google` -> `gemini -p --output-format stream-json --yolo ...`
+
+Executable overrides:
+
+- `KILROY_CODEX_PATH`
+- `KILROY_CLAUDE_PATH`
+- `KILROY_GEMINI_PATH`
+
+API backend environment variables:
+
+- OpenAI: `OPENAI_API_KEY` (`OPENAI_BASE_URL` optional)
+- Anthropic: `ANTHROPIC_API_KEY` (`ANTHROPIC_BASE_URL` optional)
+- Google: `GEMINI_API_KEY` or `GOOGLE_API_KEY` (`GEMINI_BASE_URL` optional)
+
+## Run Artifacts
+
+Typical run-level artifacts under `{logs_root}`:
+
+- `graph.dot`
+- `manifest.json`
+- `checkpoint.json`
+- `final.json`
+- `run_config.json`
+- `modeldb/litellm_catalog.json`
+- `run.tgz` (run archive excluding `worktree/`)
+- `worktree/` (isolated execution worktree)
+
+Typical stage-level artifacts under `{logs_root}/{node_id}`:
+
+- `prompt.md`
+- `response.md`
+- `status.json`
+- `stage.tgz`
+- CLI backend extras: `cli_invocation.json`, `stdout.log`, `stderr.log`, `events.ndjson`, `events.json`, `output_schema.json`, `output.json`
+- API backend extras: `api_request.json`, `api_response.json`, `events.ndjson`, `events.json`
+
+## Commands
+
+```text
+kilroy attractor run --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]
+kilroy attractor resume --logs-root <dir>
+kilroy attractor resume --cxdb <http_base_url> --context-id <id>
+kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]
+kilroy attractor validate --graph <file.dot>
+kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] <requirements>
+```
+
+Additional ingest flags:
+
+- `--repo <path>`: repo root to run ingestion from (default: cwd)
+- `--no-validate`: skip post-generation DOT validation
+
+Exit codes:
+
+- `0`: run/resume finished with final status `success`, or validate succeeded
+- `1`: command failed, validation error, or final status was not `success`
+
+## Skills Included In This Repo
+
+- `skills/using-kilroy/SKILL.md`: operational workflow for ingest/validate/run/resume.
+- `skills/english-to-dotfile/SKILL.md`: requirements-to-DOT generation instructions.
+
+## References
+
+- StrongDM Attractor specs: `docs/strongdm/attractor/`
+- Attractor spec: `docs/strongdm/attractor/attractor-spec.md`
+- Coding Agent Loop spec: `docs/strongdm/attractor/coding-agent-loop-spec.md`
+- Unified LLM spec: `docs/strongdm/attractor/unified-llm-spec.md`
+- Kilroy metaspec: `docs/strongdm/attractor/kilroy-metaspec.md`
+- Ingestor spec: `docs/strongdm/attractor/ingestor-spec.md`
+- CXDB project: <https://github.com/strongdm/cxdb>

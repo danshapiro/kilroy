@@ -27,6 +27,17 @@ type RunConfigFile struct {
 	CXDB struct {
 		BinaryAddr  string `json:"binary_addr" yaml:"binary_addr"`
 		HTTPBaseURL string `json:"http_base_url" yaml:"http_base_url"`
+		Autostart   struct {
+			Enabled        bool     `json:"enabled" yaml:"enabled"`
+			Command        []string `json:"command" yaml:"command"`
+			WaitTimeoutMS  int      `json:"wait_timeout_ms" yaml:"wait_timeout_ms"`
+			PollIntervalMS int      `json:"poll_interval_ms" yaml:"poll_interval_ms"`
+			UI             struct {
+				Enabled bool     `json:"enabled" yaml:"enabled"`
+				Command []string `json:"command" yaml:"command"`
+				URL     string   `json:"url" yaml:"url"`
+			} `json:"ui" yaml:"ui"`
+		} `json:"autostart" yaml:"autostart"`
 	} `json:"cxdb" yaml:"cxdb"`
 
 	LLM struct {
@@ -105,6 +116,15 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	if cfg.ModelDB.LiteLLMCatalogFetchTimeoutMS == 0 {
 		cfg.ModelDB.LiteLLMCatalogFetchTimeoutMS = 5000
 	}
+	if cfg.CXDB.Autostart.WaitTimeoutMS == 0 {
+		cfg.CXDB.Autostart.WaitTimeoutMS = 20000
+	}
+	if cfg.CXDB.Autostart.PollIntervalMS == 0 {
+		cfg.CXDB.Autostart.PollIntervalMS = 250
+	}
+	cfg.CXDB.Autostart.Command = trimNonEmpty(cfg.CXDB.Autostart.Command)
+	cfg.CXDB.Autostart.UI.Command = trimNonEmpty(cfg.CXDB.Autostart.UI.Command)
+	cfg.CXDB.Autostart.UI.URL = strings.TrimSpace(cfg.CXDB.Autostart.UI.URL)
 }
 
 func validateConfig(cfg *RunConfigFile) error {
@@ -119,6 +139,15 @@ func validateConfig(cfg *RunConfigFile) error {
 	}
 	if strings.TrimSpace(cfg.CXDB.BinaryAddr) == "" || strings.TrimSpace(cfg.CXDB.HTTPBaseURL) == "" {
 		return fmt.Errorf("cxdb.binary_addr and cxdb.http_base_url are required in v1")
+	}
+	if cfg.CXDB.Autostart.WaitTimeoutMS < 0 {
+		return fmt.Errorf("cxdb.autostart.wait_timeout_ms must be >= 0")
+	}
+	if cfg.CXDB.Autostart.PollIntervalMS < 0 {
+		return fmt.Errorf("cxdb.autostart.poll_interval_ms must be >= 0")
+	}
+	if cfg.CXDB.Autostart.Enabled && len(cfg.CXDB.Autostart.Command) == 0 {
+		return fmt.Errorf("cxdb.autostart.command is required when cxdb.autostart.enabled=true")
 	}
 	if strings.TrimSpace(cfg.ModelDB.LiteLLMCatalogPath) == "" {
 		return fmt.Errorf("modeldb.litellm_catalog_path is required")
@@ -156,4 +185,17 @@ func normalizeProviderKey(k string) string {
 	default:
 		return k
 	}
+}
+
+func trimNonEmpty(parts []string) []string {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if s := strings.TrimSpace(p); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }

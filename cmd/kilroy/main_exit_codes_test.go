@@ -57,6 +57,14 @@ func newCXDBTestServer(t *testing.T) *cxdbTestServer {
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte("<!doctype html><html><body>CXDB</body></html>"))
+	})
 	mux.HandleFunc("/v1/registry/bundles/", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut {
 			w.WriteHeader(http.StatusMethodNotAllowed)
@@ -366,16 +374,28 @@ func writePinnedCatalog(t *testing.T) string {
 
 func writeRunConfig(t *testing.T, repo string, cxdbURL string, cxdbBinaryAddr string, catalogPath string) string {
 	t.Helper()
+	return writeRunConfigWithCXDBExtras(t, repo, cxdbURL, cxdbBinaryAddr, catalogPath, "")
+}
+
+func writeRunConfigWithCXDBExtras(t *testing.T, repo string, cxdbURL string, cxdbBinaryAddr string, catalogPath string, cxdbExtra string) string {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "run.yaml")
-	b := []byte("version: 1\n" +
-		"repo:\n" +
-		"  path: " + repo + "\n" +
-		"cxdb:\n" +
-		"  binary_addr: " + cxdbBinaryAddr + "\n" +
-		"  http_base_url: " + cxdbURL + "\n" +
-		"modeldb:\n" +
-		"  litellm_catalog_path: " + catalogPath + "\n" +
-		"  litellm_catalog_update_policy: pinned\n")
+	var sb strings.Builder
+	sb.WriteString("version: 1\n")
+	sb.WriteString("repo:\n")
+	sb.WriteString("  path: " + repo + "\n")
+	sb.WriteString("cxdb:\n")
+	sb.WriteString("  binary_addr: " + cxdbBinaryAddr + "\n")
+	sb.WriteString("  http_base_url: " + cxdbURL + "\n")
+	extra := strings.Trim(cxdbExtra, "\n")
+	if extra != "" {
+		sb.WriteString(extra)
+		sb.WriteString("\n")
+	}
+	sb.WriteString("modeldb:\n")
+	sb.WriteString("  litellm_catalog_path: " + catalogPath + "\n")
+	sb.WriteString("  litellm_catalog_update_policy: pinned\n")
+	b := []byte(sb.String())
 	_ = os.WriteFile(path, b, 0o644)
 	return path
 }
@@ -435,5 +455,100 @@ digraph G {
 	code, out = runKilroy(t, bin, "attractor", "run", "--graph", failGraph, "--config", cfg, "--run-id", "cli-fail", "--logs-root", logsRoot2)
 	if code != 1 {
 		t.Fatalf("fail exit code: got %d want 1\n%s", code, out)
+	}
+}
+
+func TestKilroyAttractorRun_PrintsCXDBUILink(t *testing.T) {
+	cxdbSrv := newCXDBTestServer(t)
+	bin := buildKilroyBinary(t)
+	repo := initTestRepo(t)
+	catalog := writePinnedCatalog(t)
+	cfg := writeRunConfigWithCXDBExtras(
+		t,
+		repo,
+		cxdbSrv.URL(),
+		cxdbSrv.BinaryAddr(),
+		catalog,
+		"  autostart:\n    ui:\n      url: http://127.0.0.1:9020",
+	)
+
+	graph := filepath.Join(t.TempDir(), "success.dot")
+	_ = os.WriteFile(graph, []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  start -> exit
+}
+`), 0o644)
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	code, out := runKilroy(t, bin, "attractor", "run", "--graph", graph, "--config", cfg, "--run-id", "cli-ui-link", "--logs-root", logsRoot)
+	if code != 0 {
+		t.Fatalf("exit code: got %d want 0\n%s", code, out)
+	}
+	if !strings.Contains(out, "CXDB UI available at http://127.0.0.1:9020") {
+		t.Fatalf("missing startup UI line in output:\n%s", out)
+	}
+	if !strings.Contains(out, "cxdb_ui=http://127.0.0.1:9020") {
+		t.Fatalf("missing cxdb_ui link in output:\n%s", out)
+	}
+}
+
+func TestKilroyAttractorRun_PrintsCXDBUIStartingWhenLaunchCommandConfigured(t *testing.T) {
+	cxdbSrv := newCXDBTestServer(t)
+	bin := buildKilroyBinary(t)
+	repo := initTestRepo(t)
+	catalog := writePinnedCatalog(t)
+	cfg := writeRunConfigWithCXDBExtras(
+		t,
+		repo,
+		cxdbSrv.URL(),
+		cxdbSrv.BinaryAddr(),
+		catalog,
+		"  autostart:\n    ui:\n      enabled: true\n      command: [\"/bin/sh\", \"-c\", \"true\"]\n      url: http://127.0.0.1:9020",
+	)
+
+	graph := filepath.Join(t.TempDir(), "success.dot")
+	_ = os.WriteFile(graph, []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  start -> exit
+}
+`), 0o644)
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	code, out := runKilroy(t, bin, "attractor", "run", "--graph", graph, "--config", cfg, "--run-id", "cli-ui-starting", "--logs-root", logsRoot)
+	if code != 0 {
+		t.Fatalf("exit code: got %d want 0\n%s", code, out)
+	}
+	if !strings.Contains(out, "CXDB UI starting at http://127.0.0.1:9020") {
+		t.Fatalf("missing startup UI starting line in output:\n%s", out)
+	}
+}
+
+func TestKilroyAttractorRun_AutoDiscoversCXDBUIFromHTTPBaseURL(t *testing.T) {
+	cxdbSrv := newCXDBTestServer(t)
+	bin := buildKilroyBinary(t)
+	repo := initTestRepo(t)
+	catalog := writePinnedCatalog(t)
+	cfg := writeRunConfig(t, repo, cxdbSrv.URL(), cxdbSrv.BinaryAddr(), catalog)
+
+	graph := filepath.Join(t.TempDir(), "success.dot")
+	_ = os.WriteFile(graph, []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  start -> exit
+}
+`), 0o644)
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	code, out := runKilroy(t, bin, "attractor", "run", "--graph", graph, "--config", cfg, "--run-id", "cli-ui-autodiscover", "--logs-root", logsRoot)
+	if code != 0 {
+		t.Fatalf("exit code: got %d want 0\n%s", code, out)
+	}
+	if !strings.Contains(out, "CXDB UI available at "+cxdbSrv.URL()) {
+		t.Fatalf("missing autodiscovered UI startup line in output:\n%s", out)
+	}
+	if !strings.Contains(out, "cxdb_ui="+cxdbSrv.URL()) {
+		t.Fatalf("missing autodiscovered cxdb_ui link in output:\n%s", out)
 	}
 }

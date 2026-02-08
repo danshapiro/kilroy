@@ -39,6 +39,9 @@ type RunOptions struct {
 
 	// If true (default), refuse to start when repo has uncommitted changes.
 	RequireClean bool
+
+	// Optional callback invoked after CXDB/UI bootstrap and before pipeline execution starts.
+	OnCXDBStartup func(info CXDBStartupInfo)
 }
 
 func (o *RunOptions) applyDefaults() error {
@@ -148,6 +151,7 @@ type Result struct {
 	FinalStatus    runtime.FinalStatus
 	FinalCommitSHA string
 	Warnings       []string
+	CXDBUIURL      string
 }
 
 type PrepareOptions struct {

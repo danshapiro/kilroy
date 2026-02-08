@@ -66,3 +66,99 @@ func TestNormalizeProviderKey_GeminiMapsToGoogle(t *testing.T) {
 	}
 }
 
+func TestLoadRunConfigFile_CXDBAutostartDefaultsAndTrim(t *testing.T) {
+	dir := t.TempDir()
+	yml := filepath.Join(dir, "run.yaml")
+	if err := os.WriteFile(yml, []byte(`
+version: 1
+repo:
+  path: /tmp/repo
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+  autostart:
+    enabled: true
+    command: ["  sh  ", "", "  -c", " echo ok "]
+llm:
+  providers:
+    openai:
+      backend: api
+modeldb:
+  litellm_catalog_path: /tmp/catalog.json
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadRunConfigFile(yml)
+	if err != nil {
+		t.Fatalf("LoadRunConfigFile(yaml): %v", err)
+	}
+	if !cfg.CXDB.Autostart.Enabled {
+		t.Fatalf("expected autostart enabled")
+	}
+	if got, want := cfg.CXDB.Autostart.WaitTimeoutMS, 20000; got != want {
+		t.Fatalf("wait_timeout_ms=%d want %d", got, want)
+	}
+	if got, want := cfg.CXDB.Autostart.PollIntervalMS, 250; got != want {
+		t.Fatalf("poll_interval_ms=%d want %d", got, want)
+	}
+	if got, want := strings.Join(cfg.CXDB.Autostart.Command, " "), "sh -c echo ok"; got != want {
+		t.Fatalf("autostart command=%q want %q", got, want)
+	}
+}
+
+func TestLoadRunConfigFile_CXDBAutostartValidation(t *testing.T) {
+	dir := t.TempDir()
+	yml := filepath.Join(dir, "run.yaml")
+	if err := os.WriteFile(yml, []byte(`
+version: 1
+repo:
+  path: /tmp/repo
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+  autostart:
+    enabled: true
+llm:
+  providers:
+    openai:
+      backend: api
+modeldb:
+  litellm_catalog_path: /tmp/catalog.json
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadRunConfigFile(yml); err == nil || !strings.Contains(err.Error(), "cxdb.autostart.command") {
+		t.Fatalf("expected autostart command validation error, got: %v", err)
+	}
+}
+
+func TestLoadRunConfigFile_CXDBAutostartUIAllowsAutodiscovery(t *testing.T) {
+	dir := t.TempDir()
+	yml := filepath.Join(dir, "run.yaml")
+	if err := os.WriteFile(yml, []byte(`
+version: 1
+repo:
+  path: /tmp/repo
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+  autostart:
+    ui:
+      enabled: true
+llm:
+  providers:
+    openai:
+      backend: api
+modeldb:
+  litellm_catalog_path: /tmp/catalog.json
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadRunConfigFile(yml)
+	if err != nil {
+		t.Fatalf("expected config to load for UI autodiscovery defaults, got: %v", err)
+	}
+	if !cfg.CXDB.Autostart.UI.Enabled {
+		t.Fatalf("expected ui.enabled=true")
+	}
+}

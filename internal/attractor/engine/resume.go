@@ -86,6 +86,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	var backend CodergenBackend = &SimulatedCodergenBackend{}
 	var sink *CXDBSink
 	var catalog *modeldb.LiteLLMCatalog
+	var startup *CXDBStartupInfo
 	if cfg != nil {
 		// Resume MUST use the run's snapshotted catalog (metaspec). Default location is logs_root/modeldb/litellm_catalog.json.
 		snapshotPath := strings.TrimSpace(m.ModelDB.LiteLLMCatalogPath)
@@ -115,14 +116,13 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 			contextID = strings.TrimSpace(m.CXDB.ContextID)
 		}
 		if baseURL != "" && contextID != "" {
-			cxdbClient := cxdb.New(baseURL)
-			if err := cxdbClient.Health(ctx); err != nil {
-				return nil, err
-			}
-			bin, err := cxdb.DialBinary(ctx, cfg.CXDB.BinaryAddr, fmt.Sprintf("kilroy/%s", m.RunID))
+			cfgForCXDB := *cfg
+			cfgForCXDB.CXDB.HTTPBaseURL = baseURL
+			cxdbClient, bin, startupInfo, err := ensureCXDBReady(ctx, &cfgForCXDB, logsRoot, m.RunID)
 			if err != nil {
 				return nil, err
 			}
+			startup = startupInfo
 			defer func() { _ = bin.Close() }()
 			bundleID, bundle, _, err := cxdb.KilroyAttractorRegistryBundle()
 			if err != nil {
@@ -169,6 +169,11 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 			}
 			return catalog.Path
 		}(),
+	}
+	if startup != nil {
+		for _, w := range startup.Warnings {
+			eng.Warn(w)
+		}
 	}
 	eng.Context.ReplaceSnapshot(cp.ContextValues, cp.Logs)
 	if cp != nil && cp.Extra != nil {
@@ -265,12 +270,26 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 			RunBranch:      eng.RunBranch,
 			FinalStatus:    runtime.FinalSuccess,
 			FinalCommitSHA: cp.GitCommitSHA,
+			Warnings:       eng.warningsCopy(),
+			CXDBUIURL: func() string {
+				if startup == nil {
+					return ""
+				}
+				return strings.TrimSpace(startup.UIURL)
+			}(),
 		}, nil
 	}
 
 	// Continue traversal from next node.
 	eng.incomingEdge = nextEdge
-	return eng.runLoop(ctx, nextEdge.To, append([]string{}, cp.CompletedNodes...), copyStringIntMap(cp.NodeRetries), nodeOutcomes)
+	res, err := eng.runLoop(ctx, nextEdge.To, append([]string{}, cp.CompletedNodes...), copyStringIntMap(cp.NodeRetries), nodeOutcomes)
+	if err != nil {
+		return nil, err
+	}
+	if startup != nil {
+		res.CXDBUIURL = strings.TrimSpace(startup.UIURL)
+	}
+	return res, nil
 }
 
 func loadManifest(path string) (*manifest, error) {
