@@ -25,6 +25,8 @@ const (
 type providerPreflightReport struct {
 	GeneratedAt         string                   `json:"generated_at"`
 	CompletedAt         string                   `json:"completed_at,omitempty"`
+	CLIProfile          string                   `json:"cli_profile,omitempty"`
+	AllowTestShim       bool                     `json:"allow_test_shim"`
 	StrictCapabilities  bool                     `json:"strict_capabilities"`
 	CapabilityProbeMode string                   `json:"capability_probe_mode"`
 	Checks              []providerPreflightCheck `json:"checks"`
@@ -48,6 +50,8 @@ type providerPreflightSummary struct {
 func runProviderCLIPreflight(ctx context.Context, g *model.Graph, cfg *RunConfigFile, opts RunOptions) (*providerPreflightReport, error) {
 	report := &providerPreflightReport{
 		GeneratedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+		CLIProfile:          normalizedCLIProfile(cfg),
+		AllowTestShim:       opts.AllowTestShim,
 		StrictCapabilities:  parseBool(strings.TrimSpace(os.Getenv("KILROY_PREFLIGHT_STRICT_CAPABILITIES")), false),
 		CapabilityProbeMode: capabilityProbeMode(),
 	}

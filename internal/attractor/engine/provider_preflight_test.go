@@ -12,16 +12,19 @@ import (
 )
 
 type preflightReportDoc struct {
-	Summary struct {
+	CLIProfile    string `json:"cli_profile"`
+	AllowTestShim bool   `json:"allow_test_shim"`
+	Summary       struct {
 		Pass int `json:"pass"`
 		Warn int `json:"warn"`
 		Fail int `json:"fail"`
 	} `json:"summary"`
 	Checks []struct {
-		Name     string `json:"name"`
-		Provider string `json:"provider"`
-		Status   string `json:"status"`
-		Message  string `json:"message"`
+		Name     string         `json:"name"`
+		Provider string         `json:"provider"`
+		Status   string         `json:"status"`
+		Message  string         `json:"message"`
+		Details  map[string]any `json:"details"`
 	} `json:"checks"`
 }
 
@@ -376,6 +379,50 @@ func TestRunWithConfig_PreflightCapabilityProbeFailure_FailsWhenStrict(t *testin
 	report := mustReadPreflightReport(t, logsRoot)
 	if report.Summary.Fail == 0 {
 		t.Fatalf("expected fail in preflight report, got %+v", report.Summary)
+	}
+}
+
+func TestPreflightReport_IncludesCLIProfileAndSource(t *testing.T) {
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "gemini/gemini-3-pro-preview": {
+    "litellm_provider": "google",
+    "mode": "chat"
+  }
+}`)
+	geminiCLI := writeFakeCLI(t, "gemini", "Usage: gemini -p --output-format stream-json --yolo --approval-mode", 0)
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"google": BackendCLI,
+	})
+	cfg.LLM.Providers["google"] = ProviderConfig{Backend: BackendCLI, Executable: geminiCLI}
+	dot := singleProviderDot("google", "gemini-3-pro-preview")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-report-shape", LogsRoot: logsRoot, AllowTestShim: true})
+	if err == nil {
+		t.Fatalf("expected downstream cxdb error, got nil")
+	}
+	report := mustReadPreflightReport(t, logsRoot)
+	if got, want := report.CLIProfile, "test_shim"; got != want {
+		t.Fatalf("cli_profile=%q want %q", got, want)
+	}
+	if !report.AllowTestShim {
+		t.Fatalf("allow_test_shim=false want true")
+	}
+	found := false
+	for _, check := range report.Checks {
+		if check.Name != "provider_cli_presence" || check.Provider != "google" {
+			continue
+		}
+		found = true
+		if got, _ := check.Details["source"].(string); got != "config.executable" {
+			t.Fatalf("provider_cli_presence.details.source=%q want %q", got, "config.executable")
+		}
+	}
+	if !found {
+		t.Fatalf("missing provider_cli_presence check for google")
 	}
 }
 

@@ -91,6 +91,8 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if err := validateProviderModelPairs(g, cfg, catalog); err != nil {
 		report := &providerPreflightReport{
 			GeneratedAt:         time.Now().UTC().Format(time.RFC3339Nano),
+			CLIProfile:          normalizedCLIProfile(cfg),
+			AllowTestShim:       opts.AllowTestShim,
 			StrictCapabilities:  parseBool(strings.TrimSpace(os.Getenv("KILROY_PREFLIGHT_STRICT_CAPABILITIES")), false),
 			CapabilityProbeMode: capabilityProbeMode(),
 		}
