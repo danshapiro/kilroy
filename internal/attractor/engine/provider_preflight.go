@@ -48,7 +48,7 @@ type providerPreflightSummary struct {
 	Fail int `json:"fail"`
 }
 
-func runProviderCLIPreflight(ctx context.Context, g *model.Graph, cfg *RunConfigFile, opts RunOptions) (*providerPreflightReport, error) {
+func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[string]ProviderRuntime, cfg *RunConfigFile, opts RunOptions) (*providerPreflightReport, error) {
 	report := &providerPreflightReport{
 		GeneratedAt:         time.Now().UTC().Format(time.RFC3339Nano),
 		CLIProfile:          normalizedCLIProfile(cfg),
@@ -61,7 +61,7 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, cfg *RunConfig
 		_ = writePreflightReport(opts.LogsRoot, report)
 	}()
 
-	providers := usedCLIProviders(g, cfg)
+	providers := usedCLIProviders(g, runtimes)
 	if len(providers) == 0 {
 		report.addCheck(providerPreflightCheck{
 			Name:    "provider_cli_presence",
@@ -170,7 +170,7 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, cfg *RunConfig
 			continue
 		}
 
-		models := usedCLIModelsForProvider(g, cfg, provider, opts)
+		models := usedCLIModelsForProvider(g, runtimes, provider, opts)
 		if len(models) == 0 {
 			continue
 		}
@@ -264,7 +264,7 @@ func modelProbeMode() string {
 	return "on"
 }
 
-func usedCLIProviders(g *model.Graph, cfg *RunConfigFile) []string {
+func usedCLIProviders(g *model.Graph, runtimes map[string]ProviderRuntime) []string {
 	used := map[string]bool{}
 	if g == nil {
 		return nil
@@ -277,7 +277,8 @@ func usedCLIProviders(g *model.Graph, cfg *RunConfigFile) []string {
 		if provider == "" {
 			continue
 		}
-		if backendFor(cfg, provider) != BackendCLI {
+		rt, ok := runtimes[provider]
+		if !ok || rt.Backend != BackendCLI {
 			continue
 		}
 		used[provider] = true
@@ -290,7 +291,7 @@ func usedCLIProviders(g *model.Graph, cfg *RunConfigFile) []string {
 	return providers
 }
 
-func usedCLIModelsForProvider(g *model.Graph, cfg *RunConfigFile, provider string, opts RunOptions) []string {
+func usedCLIModelsForProvider(g *model.Graph, runtimes map[string]ProviderRuntime, provider string, opts RunOptions) []string {
 	provider = normalizeProviderKey(provider)
 	if provider == "" || g == nil {
 		return nil
@@ -308,7 +309,8 @@ func usedCLIModelsForProvider(g *model.Graph, cfg *RunConfigFile, provider strin
 		if nodeProvider == "" || nodeProvider != provider {
 			continue
 		}
-		if backendFor(cfg, nodeProvider) != BackendCLI {
+		rt, ok := runtimes[nodeProvider]
+		if !ok || rt.Backend != BackendCLI {
 			continue
 		}
 		modelID := modelIDForNode(n)
