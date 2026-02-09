@@ -5,7 +5,7 @@
 Kilroy now resolves providers through runtime provider metadata instead of hard-coded provider switches.
 
 - Built-in providers: `openai`, `anthropic`, `google`, `kimi`, `zai`
-- Built-in aliases: `gemini -> google`, `moonshot -> kimi`, `z-ai`/`z.ai -> zai`
+- Built-in aliases: `gemini`/`google_ai_studio -> google`, `moonshot`/`moonshotai -> kimi`, `z-ai`/`z.ai -> zai`
 - API routing is protocol-based (`openai_responses`, `anthropic_messages`, `google_generate_content`, `openai_chat_completions`)
 
 ## Config Changes
@@ -54,4 +54,5 @@ Supported `llm.providers.<provider>.api.*` fields:
 - `kimi` and `zai` are API-only in this release.
 - CLI contracts remain built-in for `openai`, `anthropic`, and `google`.
 - Provider/model catalog validation still applies and uses canonical provider keys.
+- `--force-model <provider=model>` accepts built-ins `openai`, `anthropic`, `google`, `kimi`, `zai` and their aliases.
 - Failover order/profile selection are now driven by runtime provider metadata (with config overrides when provided).

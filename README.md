@@ -224,6 +224,7 @@ Provider runtime architecture:
 
 - Providers are protocol-driven and configured under `llm.providers.<provider>`.
 - Built-ins include `openai`, `anthropic`, `google`, `kimi`, and `zai`.
+- Provider aliases: `gemini`/`google_ai_studio` -> `google`, `moonshot`/`moonshotai` -> `kimi`, `z-ai`/`z.ai` -> `zai`.
 - CLI contracts are built-in for `openai`, `anthropic`, and `google`.
 - `kimi` and `zai` are API-only in this release.
 
@@ -281,6 +282,7 @@ kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.
 ```
 
 `--force-model` can be passed multiple times (for example, `--force-model openai=gpt-5.2-codex --force-model google=gemini-3-pro-preview`) to override node model selection by provider.
+Supported providers are `openai`, `anthropic`, `google`, `kimi`, and `zai` (aliases accepted).
 
 Additional ingest flags:
 
