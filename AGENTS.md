@@ -33,3 +33,9 @@ Use explicit run configs and flags so the mode is unambiguous:
 ## Production Authorization Rule (Strict)
 
 NEVER start a production run except precisely as the user requested, and only after an explicit user request for that production run. Production runs are expensive.
+
+## Production Runs: Exact Command Only
+
+- For production runs (`llm.cli_profile=real`), execute only the exact command the user explicitly approved.
+- Do not change flags, env, config, paths, `--run-id`, `--detach`, or add overrides like `--force-model` unless explicitly approved.
+- If the run fails, stop immediately, report the error, and wait for explicit approval of a new exact command.
