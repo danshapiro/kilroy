@@ -159,7 +159,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 			return nil, err
 		}
 		catalog = cat
-		backend = NewCodergenRouter(cfg, catalogToLiteLLMCatalog(catalog))
+		backend = NewCodergenRouter(cfg, catalog)
 
 		// Re-attach to the existing CXDB context head (metaspec required).
 		baseURL := strings.TrimSpace(ov.CXDBHTTPBaseURL)

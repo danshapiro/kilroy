@@ -16,10 +16,10 @@ func TestRunWithConfig_ModelCatalogIsMetadataOnly_DoesNotAffectProviderRouting(t
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
 
-	// Deliberately lie about the model's provider in the catalog to ensure routing
-	// is driven by the graph/node attributes, not the catalog.
+	// Deliberately provide only an Anthropic entry for this model name to ensure
+	// routing is driven by graph/node attributes, not catalog metadata.
 	pinned := filepath.Join(t.TempDir(), "pinned.json")
-	if err := os.WriteFile(pinned, []byte(`{"gpt-5.2":{"litellm_provider":"anthropic","mode":"chat"}}`), 0o644); err != nil {
+	if err := os.WriteFile(pinned, []byte(`{"data":[{"id":"anthropic/gpt-5.2"}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

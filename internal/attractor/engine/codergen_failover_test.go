@@ -37,10 +37,10 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 	}
 	// Only "openai|anthropic|google" are recognized by normalizeProviderKey; others are ignored by withFailoverText.
 
-	catalog := &modeldb.LiteLLMCatalog{
-		Models: map[string]modeldb.LiteLLMModelEntry{
+	catalog := &modeldb.Catalog{
+		Models: map[string]modeldb.ModelEntry{
 			// Include a region-prefixed model key to validate providerModelIDFromCatalogKey stripping.
-			"us/claude-opus-4-6-20260205": {LiteLLMProvider: "anthropic", Mode: "chat"},
+			"us/claude-opus-4-6-20260205": {Provider: "anthropic", Mode: "chat"},
 		},
 	}
 

@@ -151,7 +151,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	eng := newBaseEngine(g, dotSource, opts)
 	eng.RunConfig = cfg
 	eng.Context = NewContextWithGraphAttrs(g)
-	eng.CodergenBackend = NewCodergenRouter(cfg, catalogToLiteLLMCatalog(catalog))
+	eng.CodergenBackend = NewCodergenRouter(cfg, catalog)
 	eng.CXDB = sink
 	eng.ModelCatalogSHA = catalog.SHA256
 	eng.ModelCatalogSource = resolved.Source
@@ -256,32 +256,6 @@ func catalogFromLiteLLM(legacy *modeldb.LiteLLMCatalog) *modeldb.Catalog {
 			Provider:           m.LiteLLMProvider,
 			Mode:               m.Mode,
 			ContextWindow:      ctx,
-			MaxOutputTokens:    maxOut,
-			InputCostPerToken:  m.InputCostPerToken,
-			OutputCostPerToken: m.OutputCostPerToken,
-		}
-	}
-	return out
-}
-
-func catalogToLiteLLMCatalog(catalog *modeldb.Catalog) *modeldb.LiteLLMCatalog {
-	if catalog == nil {
-		return nil
-	}
-	out := &modeldb.LiteLLMCatalog{
-		Path:   catalog.Path,
-		SHA256: catalog.SHA256,
-		Models: make(map[string]modeldb.LiteLLMModelEntry, len(catalog.Models)),
-	}
-	for id, m := range catalog.Models {
-		maxOut := any(nil)
-		if m.MaxOutputTokens != nil {
-			maxOut = *m.MaxOutputTokens
-		}
-		out.Models[id] = modeldb.LiteLLMModelEntry{
-			LiteLLMProvider:    m.Provider,
-			Mode:               m.Mode,
-			MaxInputTokens:     m.ContextWindow,
 			MaxOutputTokens:    maxOut,
 			InputCostPerToken:  m.InputCostPerToken,
 			OutputCostPerToken: m.OutputCostPerToken,

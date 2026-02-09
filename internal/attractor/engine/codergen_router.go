@@ -27,14 +27,14 @@ import (
 
 type CodergenRouter struct {
 	cfg     *RunConfigFile
-	catalog *modeldb.LiteLLMCatalog
+	catalog *modeldb.Catalog
 
 	apiOnce   sync.Once
 	apiClient *llm.Client
 	apiErr    error
 }
 
-func NewCodergenRouter(cfg *RunConfigFile, catalog *modeldb.LiteLLMCatalog) *CodergenRouter {
+func NewCodergenRouter(cfg *RunConfigFile, catalog *modeldb.Catalog) *CodergenRouter {
 	return &CodergenRouter{cfg: cfg, catalog: catalog}
 }
 
@@ -380,7 +380,7 @@ func failoverOrder(primary string) []string {
 	}
 }
 
-func pickFailoverModel(provider string, catalog *modeldb.LiteLLMCatalog) string {
+func pickFailoverModel(provider string, catalog *modeldb.Catalog) string {
 	provider = normalizeProviderKey(provider)
 	switch provider {
 	case "openai":
@@ -426,14 +426,14 @@ func pickFailoverModel(provider string, catalog *modeldb.LiteLLMCatalog) string 
 	}
 }
 
-func modelIDsForProvider(catalog *modeldb.LiteLLMCatalog, provider string) []string {
+func modelIDsForProvider(catalog *modeldb.Catalog, provider string) []string {
 	if catalog == nil || catalog.Models == nil {
 		return nil
 	}
 	provider = normalizeProviderKey(provider)
 	out := []string{}
 	for id, entry := range catalog.Models {
-		if normalizeProviderKey(entry.LiteLLMProvider) != provider {
+		if normalizeProviderKey(entry.Provider) != provider {
 			continue
 		}
 		out = append(out, id)
@@ -441,7 +441,7 @@ func modelIDsForProvider(catalog *modeldb.LiteLLMCatalog, provider string) []str
 	return out
 }
 
-func hasModelID(catalog *modeldb.LiteLLMCatalog, provider string, id string) bool {
+func hasModelID(catalog *modeldb.Catalog, provider string, id string) bool {
 	if catalog == nil || catalog.Models == nil {
 		return false
 	}
@@ -450,20 +450,7 @@ func hasModelID(catalog *modeldb.LiteLLMCatalog, provider string, id string) boo
 	if !ok {
 		return false
 	}
-	return normalizeProviderKey(entry.LiteLLMProvider) == provider
-}
-
-func catalogHasProviderModel(catalog *modeldb.LiteLLMCatalog, provider string, modelID string) bool {
-	if catalog == nil || catalog.Models == nil {
-		return false
-	}
-	normalized := &modeldb.Catalog{
-		Models: make(map[string]modeldb.ModelEntry, len(catalog.Models)),
-	}
-	for id, entry := range catalog.Models {
-		normalized.Models[id] = modeldb.ModelEntry{Provider: entry.LiteLLMProvider}
-	}
-	return modeldb.CatalogHasProviderModel(normalized, provider, modelID)
+	return normalizeProviderKey(entry.Provider) == provider
 }
 
 func providerModelIDFromCatalogKey(provider string, id string) string {
