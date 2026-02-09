@@ -25,3 +25,22 @@ func TestCanonicalProviderKey_Aliases(t *testing.T) {
 		t.Fatalf("unknown provider keys should pass through unchanged, got %q", got)
 	}
 }
+
+func TestBuiltinKimiDefaultsToCodingAnthropicAPI(t *testing.T) {
+	spec, ok := Builtin("kimi")
+	if !ok {
+		t.Fatalf("expected kimi builtin")
+	}
+	if spec.API == nil {
+		t.Fatalf("expected kimi api spec")
+	}
+	if got := spec.API.Protocol; got != ProtocolAnthropicMessages {
+		t.Fatalf("kimi protocol: got %q want %q", got, ProtocolAnthropicMessages)
+	}
+	if got := spec.API.DefaultBaseURL; got != "https://api.kimi.com/coding" {
+		t.Fatalf("kimi base url: got %q want %q", got, "https://api.kimi.com/coding")
+	}
+	if got := spec.API.DefaultAPIKeyEnv; got != "KIMI_API_KEY" {
+		t.Fatalf("kimi api_key_env: got %q want %q", got, "KIMI_API_KEY")
+	}
+}

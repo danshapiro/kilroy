@@ -741,7 +741,7 @@ func TestRunWithConfig_PreflightPromptProbe_AllProvidersWhenGraphUsesAll(t *test
 		switch r.URL.Path {
 		case "/v1/responses":
 			openaiCalls.Add(1)
-		case "/v1/chat/completions":
+		case "/coding/v1/messages":
 			kimiCalls.Add(1)
 		case "/api/coding/paas/v4/chat/completions":
 			zaiCalls.Add(1)
@@ -756,6 +756,18 @@ func TestRunWithConfig_PreflightPromptProbe_AllProvidersWhenGraphUsesAll(t *test
   "model":"gpt-5.2",
   "output":[{"type":"message","content":[{"type":"output_text","text":"OK"}]}],
   "usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}
+}`))
+			return
+		}
+		if r.URL.Path == "/coding/v1/messages" {
+			_, _ = w.Write([]byte(`{
+  "id":"msg_preflight",
+  "type":"message",
+  "role":"assistant",
+  "content":[{"type":"text","text":"OK"}],
+  "model":"kimi-for-coding",
+  "stop_reason":"end_turn",
+  "usage":{"input_tokens":1,"output_tokens":1}
 }`))
 			return
 		}
@@ -794,11 +806,8 @@ func TestRunWithConfig_PreflightPromptProbe_AllProvidersWhenGraphUsesAll(t *test
 		"kimi": {
 			Backend: BackendAPI,
 			API: ProviderAPIConfig{
-				Protocol:      "openai_chat_completions",
-				BaseURL:       apiSrv.URL,
-				Path:          "/v1/chat/completions",
+				BaseURL:       apiSrv.URL + "/coding",
 				APIKeyEnv:     "KIMI_API_KEY",
-				ProfileFamily: "openai",
 			},
 		},
 		"zai": {

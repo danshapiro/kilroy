@@ -131,10 +131,10 @@ llm:
     kimi:
       backend: api
       api:
-        protocol: openai_chat_completions
+        protocol: anthropic_messages
         api_key_env: KIMI_API_KEY
-        base_url: https://api.moonshot.ai
-        path: /v1/chat/completions
+        base_url: https://api.kimi.com/coding
+        path: /v1/messages
         profile_family: openai
     zai:
       backend: api
@@ -244,7 +244,7 @@ API backend environment variables:
 - OpenAI: `OPENAI_API_KEY` (`OPENAI_BASE_URL` optional)
 - Anthropic: `ANTHROPIC_API_KEY` (`ANTHROPIC_BASE_URL` optional)
 - Google: `GEMINI_API_KEY` or `GOOGLE_API_KEY` (`GEMINI_BASE_URL` optional)
-- Kimi: `KIMI_API_KEY`
+- Kimi (Coding API key): `KIMI_API_KEY`
 - ZAI: `ZAI_API_KEY`
 
 ## Run Artifacts

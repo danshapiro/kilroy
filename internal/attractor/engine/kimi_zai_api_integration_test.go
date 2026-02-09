@@ -10,7 +10,7 @@ import (
 	"time"
 )
 
-func TestKimiAndZai_OpenAIChatCompletionsIntegration(t *testing.T) {
+func TestKimiCodingAndZai_OpenAIChatCompletionsIntegration(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
 	pinned := writeProviderCatalogForTest(t)
@@ -23,11 +23,18 @@ func TestKimiAndZai_OpenAIChatCompletionsIntegration(t *testing.T) {
 		seenPaths[r.URL.Path]++
 		mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"id":"x","model":"m","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+		switch r.URL.Path {
+		case "/coding/v1/messages":
+			_, _ = w.Write([]byte(`{"id":"msg_test","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}],"model":"kimi-for-coding","stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`))
+		case "/api/coding/paas/v4/chat/completions":
+			_, _ = w.Write([]byte(`{"id":"x","model":"m","choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"ok"}}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
 	}))
 	defer srv.Close()
 
-	runCase := func(provider, model, keyEnv, path string) {
+	runCase := func(provider, model, keyEnv, baseURL string) {
 		t.Helper()
 		cfg := &RunConfigFile{Version: 1}
 		cfg.Repo.Path = repo
@@ -40,11 +47,8 @@ func TestKimiAndZai_OpenAIChatCompletionsIntegration(t *testing.T) {
 			provider: {
 				Backend: BackendAPI,
 				API: ProviderAPIConfig{
-					Protocol:      "openai_chat_completions",
 					APIKeyEnv:     keyEnv,
-					BaseURL:       srv.URL,
-					Path:          path,
-					ProfileFamily: "openai",
+					BaseURL:       baseURL,
 				},
 			},
 		}
@@ -67,13 +71,13 @@ digraph G {
 		}
 	}
 
-	runCase("kimi", "kimi-k2.5", "KIMI_API_KEY", "/v1/chat/completions")
-	runCase("zai", "glm-4.7", "ZAI_API_KEY", "/api/coding/paas/v4/chat/completions")
+	runCase("kimi", "kimi-k2.5", "KIMI_API_KEY", srv.URL+"/coding")
+	runCase("zai", "glm-4.7", "ZAI_API_KEY", srv.URL)
 
 	mu.Lock()
 	defer mu.Unlock()
-	if seenPaths["/v1/chat/completions"] == 0 {
-		t.Fatalf("missing kimi chat-completions call: %v", seenPaths)
+	if seenPaths["/coding/v1/messages"] == 0 {
+		t.Fatalf("missing kimi coding messages call: %v", seenPaths)
 	}
 	if seenPaths["/api/coding/paas/v4/chat/completions"] == 0 {
 		t.Fatalf("missing zai chat-completions call: %v", seenPaths)

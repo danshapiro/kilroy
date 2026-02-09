@@ -274,16 +274,16 @@ llm:
     kimi:
       backend: api
       api:
-        protocol: openai_chat_completions
+        protocol: anthropic_messages
         api_key_env: KIMI_API_KEY
-        base_url: https://api.moonshot.ai
-        path: /v1/chat/completions
+        base_url: https://api.kimi.com/coding
+        path: /v1/messages
 `)
 	cfg, err := loadRunConfigFromBytesForTest(t, yml)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if got := cfg.LLM.Providers["kimi"].API.Protocol; got != "openai_chat_completions" {
+	if got := cfg.LLM.Providers["kimi"].API.Protocol; got != "anthropic_messages" {
 		t.Fatalf("protocol not parsed: %q", got)
 	}
 }

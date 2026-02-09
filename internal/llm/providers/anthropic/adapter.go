@@ -83,7 +83,7 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 	if err != nil {
 		return llm.Response{}, err
 	}
-	autoCache := anthropicAutoCacheEnabled(req.ProviderOptions)
+	autoCache := anthropicAutoCacheEnabled(a.Name(), req.ProviderOptions)
 
 	maxTokens := 2048
 	if req.MaxTokens != nil && *req.MaxTokens > 0 {
@@ -220,7 +220,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 		cancel()
 		return nil, err
 	}
-	autoCache := anthropicAutoCacheEnabled(req.ProviderOptions)
+	autoCache := anthropicAutoCacheEnabled(a.Name(), req.ProviderOptions)
 
 	maxTokens := 4096
 	if req.MaxTokens != nil && *req.MaxTokens > 0 {
@@ -1021,25 +1021,26 @@ func fromAnthropicResponse(provider string, raw map[string]any, requestedModel s
 	return r
 }
 
-func anthropicAutoCacheEnabled(opts map[string]any) bool {
+func anthropicAutoCacheEnabled(provider string, opts map[string]any) bool {
+	defaultEnabled := providerspec.CanonicalProviderKey(provider) == "anthropic"
 	if opts == nil {
-		return true
+		return defaultEnabled
 	}
 	aAny, ok := opts["anthropic"]
 	if !ok {
-		return true
+		return defaultEnabled
 	}
 	m, ok := aAny.(map[string]any)
 	if !ok {
-		return true
+		return defaultEnabled
 	}
 	vAny, ok := m["auto_cache"]
 	if !ok {
-		return true
+		return defaultEnabled
 	}
 	v, ok := vAny.(bool)
 	if !ok {
-		return true
+		return defaultEnabled
 	}
 	return v
 }

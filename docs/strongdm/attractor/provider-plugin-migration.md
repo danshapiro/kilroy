@@ -18,10 +18,10 @@ llm:
     kimi:
       backend: api
       api:
-        protocol: openai_chat_completions
+        protocol: anthropic_messages
         api_key_env: KIMI_API_KEY
-        base_url: https://api.moonshot.ai
-        path: /v1/chat/completions
+        base_url: https://api.kimi.com/coding
+        path: /v1/messages
         profile_family: openai
     zai:
       backend: api
@@ -52,6 +52,7 @@ Supported `llm.providers.<provider>.api.*` fields:
 ## Behavioral Notes
 
 - `kimi` and `zai` are API-only in this release.
+- Default Kimi built-in route targets Kimi Coding Anthropic-compatible messages API.
 - CLI contracts remain built-in for `openai`, `anthropic`, and `google`.
 - Provider/model catalog validation still applies and uses canonical provider keys.
 - Failover order/profile selection are now driven by runtime provider metadata (with config overrides when provided).

@@ -241,11 +241,26 @@ func TestRunWithConfig_AcceptsKimiAndZaiAPIProviders(t *testing.T) {
 	cases := []struct {
 		provider string
 		model    string
+		protocol string
 		keyEnv   string
+		baseURL  string
 		path     string
 	}{
-		{provider: "kimi", model: "kimi-k2.5", keyEnv: "KIMI_API_KEY", path: "/v1/chat/completions"},
-		{provider: "zai", model: "glm-4.7", keyEnv: "ZAI_API_KEY", path: "/api/coding/paas/v4/chat/completions"},
+		{
+			provider: "kimi",
+			model:    "kimi-k2.5",
+			protocol: "anthropic_messages",
+			keyEnv:   "KIMI_API_KEY",
+			baseURL:  "http://127.0.0.1:1/coding",
+		},
+		{
+			provider: "zai",
+			model:    "glm-4.7",
+			protocol: "openai_chat_completions",
+			keyEnv:   "ZAI_API_KEY",
+			baseURL:  "http://127.0.0.1:1",
+			path:     "/api/coding/paas/v4/chat/completions",
+		},
 	}
 
 	for _, tc := range cases {
@@ -268,9 +283,9 @@ digraph G {
 				tc.provider: {
 					Backend: BackendAPI,
 					API: ProviderAPIConfig{
-						Protocol:      "openai_chat_completions",
+						Protocol:      tc.protocol,
 						APIKeyEnv:     tc.keyEnv,
-						BaseURL:       "http://127.0.0.1:1",
+						BaseURL:       tc.baseURL,
 						Path:          tc.path,
 						ProfileFamily: "openai",
 					},

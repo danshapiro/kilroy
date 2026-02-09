@@ -57,7 +57,9 @@ We are implementing StrongDM’s Attractor in Go inside this repo, with these to
 
 API-only in v1:
 
-- `kimi` and `zai` are API-only providers (`openai_chat_completions` protocol family).
+- `kimi` and `zai` are API-only providers.
+- Default `kimi` built-in protocol family: `anthropic_messages` (Kimi Coding endpoint).
+- Default `zai` built-in protocol family: `openai_chat_completions`.
 
 **No implicit backend defaults:**
 
@@ -166,10 +168,10 @@ llm:
     kimi:
       backend: api
       api:
-        protocol: openai_chat_completions
+        protocol: anthropic_messages
         api_key_env: KIMI_API_KEY
-        base_url: https://api.moonshot.ai
-        path: /v1/chat/completions
+        base_url: https://api.kimi.com/coding
+        path: /v1/messages
         profile_family: openai
     zai:
       backend: api

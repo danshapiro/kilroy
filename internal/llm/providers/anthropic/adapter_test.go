@@ -959,6 +959,82 @@ func TestAdapter_PromptCaching_AutoCacheDefaultAndDisable(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("non_anthropic_provider_default_does_not_inject_cache_control_or_beta", func(t *testing.T) {
+		var gotBody map[string]any
+		gotBeta := ""
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotBeta = r.Header.Get("anthropic-beta")
+			b, _ := io.ReadAll(r.Body)
+			_ = r.Body.Close()
+			_ = json.Unmarshal(b, &gotBody)
+
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+  "id": "msg_1",
+  "model": "kimi-for-coding",
+  "content": [{"type":"text","text":"ok"}],
+  "stop_reason": "end_turn",
+  "usage": {"input_tokens": 1, "output_tokens": 1}
+}`))
+		}))
+		t.Cleanup(srv.Close)
+
+		a := &Adapter{Provider: "kimi", APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		_, err := a.Complete(ctx, llm.Request{
+			Model: "kimi-k2.5",
+			Messages: []llm.Message{
+				llm.System("sys"),
+				llm.User("u1"),
+				llm.Assistant("a1"),
+				llm.User("u2"),
+			},
+			Tools: []llm.ToolDefinition{
+				{
+					Name:        "t1",
+					Description: "d",
+					Parameters:  map[string]any{"type": "object"},
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("Complete: %v", err)
+		}
+
+		if gotBeta != "" {
+			t.Fatalf("anthropic-beta: got %q want empty", gotBeta)
+		}
+		if _, ok := gotBody["system"].(string); !ok {
+			t.Fatalf("expected system string when auto_cache defaults off for kimi; got %#v", gotBody["system"])
+		}
+		if toolsAny, ok := gotBody["tools"].([]any); ok && len(toolsAny) > 0 {
+			t0, _ := toolsAny[0].(map[string]any)
+			if _, ok := t0["cache_control"]; ok {
+				t.Fatalf("unexpected cache_control on tool def: %#v", t0["cache_control"])
+			}
+		}
+		msgs, _ := gotBody["messages"].([]any)
+		for _, mAny := range msgs {
+			m, ok := mAny.(map[string]any)
+			if !ok {
+				continue
+			}
+			blocks, _ := m["content"].([]any)
+			for _, bAny := range blocks {
+				bm, ok := bAny.(map[string]any)
+				if !ok {
+					continue
+				}
+				if _, ok := bm["cache_control"]; ok {
+					t.Fatalf("unexpected cache_control in messages: %#v", bm["cache_control"])
+				}
+			}
+		}
+	})
 }
 
 func TestAdapter_Stream_ContextDeadline_EmitsRequestTimeoutError(t *testing.T) {

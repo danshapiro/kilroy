@@ -8,7 +8,6 @@ func TestResolveProviderRuntimes_MergesBuiltinAndConfigOverrides(t *testing.T) {
 		"kimi": {
 			Backend: BackendAPI,
 			API: ProviderAPIConfig{
-				Protocol:  "openai_chat_completions",
 				APIKeyEnv: "KIMI_API_KEY",
 				Headers:   map[string]string{"X-Trace": "1"},
 			},
@@ -19,7 +18,7 @@ func TestResolveProviderRuntimes_MergesBuiltinAndConfigOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolveProviderRuntimes: %v", err)
 	}
-	if rt["kimi"].API.Protocol != "openai_chat_completions" {
+	if rt["kimi"].API.Protocol != "anthropic_messages" {
 		t.Fatalf("kimi protocol mismatch")
 	}
 	if _, ok := rt["openai"]; !ok {
