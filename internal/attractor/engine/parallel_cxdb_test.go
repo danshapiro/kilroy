@@ -26,7 +26,7 @@ func TestRunWithConfig_ParallelBranches_ForkCXDBContexts(t *testing.T) {
 	cxdbSrv := newCXDBTestServer(t)
 
 	cli := filepath.Join(t.TempDir(), "codex")
-	if err := os.WriteFile(cli, []byte("#!/usr/bin/env bash\nset -euo pipefail\n\necho '{\"type\":\"done\",\"text\":\"ok\"}'\n"), 0o755); err != nil {
+	if err := os.WriteFile(cli, []byte("#!/usr/bin/env bash\nset -euo pipefail\n\ncat > status.json <<'JSON'\n{\"status\":\"success\",\"notes\":\"ok\"}\nJSON\n\necho '{\"type\":\"done\",\"text\":\"ok\"}'\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("KILROY_CODEX_PATH", cli)
