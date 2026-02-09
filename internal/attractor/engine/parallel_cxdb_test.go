@@ -35,9 +35,7 @@ func TestRunWithConfig_ParallelBranches_ForkCXDBContexts(t *testing.T) {
 	cfg.Repo.Path = repo
 	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
 	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
-	cfg.LLM.Providers = map[string]struct {
-		Backend BackendKind `json:"backend" yaml:"backend"`
-	}{"openai": {Backend: BackendCLI}}
+	cfg.LLM.Providers = map[string]ProviderConfig{"openai": {Backend: BackendCLI}}
 	cfg.ModelDB.LiteLLMCatalogPath = pinned
 	cfg.ModelDB.LiteLLMCatalogUpdatePolicy = "pinned"
 	cfg.Git.RunBranchPrefix = "attractor/run"

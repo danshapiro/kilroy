@@ -388,13 +388,9 @@ func testPreflightConfigForProviders(repo string, catalog string, providers map[
 	cfg.Repo.Path = repo
 	cfg.CXDB.BinaryAddr = "127.0.0.1:1"
 	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:1"
-	cfg.LLM.Providers = map[string]struct {
-		Backend BackendKind `json:"backend" yaml:"backend"`
-	}{}
+	cfg.LLM.Providers = map[string]ProviderConfig{}
 	for provider, backend := range providers {
-		cfg.LLM.Providers[provider] = struct {
-			Backend BackendKind `json:"backend" yaml:"backend"`
-		}{Backend: backend}
+		cfg.LLM.Providers[provider] = ProviderConfig{Backend: backend}
 	}
 	cfg.ModelDB.LiteLLMCatalogPath = catalog
 	cfg.ModelDB.LiteLLMCatalogUpdatePolicy = "pinned"

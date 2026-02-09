@@ -17,6 +17,11 @@ const (
 	BackendCLI BackendKind = "cli"
 )
 
+type ProviderConfig struct {
+	Backend    BackendKind `json:"backend" yaml:"backend"`
+	Executable string      `json:"executable,omitempty" yaml:"executable,omitempty"`
+}
+
 type RunConfigFile struct {
 	Version int `json:"version" yaml:"version"`
 
@@ -41,9 +46,8 @@ type RunConfigFile struct {
 	} `json:"cxdb" yaml:"cxdb"`
 
 	LLM struct {
-		Providers map[string]struct {
-			Backend BackendKind `json:"backend" yaml:"backend"`
-		} `json:"providers" yaml:"providers"`
+		CLIProfile string                    `json:"cli_profile" yaml:"cli_profile"`
+		Providers  map[string]ProviderConfig `json:"providers" yaml:"providers"`
 	} `json:"llm" yaml:"llm"`
 
 	ModelDB struct {
@@ -103,9 +107,12 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 		cfg.Git.RequireClean = true
 	}
 	if cfg.LLM.Providers == nil {
-		cfg.LLM.Providers = map[string]struct {
-			Backend BackendKind `json:"backend" yaml:"backend"`
-		}{}
+		cfg.LLM.Providers = map[string]ProviderConfig{}
+	}
+	if strings.TrimSpace(cfg.LLM.CLIProfile) == "" {
+		cfg.LLM.CLIProfile = "real"
+	} else {
+		cfg.LLM.CLIProfile = strings.ToLower(strings.TrimSpace(cfg.LLM.CLIProfile))
 	}
 	if strings.TrimSpace(cfg.ModelDB.LiteLLMCatalogUpdatePolicy) == "" {
 		cfg.ModelDB.LiteLLMCatalogUpdatePolicy = "on_run_start"
@@ -161,6 +168,12 @@ func validateConfig(cfg *RunConfigFile) error {
 	if strings.ToLower(strings.TrimSpace(cfg.ModelDB.LiteLLMCatalogUpdatePolicy)) == "on_run_start" && strings.TrimSpace(cfg.ModelDB.LiteLLMCatalogURL) == "" {
 		return fmt.Errorf("modeldb.litellm_catalog_url is required when update_policy=on_run_start")
 	}
+	switch strings.ToLower(strings.TrimSpace(cfg.LLM.CLIProfile)) {
+	case "real", "test_shim":
+		// ok
+	default:
+		return fmt.Errorf("invalid llm.cli_profile: %q (want real|test_shim)", cfg.LLM.CLIProfile)
+	}
 	for prov, pc := range cfg.LLM.Providers {
 		switch normalizeProviderKey(prov) {
 		case "openai", "anthropic", "google":
@@ -172,6 +185,9 @@ func validateConfig(cfg *RunConfigFile) error {
 		case BackendAPI, BackendCLI:
 		default:
 			return fmt.Errorf("invalid backend for provider %q: %q (want api|cli)", prov, pc.Backend)
+		}
+		if strings.EqualFold(cfg.LLM.CLIProfile, "real") && strings.TrimSpace(pc.Executable) != "" {
+			return fmt.Errorf("llm.providers.%s.executable is only allowed when llm.cli_profile=test_shim", prov)
 		}
 	}
 	return nil

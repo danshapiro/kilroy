@@ -86,9 +86,7 @@ echo '{"type":"done","text":"ok"}'
 	cfg.Repo.Path = repo
 	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
 	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
-	cfg.LLM.Providers = map[string]struct {
-		Backend BackendKind `json:"backend" yaml:"backend"`
-	}{
+	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai": {Backend: BackendCLI},
 	}
 	cfg.ModelDB.LiteLLMCatalogPath = pinned
@@ -308,9 +306,7 @@ func TestRunWithConfig_APIBackend_AgentLoop_WritesAgentEventsAndPassesReasoningE
 	cfg.Repo.Path = repo
 	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
 	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
-	cfg.LLM.Providers = map[string]struct {
-		Backend BackendKind `json:"backend" yaml:"backend"`
-	}{
+	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai": {Backend: BackendAPI},
 	}
 	cfg.ModelDB.LiteLLMCatalogPath = pinned
@@ -375,9 +371,7 @@ func TestRunWithConfig_APIBackend_OneShot_WritesRequestAndResponseArtifacts(t *t
 	cfg.Repo.Path = repo
 	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
 	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
-	cfg.LLM.Providers = map[string]struct {
-		Backend BackendKind `json:"backend" yaml:"backend"`
-	}{
+	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai": {Backend: BackendAPI},
 	}
 	cfg.ModelDB.LiteLLMCatalogPath = pinned
@@ -434,9 +428,7 @@ func TestRunWithConfig_APIBackend_AutoStatusFalse_FailsWhenNoStatusWritten(t *te
 	cfg.Repo.Path = repo
 	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
 	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
-	cfg.LLM.Providers = map[string]struct {
-		Backend BackendKind `json:"backend" yaml:"backend"`
-	}{
+	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai": {Backend: BackendAPI},
 	}
 	cfg.ModelDB.LiteLLMCatalogPath = pinned

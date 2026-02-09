@@ -28,9 +28,7 @@ func (a *okAdapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, er
 
 func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
-	cfg.LLM.Providers = map[string]struct {
-		Backend BackendKind `json:"backend" yaml:"backend"`
-	}{
+	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai":      {Backend: BackendAPI},
 		"anthropic":   {Backend: BackendAPI},
 		"google":      {Backend: BackendAPI},

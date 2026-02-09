@@ -47,9 +47,7 @@ done
 	cfg.Repo.Path = repo
 	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
 	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
-	cfg.LLM.Providers = map[string]struct {
-		Backend BackendKind `json:"backend" yaml:"backend"`
-	}{
+	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai": {Backend: BackendCLI},
 	}
 	cfg.ModelDB.LiteLLMCatalogPath = pinned
