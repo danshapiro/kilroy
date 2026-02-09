@@ -17,12 +17,12 @@ Line numbers are from the current in-repo markdown specs; they will drift if the
 | Line | Requirement (summary) | Coverage | Test(s) / Evidence |
 |---:|---|---|---|
 | 60 | No implicit backend defaults; missing `backend(P)` MUST fail fast | Covered (unit) | `internal/attractor/engine/run_with_config_test.go` |
-| 64 | Model metadata MUST come from LiteLLM catalog JSON | Covered (unit) | `internal/attractor/modeldb/litellm_test.go`, `internal/attractor/modeldb/litellm_resolve_test.go` |
+| 64 | Model metadata MUST come from OpenRouter model info | Covered (unit) | `internal/attractor/modeldb/openrouter_test.go`, `internal/attractor/modeldb/catalog_resolve_test.go` |
 | 65 | Catalog is metadata-only; MUST NOT be used as provider call path | Covered (integration) | `internal/attractor/engine/model_catalog_metadata_only_test.go` |
-| 69 | Repo SHOULD include a pinned snapshot of the LiteLLM catalog | N/A (repo content policy) | Not a runtime behavior test |
-| 71 | On run start MUST materialize catalog to `{logs_root}/modeldb/litellm_catalog.json` | Covered (unit) | `internal/attractor/modeldb/litellm_resolve_test.go` (snapshot file); `internal/attractor/engine/resume_catalog_test.go` (requires snapshot on resume) |
+| 69 | Repo SHOULD include a pinned snapshot of OpenRouter model info | N/A (repo content policy) | Not a runtime behavior test |
+| 71 | On run start MUST materialize catalog to `{logs_root}/modeldb/openrouter_models.json` | Covered (unit) | `internal/attractor/modeldb/catalog_resolve_test.go` (snapshot file); `internal/attractor/engine/resume_catalog_test.go` (requires snapshot on resume) |
 | 72 | Resume MUST use run’s snapshotted catalog | Covered (integration) | `internal/attractor/engine/resume_catalog_test.go` |
-| 73 | Catalog differs from pinned snapshot MUST be recorded as warning | Covered (unit) | `internal/attractor/modeldb/litellm_resolve_warning_test.go` |
+| 73 | Catalog differs from pinned snapshot MUST be recorded as warning | Covered (unit) | `internal/attractor/modeldb/catalog_resolve_warning_test.go` |
 | 97 | `git` MUST be present and repo MUST be a git repo; otherwise fail fast | Covered (integration) | `internal/attractor/engine/git_requirements_test.go` |
 | 98 | Dedicated per-run branch; MUST commit after each node completes | Covered (integration) | `internal/attractor/engine/engine_test.go` |
 | 99 | CLI backend MUST run in isolated git worktree | Covered (integration) | `internal/attractor/engine/run_with_config_integration_test.go` |

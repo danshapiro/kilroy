@@ -21,7 +21,7 @@ func TestRunWithConfig_ParallelBranches_ForkCXDBContexts(t *testing.T) {
 
 	logsRoot := t.TempDir()
 	pinned := filepath.Join(t.TempDir(), "pinned.json")
-	_ = os.WriteFile(pinned, []byte(`{"gpt-5.2":{"litellm_provider":"openai","mode":"chat"}}`), 0o644)
+	_ = os.WriteFile(pinned, []byte(`{"data":[{"id":"openai/gpt-5.2"}]}`), 0o644)
 
 	cxdbSrv := newCXDBTestServer(t)
 

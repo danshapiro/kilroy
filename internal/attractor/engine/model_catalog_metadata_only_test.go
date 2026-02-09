@@ -20,7 +20,7 @@ func TestRunWithConfig_ModelCatalogMetadata_DoesNotAffectProviderRouting_WithFor
 	// run option bypasses the provider/model catalog gate so we can still verify
 	// provider routing is driven by graph/config, not catalog provider metadata.
 	pinned := filepath.Join(t.TempDir(), "pinned.json")
-	if err := os.WriteFile(pinned, []byte(`{"gpt-5.2":{"litellm_provider":"anthropic","mode":"chat"}}`), 0o644); err != nil {
+	if err := os.WriteFile(pinned, []byte(`{"data":[{"id":"anthropic/gpt-5.2","supported_parameters":[],"context_length":64}]}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

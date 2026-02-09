@@ -81,10 +81,9 @@ func TestRunProviderCapabilityProbe_RespectsParentContextCancel(t *testing.T) {
 func TestRunWithConfig_FailsFast_WhenCLIModelNotInCatalogForProvider(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
@@ -112,30 +111,20 @@ func TestRunWithConfig_FailsFast_WhenCLIModelNotInCatalogForProvider(t *testing.
 func TestRunWithConfig_FailsFast_WhenAPIModelNotInCatalogForProvider(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gpt-5.2": {
-    "litellm_provider": "openai",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "anthropic/claude-opus-4-6"}
+  ]
 }`)
 
-	cfg := &RunConfigFile{Version: 1}
-	cfg.Repo.Path = repo
-	cfg.CXDB.BinaryAddr = "127.0.0.1:1"
-	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:1"
-	cfg.LLM.CLIProfile = "real"
-	cfg.LLM.Providers = map[string]ProviderConfig{
-		"openai": {Backend: BackendAPI},
-	}
-	cfg.ModelDB.LiteLLMCatalogPath = catalog
-	cfg.ModelDB.LiteLLMCatalogUpdatePolicy = "pinned"
-	cfg.Git.RunBranchPrefix = "attractor/run"
-
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"openai": BackendAPI,
+	})
 	dot := singleProviderDot("openai", "gpt-5.3-codex")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-api-fail", LogsRoot: logsRoot})
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-api-fail", LogsRoot: logsRoot, AllowTestShim: true})
 	if err == nil {
 		t.Fatalf("expected preflight error, got nil")
 	}
@@ -152,10 +141,9 @@ func TestRunWithConfig_FailsFast_WhenAPIModelNotInCatalogForProvider(t *testing.
 func TestRunWithConfig_ForceModel_BypassesCatalogGate(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gpt-5.2": {
-    "litellm_provider": "openai",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "openai/gpt-5.2"}
+  ]
 }`)
 
 	cfg := &RunConfigFile{Version: 1}
@@ -192,13 +180,38 @@ func TestRunWithConfig_ForceModel_BypassesCatalogGate(t *testing.T) {
 	}
 }
 
+func TestRunWithConfig_UsesModelFallbackAttributeForCatalogValidation(t *testing.T) {
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
+}`)
+
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"google": BackendCLI,
+	})
+	dot := singleProviderModelAttrDot("google", "gemini-3-pro")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-model-attr-fail", LogsRoot: logsRoot, AllowTestShim: true})
+	if err == nil {
+		t.Fatalf("expected preflight error, got nil")
+	}
+	want := "preflight: llm_provider=google backend=cli model=gemini-3-pro not present in run catalog"
+	if !strings.Contains(err.Error(), want) {
+		t.Fatalf("expected preflight error containing %q, got %v", want, err)
+	}
+}
+
 func TestRunWithConfig_AllowsCLIModel_WhenCatalogHasProviderMatch(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLI(t, "gemini", "Usage: gemini -p --output-format stream-json --yolo --approval-mode", 0)
 
@@ -227,10 +240,9 @@ func TestRunWithConfig_AllowsCLIModel_WhenCatalogHasProviderMatch(t *testing.T) 
 func TestRunWithConfig_PreflightFails_WhenGoogleModelProbeReportsModelNotFound(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLIWithModelProbeFailure(
 		t,
@@ -267,10 +279,9 @@ func TestRunWithConfig_PreflightFails_WhenGoogleModelProbeReportsModelNotFound(t
 func TestRunWithConfig_PreflightModelProbeFailure_WarnsWhenNonStrict(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLIWithModelProbeFailure(
 		t,
@@ -307,10 +318,9 @@ func TestRunWithConfig_PreflightModelProbeFailure_WarnsWhenNonStrict(t *testing.
 func TestRunWithConfig_PreflightFails_WhenProviderCLIBinaryMissing(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	missingGemini := filepath.Join(t.TempDir(), "does-not-exist")
 
@@ -339,10 +349,9 @@ func TestRunWithConfig_PreflightFails_WhenProviderCLIBinaryMissing(t *testing.T)
 func TestRunWithConfig_PreflightFails_WhenAnthropicCapabilityMissingVerbose(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "anthropic/claude-sonnet-4-20250514": {
-    "litellm_provider": "anthropic",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "anthropic/claude-sonnet-4-20250514"}
+  ]
 }`)
 	claudeCLI := writeFakeCLI(t, "claude", "Usage: claude -p --output-format stream-json --model MODEL", 0)
 
@@ -374,10 +383,9 @@ func TestRunWithConfig_PreflightFails_WhenAnthropicCapabilityMissingVerbose(t *t
 func TestRunWithConfig_WritesPreflightReport_Always(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLI(t, "gemini", "Usage: gemini -p --output-format stream-json --yolo", 0)
 
@@ -403,10 +411,9 @@ func TestRunWithConfig_WritesPreflightReport_Always(t *testing.T) {
 func TestRunWithConfig_PreflightCapabilityProbeFailure_WarnsWhenNonStrict(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLI(t, "gemini", "probe error", 2)
 
@@ -435,10 +442,9 @@ func TestRunWithConfig_PreflightCapabilityProbeFailure_WarnsWhenNonStrict(t *tes
 func TestRunWithConfig_PreflightCapabilityProbeFailure_FailsWhenStrict(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLI(t, "gemini", "probe error", 2)
 	t.Setenv("KILROY_PREFLIGHT_STRICT_CAPABILITIES", "1")
@@ -468,10 +474,9 @@ func TestRunWithConfig_PreflightCapabilityProbeFailure_FailsWhenStrict(t *testin
 func TestPreflightReport_IncludesCLIProfileAndSource(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "gemini/gemini-3-pro-preview": {
-    "litellm_provider": "google",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "google/gemini-3-pro-preview"}
+  ]
 }`)
 	geminiCLI := writeFakeCLI(t, "gemini", "Usage: gemini -p --output-format stream-json --yolo --approval-mode", 0)
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
@@ -515,6 +520,18 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   a [shape=box, llm_provider="%s", llm_model="%s", prompt="x"]
+  exit [shape=Msquare]
+  start -> a -> exit
+}
+`, provider, modelID))
+}
+
+func singleProviderModelAttrDot(provider, modelID string) []byte {
+	return []byte(fmt.Sprintf(`
+digraph G {
+  graph [goal="test"]
+  start [shape=Mdiamond]
+  a [shape=box, llm_provider="%s", model="%s", prompt="x"]
   exit [shape=Msquare]
   start -> a -> exit
 }

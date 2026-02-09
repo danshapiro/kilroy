@@ -91,11 +91,11 @@ echo "bench_out=$OUT_DIR"
 # Build Kilroy once.
 go build -o ./kilroy ./cmd/kilroy
 
-# Default pinned LiteLLM catalog shipped in-repo.
-PINNED_CATALOG_DEFAULT="$PWD/internal/attractor/modeldb/pinned/model_prices_and_context_window.json"
-PINNED_CATALOG="${KILROY_BENCH_LITELLM_CATALOG_PATH:-$PINNED_CATALOG_DEFAULT}"
+# Default pinned OpenRouter model info snapshot shipped in-repo.
+PINNED_CATALOG_DEFAULT="$PWD/internal/attractor/modeldb/pinned/openrouter_models.json"
+PINNED_CATALOG="${KILROY_BENCH_OPENROUTER_MODEL_INFO_PATH:-${KILROY_BENCH_LITELLM_CATALOG_PATH:-$PINNED_CATALOG_DEFAULT}}"
 if [[ ! -f "$PINNED_CATALOG" ]]; then
-  echo "missing LiteLLM pinned catalog: $PINNED_CATALOG" >&2
+  echo "missing OpenRouter pinned model info snapshot: $PINNED_CATALOG" >&2
   exit 1
 fi
 
@@ -244,8 +244,8 @@ cxdb:
   binary_addr: $CXDB_BIN_ADDR
   http_base_url: $CXDB_URL
 modeldb:
-  litellm_catalog_path: $PINNED_CATALOG
-  litellm_catalog_update_policy: ${KILROY_BENCH_LITELLM_UPDATE_POLICY:-pinned}
+  openrouter_model_info_path: $PINNED_CATALOG
+  openrouter_model_info_update_policy: ${KILROY_BENCH_OPENROUTER_UPDATE_POLICY:-${KILROY_BENCH_LITELLM_UPDATE_POLICY:-pinned}}
 git:
   run_branch_prefix: attractor/run
   commit_per_node: true

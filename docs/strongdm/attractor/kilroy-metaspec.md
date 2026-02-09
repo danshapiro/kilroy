@@ -59,16 +59,16 @@ We are implementing StrongDM’s Attractor in Go inside this repo, with these to
 
 - If a node resolves to provider `P` and the run config does not specify `backend(P)`, the run **MUST fail fast** with a configuration error.
 
-### 3.3 Model Metadata Source (LiteLLM Catalog)
+### 3.3 Model Metadata Source (OpenRouter Model Info)
 
-- Model metadata (model IDs, context windows, pricing estimates, capability flags) MUST come from the LiteLLM-maintained model catalog JSON.
+- Model metadata (model IDs, context windows, pricing estimates, capability flags) MUST come from OpenRouter `/api/v1/models`.
 - This catalog is **metadata-only**. It MUST NOT be used as the call path to providers.
 
 #### 3.3.1 Catalog Pinning and Updates
 
-- The repository SHOULD include a pinned snapshot of the LiteLLM catalog (checked into git).
+- The repository SHOULD include a pinned snapshot of OpenRouter model info (checked into git).
 - Runs MUST be reproducible. To ensure repeatability while still benefiting from new models and pricing updates, Kilroy uses a **per-run snapshot**:
-  - On run start, the engine MUST materialize the effective catalog to `{logs_root}/modeldb/litellm_catalog.json`.
+  - On run start, the engine MUST materialize the effective catalog to `{logs_root}/modeldb/openrouter_models.json`.
   - Resume MUST use the run’s snapshotted catalog (not whatever happens to be on disk now).
   - If the effective catalog differs from the repo-pinned snapshot, this MUST be recorded as a warning (not a fatal error).
 
@@ -161,13 +161,15 @@ llm:
       backend: api   # api|cli
 
 modeldb:
-  # Local path to the pinned LiteLLM model catalog JSON.
+  # Local path to the pinned OpenRouter model info JSON.
   # May be updated out-of-band; runtime uses whatever is on disk.
-  litellm_catalog_path: /abs/path/to/model_prices_and_context_window.json
+  openrouter_model_info_path: /abs/path/to/openrouter_models.json
   # v1 compromise: prefer fresh metadata but keep runs repeatable.
-  litellm_catalog_update_policy: on_run_start   # pinned|on_run_start
-  litellm_catalog_url: https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
-  litellm_catalog_fetch_timeout_ms: 5000
+  openrouter_model_info_update_policy: on_run_start   # pinned|on_run_start
+  openrouter_model_info_url: https://openrouter.ai/api/v1/models
+  openrouter_model_info_fetch_timeout_ms: 5000
+
+# Deprecated compatibility aliases (`litellm_catalog_*`) are accepted for one release.
 
 git:
   require_clean: true

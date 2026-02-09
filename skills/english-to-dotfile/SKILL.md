@@ -133,21 +133,21 @@ Fetch:
 
 Extract the "Today's Models" list and treat it as the source of **current** model lines for each provider (including any consensus entries). Also extract any per-model parameter guidance (the Weather Report "Parameters" column) to inform thinking.
 
-#### Step 0.4: Fetch Token Costs (Latest LiteLLM Catalog)
+#### Step 0.4: Fetch Token Costs (Latest OpenRouter Model Info)
 
 Fetch:
-- `curl -fsSL https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`
+- `curl -fsSL https://openrouter.ai/api/v1/models`
 
-Use the LiteLLM catalog to verify model IDs and look up costs. However: **if the user explicitly requests a model that is not in the catalog, always obey the user.** New models often appear on provider APIs before LiteLLM adds them. The catalog is a reference, not a gatekeeper. Only reject model IDs that you yourself are inventing without user or Weather Report backing.
+Use OpenRouter model info to verify model IDs and look up costs. However: **if the user explicitly requests a model that is not present, always obey the user.** New models often appear before aggregators catch up. This source is a reference, not a gatekeeper. Only reject model IDs that you yourself are inventing without user or Weather Report backing.
 
 #### Step 0.5: Resolve Weather Report Names to Real Model IDs (Best-Effort, Verified)
 
-Weather Report names may not exactly match LiteLLM keys.
+Weather Report names may not exactly match OpenRouter model IDs.
 
 For each Weather Report model name:
-- Find a matching LiteLLM key by searching the catalog (best-effort string normalization is OK).
+- Find a matching OpenRouter `id` by searching model info (best-effort string normalization is OK).
 - Prefer exact/near-exact matches and "latest" variants when present.
-- If a Weather Report model has no catalog match, **use it anyway** — the Weather Report reflects what is actually running in production today. New models routinely appear before LiteLLM catalogs them.
+- If a Weather Report model has no match, **use it anyway** — the Weather Report reflects what is actually running in production today. New models routinely appear before aggregators catalog them.
 
 #### Step 0.6: Define "Current" and "Cheapest (Current-Only)"
 

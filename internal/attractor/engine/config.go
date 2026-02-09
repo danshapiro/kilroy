@@ -51,6 +51,12 @@ type RunConfigFile struct {
 	} `json:"llm" yaml:"llm"`
 
 	ModelDB struct {
+		OpenRouterModelInfoPath           string `json:"openrouter_model_info_path" yaml:"openrouter_model_info_path"`
+		OpenRouterModelInfoUpdatePolicy   string `json:"openrouter_model_info_update_policy" yaml:"openrouter_model_info_update_policy"`
+		OpenRouterModelInfoURL            string `json:"openrouter_model_info_url" yaml:"openrouter_model_info_url"`
+		OpenRouterModelInfoFetchTimeoutMS int    `json:"openrouter_model_info_fetch_timeout_ms" yaml:"openrouter_model_info_fetch_timeout_ms"`
+
+		// Deprecated compatibility aliases.
 		LiteLLMCatalogPath           string `json:"litellm_catalog_path" yaml:"litellm_catalog_path"`
 		LiteLLMCatalogUpdatePolicy   string `json:"litellm_catalog_update_policy" yaml:"litellm_catalog_update_policy"`
 		LiteLLMCatalogURL            string `json:"litellm_catalog_url" yaml:"litellm_catalog_url"`
@@ -114,14 +120,44 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	} else {
 		cfg.LLM.CLIProfile = strings.ToLower(strings.TrimSpace(cfg.LLM.CLIProfile))
 	}
-	if strings.TrimSpace(cfg.ModelDB.LiteLLMCatalogUpdatePolicy) == "" {
-		cfg.ModelDB.LiteLLMCatalogUpdatePolicy = "on_run_start"
+	cfg.ModelDB.OpenRouterModelInfoPath = strings.TrimSpace(firstNonEmpty(
+		cfg.ModelDB.OpenRouterModelInfoPath,
+		cfg.ModelDB.LiteLLMCatalogPath,
+	))
+	cfg.ModelDB.LiteLLMCatalogPath = strings.TrimSpace(firstNonEmpty(
+		cfg.ModelDB.LiteLLMCatalogPath,
+		cfg.ModelDB.OpenRouterModelInfoPath,
+	))
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = strings.TrimSpace(firstNonEmpty(
+		cfg.ModelDB.OpenRouterModelInfoUpdatePolicy,
+		cfg.ModelDB.LiteLLMCatalogUpdatePolicy,
+	))
+	if cfg.ModelDB.OpenRouterModelInfoUpdatePolicy == "" {
+		cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "on_run_start"
 	}
-	if strings.TrimSpace(cfg.ModelDB.LiteLLMCatalogURL) == "" {
-		cfg.ModelDB.LiteLLMCatalogURL = "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json"
+	cfg.ModelDB.LiteLLMCatalogUpdatePolicy = strings.TrimSpace(firstNonEmpty(
+		cfg.ModelDB.LiteLLMCatalogUpdatePolicy,
+		cfg.ModelDB.OpenRouterModelInfoUpdatePolicy,
+	))
+	cfg.ModelDB.OpenRouterModelInfoURL = strings.TrimSpace(firstNonEmpty(
+		cfg.ModelDB.OpenRouterModelInfoURL,
+		cfg.ModelDB.LiteLLMCatalogURL,
+	))
+	if cfg.ModelDB.OpenRouterModelInfoURL == "" {
+		cfg.ModelDB.OpenRouterModelInfoURL = "https://openrouter.ai/api/v1/models"
+	}
+	cfg.ModelDB.LiteLLMCatalogURL = strings.TrimSpace(firstNonEmpty(
+		cfg.ModelDB.LiteLLMCatalogURL,
+		cfg.ModelDB.OpenRouterModelInfoURL,
+	))
+	if cfg.ModelDB.OpenRouterModelInfoFetchTimeoutMS == 0 {
+		cfg.ModelDB.OpenRouterModelInfoFetchTimeoutMS = cfg.ModelDB.LiteLLMCatalogFetchTimeoutMS
+	}
+	if cfg.ModelDB.OpenRouterModelInfoFetchTimeoutMS == 0 {
+		cfg.ModelDB.OpenRouterModelInfoFetchTimeoutMS = 5000
 	}
 	if cfg.ModelDB.LiteLLMCatalogFetchTimeoutMS == 0 {
-		cfg.ModelDB.LiteLLMCatalogFetchTimeoutMS = 5000
+		cfg.ModelDB.LiteLLMCatalogFetchTimeoutMS = cfg.ModelDB.OpenRouterModelInfoFetchTimeoutMS
 	}
 	if cfg.CXDB.Autostart.WaitTimeoutMS == 0 {
 		cfg.CXDB.Autostart.WaitTimeoutMS = 20000
@@ -156,17 +192,17 @@ func validateConfig(cfg *RunConfigFile) error {
 	if cfg.CXDB.Autostart.Enabled && len(cfg.CXDB.Autostart.Command) == 0 {
 		return fmt.Errorf("cxdb.autostart.command is required when cxdb.autostart.enabled=true")
 	}
-	if strings.TrimSpace(cfg.ModelDB.LiteLLMCatalogPath) == "" {
-		return fmt.Errorf("modeldb.litellm_catalog_path is required")
+	if strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoPath) == "" {
+		return fmt.Errorf("modeldb.openrouter_model_info_path is required (deprecated alias: modeldb.litellm_catalog_path)")
 	}
-	switch strings.ToLower(strings.TrimSpace(cfg.ModelDB.LiteLLMCatalogUpdatePolicy)) {
+	switch strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)) {
 	case "pinned", "on_run_start":
 		// ok
 	default:
-		return fmt.Errorf("invalid modeldb.litellm_catalog_update_policy: %q (want pinned|on_run_start)", cfg.ModelDB.LiteLLMCatalogUpdatePolicy)
+		return fmt.Errorf("invalid modeldb.openrouter_model_info_update_policy: %q (want pinned|on_run_start)", cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)
 	}
-	if strings.ToLower(strings.TrimSpace(cfg.ModelDB.LiteLLMCatalogUpdatePolicy)) == "on_run_start" && strings.TrimSpace(cfg.ModelDB.LiteLLMCatalogURL) == "" {
-		return fmt.Errorf("modeldb.litellm_catalog_url is required when update_policy=on_run_start")
+	if strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)) == "on_run_start" && strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoURL) == "" {
+		return fmt.Errorf("modeldb.openrouter_model_info_url is required when update_policy=on_run_start")
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.LLM.CLIProfile)) {
 	case "real", "test_shim":
@@ -214,4 +250,13 @@ func trimNonEmpty(parts []string) []string {
 		}
 	}
 	return out
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
 }

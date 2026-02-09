@@ -893,6 +893,10 @@ func (e *Engine) writeManifest(baseSHA string) error {
 			return filepath.Join(e.LogsRoot, "run_config.json")
 		}(),
 		"modeldb": map[string]any{
+			"openrouter_model_info_path":   e.ModelCatalogPath,
+			"openrouter_model_info_sha256": e.ModelCatalogSHA,
+			"openrouter_model_info_source": e.ModelCatalogSource,
+			// Deprecated compatibility keys for one release.
 			"litellm_catalog_path":   e.ModelCatalogPath,
 			"litellm_catalog_sha256": e.ModelCatalogSHA,
 			"litellm_catalog_source": e.ModelCatalogSource,

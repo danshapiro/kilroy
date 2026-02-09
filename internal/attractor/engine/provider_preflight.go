@@ -310,10 +310,7 @@ func usedCLIModelsForProvider(g *model.Graph, cfg *RunConfigFile, provider strin
 		if backendFor(cfg, nodeProvider) != BackendCLI {
 			continue
 		}
-		modelID := strings.TrimSpace(n.Attr("llm_model", ""))
-		if modelID == "" {
-			modelID = strings.TrimSpace(n.Attr("model", ""))
-		}
+		modelID := modelIDForNode(n)
 		if modelID == "" || seen[modelID] {
 			continue
 		}

@@ -14,10 +14,9 @@ func TestAnthropicCLIContract_InvocationArtifactIncludesStreamJSONAndVerbose(t *
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
 	catalog := writeCatalogForPreflight(t, `{
-  "anthropic/claude-sonnet-4-20250514": {
-    "litellm_provider": "anthropic",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "anthropic/claude-sonnet-4-20250514"}
+  ]
 }`)
 	cxdbSrv := newCXDBTestServer(t)
 
@@ -89,10 +88,9 @@ echo '{"type":"done","text":"ok"}'
 func TestAnthropicCLIContract_PreflightFailsWhenVerboseCapabilityMissing(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
-  "anthropic/claude-sonnet-4-20250514": {
-    "litellm_provider": "anthropic",
-    "mode": "chat"
-  }
+  "data": [
+    {"id": "anthropic/claude-sonnet-4-20250514"}
+  ]
 }`)
 	claudeCLI := writeFakeCLI(t, "claude", "Usage: claude -p --output-format stream-json --model MODEL", 0)
 

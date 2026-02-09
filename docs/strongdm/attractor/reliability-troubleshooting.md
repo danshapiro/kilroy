@@ -28,10 +28,10 @@ cat > "$RUN_ROOT/run_config.json" <<JSON
     }
   },
   "modeldb": {
-    "litellm_catalog_path": "$RUN_ROOT/model_catalog.json",
-    "litellm_catalog_update_policy": "pinned",
-    "litellm_catalog_url": "https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json",
-    "litellm_catalog_fetch_timeout_ms": 5000
+    "openrouter_model_info_path": "$RUN_ROOT/openrouter_models.json",
+    "openrouter_model_info_update_policy": "pinned",
+    "openrouter_model_info_url": "https://openrouter.ai/api/v1/models",
+    "openrouter_model_info_fetch_timeout_ms": 5000
   },
   "git": {
     "require_clean": true,

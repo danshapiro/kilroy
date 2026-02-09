@@ -130,10 +130,10 @@ llm:
       backend: api
 
 modeldb:
-  litellm_catalog_path: /absolute/path/to/kilroy/internal/attractor/modeldb/pinned/model_prices_and_context_window.json
-  litellm_catalog_update_policy: on_run_start
-  litellm_catalog_url: https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
-  litellm_catalog_fetch_timeout_ms: 5000
+  openrouter_model_info_path: /absolute/path/to/kilroy/internal/attractor/modeldb/pinned/openrouter_models.json
+  openrouter_model_info_update_policy: on_run_start
+  openrouter_model_info_url: https://openrouter.ai/api/v1/models
+  openrouter_model_info_fetch_timeout_ms: 5000
 
 git:
   require_clean: true
@@ -144,7 +144,8 @@ git:
 Important:
 
 - Any provider referenced by a node's `llm_provider` must have `llm.providers.<provider>.backend` configured.
-- `cxdb.binary_addr`, `cxdb.http_base_url`, and `modeldb.litellm_catalog_path` are required.
+- `cxdb.binary_addr`, `cxdb.http_base_url`, and `modeldb.openrouter_model_info_path` are required.
+- Deprecated compatibility: `modeldb.litellm_catalog_*` keys are still accepted for one release.
 - Config can be YAML or JSON.
 
 ### 5) Run the pipeline
@@ -230,7 +231,7 @@ Typical run-level artifacts under `{logs_root}`:
 - `checkpoint.json`
 - `final.json`
 - `run_config.json`
-- `modeldb/litellm_catalog.json`
+- `modeldb/openrouter_models.json`
 - `run.tgz` (run archive excluding `worktree/`)
 - `worktree/` (isolated execution worktree)
 

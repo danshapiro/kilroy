@@ -27,6 +27,11 @@ type manifest struct {
 	ForceModels   map[string]string `json:"force_models"`
 
 	ModelDB struct {
+		OpenRouterModelInfoPath   string `json:"openrouter_model_info_path"`
+		OpenRouterModelInfoSHA256 string `json:"openrouter_model_info_sha256"`
+		OpenRouterModelInfoSource string `json:"openrouter_model_info_source"`
+
+		// Deprecated compatibility fields.
 		LiteLLMCatalogPath   string `json:"litellm_catalog_path"`
 		LiteLLMCatalogSHA256 string `json:"litellm_catalog_sha256"`
 		LiteLLMCatalogSource string `json:"litellm_catalog_source"`
@@ -132,18 +137,25 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	// If we have a run config, resume with the real codergen router and CXDB sink.
 	var backend CodergenBackend = &SimulatedCodergenBackend{}
 	var sink *CXDBSink
-	var catalog *modeldb.LiteLLMCatalog
+	var catalog *modeldb.Catalog
 	var startup *CXDBStartupInfo
 	if cfg != nil {
-		// Resume MUST use the run's snapshotted catalog (metaspec). Default location is logs_root/modeldb/litellm_catalog.json.
-		snapshotPath := strings.TrimSpace(m.ModelDB.LiteLLMCatalogPath)
-		if snapshotPath == "" {
-			snapshotPath = filepath.Join(logsRoot, "modeldb", "litellm_catalog.json")
+		// Resume MUST use the run's snapshotted catalog.
+		// Path selection order:
+		// 1) manifest.modeldb.openrouter_model_info_path
+		// 2) logs_root/modeldb/openrouter_models.json
+		// 3) manifest.modeldb.litellm_catalog_path (legacy)
+		// 4) logs_root/modeldb/litellm_catalog.json (legacy)
+		snapshotPath := firstExistingPath(
+			strings.TrimSpace(m.ModelDB.OpenRouterModelInfoPath),
+			filepath.Join(logsRoot, "modeldb", "openrouter_models.json"),
+			strings.TrimSpace(m.ModelDB.LiteLLMCatalogPath),
+			filepath.Join(logsRoot, "modeldb", "litellm_catalog.json"),
+		)
+		if strings.TrimSpace(snapshotPath) == "" {
+			return nil, fmt.Errorf("resume: missing per-run model catalog snapshot: %s", filepath.Join(logsRoot, "modeldb", "openrouter_models.json"))
 		}
-		if _, err := os.Stat(snapshotPath); err != nil {
-			return nil, fmt.Errorf("resume: missing per-run model catalog snapshot: %s", snapshotPath)
-		}
-		cat, err := modeldb.LoadLiteLLMCatalog(snapshotPath)
+		cat, err := loadCatalogForRun(snapshotPath)
 		if err != nil {
 			return nil, err
 		}
@@ -216,7 +228,10 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		}
 		return catalog.SHA256
 	}()
-	eng.ModelCatalogSource = m.ModelDB.LiteLLMCatalogSource
+	eng.ModelCatalogSource = firstNonEmpty(
+		m.ModelDB.OpenRouterModelInfoSource,
+		m.ModelDB.LiteLLMCatalogSource,
+	)
 	eng.ModelCatalogPath = func() string {
 		if catalog == nil {
 			return ""
@@ -351,6 +366,19 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		res.CXDBUIURL = strings.TrimSpace(startup.UIURL)
 	}
 	return res, nil
+}
+
+func firstExistingPath(paths ...string) string {
+	for _, p := range paths {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 func loadManifest(path string) (*manifest, error) {

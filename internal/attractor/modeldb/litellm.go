@@ -8,14 +8,20 @@ import (
 	"os"
 )
 
-// LiteLLMCatalog is a metadata-only model catalog loaded from the LiteLLM-maintained JSON file
-// (commonly named model_prices_and_context_window.json).
+// LiteLLMCatalog is a deprecated compatibility alias for legacy call sites that
+// still use LiteLLM naming.
+//
+// Deprecated: use Catalog.
 type LiteLLMCatalog struct {
 	Path   string
 	SHA256 string
 	Models map[string]LiteLLMModelEntry
 }
 
+// LiteLLMModelEntry is a deprecated compatibility shape used by legacy call
+// sites. New code should use ModelEntry.
+//
+// Deprecated: use ModelEntry.
 type LiteLLMModelEntry struct {
 	LiteLLMProvider string `json:"litellm_provider"`
 	Mode            string `json:"mode"`
@@ -31,7 +37,54 @@ type LiteLLMModelEntry struct {
 	DeprecationDate string `json:"deprecation_date"`
 }
 
+// LoadLiteLLMCatalog is a deprecated compatibility wrapper.
+//
+// Deprecated: use LoadCatalogFromOpenRouterJSON.
+// TODO(kilroy): remove LiteLLM wrappers after 2026-06-30.
 func LoadLiteLLMCatalog(path string) (*LiteLLMCatalog, error) {
+	// Prefer OpenRouter model info payloads.
+	if cat, err := LoadCatalogFromOpenRouterJSON(path); err == nil {
+		return catalogToLiteLLMCompat(cat), nil
+	}
+	// Temporary fallback for older pinned fixtures that still use the historical
+	// LiteLLM object-map payload format.
+	return LoadLegacyLiteLLMCatalog(path)
+}
+
+func catalogToLiteLLMCompat(cat *Catalog) *LiteLLMCatalog {
+	if cat == nil {
+		return nil
+	}
+	out := &LiteLLMCatalog{
+		Path:   cat.Path,
+		SHA256: cat.SHA256,
+		Models: make(map[string]LiteLLMModelEntry, len(cat.Models)),
+	}
+	for id, m := range cat.Models {
+		entry := LiteLLMModelEntry{
+			LiteLLMProvider:    m.Provider,
+			Mode:               m.Mode,
+			MaxInputTokens:     m.ContextWindow,
+			InputCostPerToken:  m.InputCostPerToken,
+			OutputCostPerToken: m.OutputCostPerToken,
+		}
+		if m.MaxOutputTokens != nil {
+			entry.MaxOutputTokens = *m.MaxOutputTokens
+		}
+		out.Models[id] = entry
+	}
+	return out
+}
+
+// LoadLegacyLiteLLMCatalog loads the historical LiteLLM object-map payload
+// shape directly.
+//
+// Deprecated: temporary compatibility shim for legacy pinned fixtures.
+func LoadLegacyLiteLLMCatalog(path string) (*LiteLLMCatalog, error) {
+	return loadLegacyLiteLLMCatalog(path)
+}
+
+func loadLegacyLiteLLMCatalog(path string) (*LiteLLMCatalog, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

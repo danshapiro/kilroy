@@ -6,7 +6,7 @@
 # skill when generating .dot pipeline files.
 #
 # The skill reads this file at the start of Phase 0B (model selection),
-# BEFORE fetching the Weather Report or LiteLLM catalog. Values here act
+# BEFORE fetching the Weather Report or OpenRouter model info. Values here act
 # as defaults that the Weather Report and user overrides can supersede.
 #
 # To lock a choice, set the value. To let the skill pick dynamically,
@@ -19,7 +19,7 @@
 #
 # Each pipeline node has a "class" that determines which model runs it.
 # Set a model ID here to lock that role to a specific model. Leave blank
-# to let the skill choose from the Weather Report + LiteLLM catalog.
+# to let the skill choose from the Weather Report + OpenRouter model info.
 #
 # Roles:
 #   default — general implementation nodes (no class attribute)

@@ -82,14 +82,14 @@ Required fields:
 - `repo.path`
 - `cxdb.binary_addr`
 - `cxdb.http_base_url`
-- `modeldb.litellm_catalog_path`
+- `modeldb.openrouter_model_info_path`
 
 Defaults:
 
 - `git.run_branch_prefix`: `attractor/run`
-- `modeldb.litellm_catalog_update_policy`: `on_run_start`
-- `modeldb.litellm_catalog_url`: `https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json`
-- `modeldb.litellm_catalog_fetch_timeout_ms`: `5000`
+- `modeldb.openrouter_model_info_update_policy`: `on_run_start`
+- `modeldb.openrouter_model_info_url`: `https://openrouter.ai/api/v1/models`
+- `modeldb.openrouter_model_info_fetch_timeout_ms`: `5000`
 
 Minimal example:
 
@@ -113,10 +113,10 @@ llm:
       backend: api
 
 modeldb:
-  litellm_catalog_path: /absolute/path/to/model_prices_and_context_window.json
-  litellm_catalog_update_policy: on_run_start
-  litellm_catalog_url: https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json
-  litellm_catalog_fetch_timeout_ms: 5000
+  openrouter_model_info_path: /absolute/path/to/openrouter_models.json
+  openrouter_model_info_update_policy: on_run_start
+  openrouter_model_info_url: https://openrouter.ai/api/v1/models
+  openrouter_model_info_fetch_timeout_ms: 5000
 
 git:
   require_clean: true
@@ -174,7 +174,7 @@ Run-level (`{logs_root}`) commonly includes:
 - `checkpoint.json`
 - `final.json`
 - `run_config.json`
-- `modeldb/litellm_catalog.json`
+- `modeldb/openrouter_models.json`
 - `run.tgz`
 - `worktree/`
 
@@ -229,7 +229,7 @@ On resume, Kilroy:
 - Loads `manifest.json`, `checkpoint.json`, and `graph.dot`.
 - Recreates run branch/worktree at checkpoint commit.
 - Requires clean repo before continuing.
-- Uses the run's snapshotted model catalog from `logs_root/modeldb/litellm_catalog.json`.
+- Uses the run's snapshotted model catalog from `logs_root/modeldb/openrouter_models.json`.
 
 ## Frequent Failures
 

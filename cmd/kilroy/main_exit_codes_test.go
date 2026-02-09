@@ -361,14 +361,15 @@ func initTestRepo(t *testing.T) string {
 func writePinnedCatalog(t *testing.T) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "model_prices_and_context_window.json")
-	// Minimal LiteLLM catalog shape (object map).
+	// Minimal OpenRouter model info payload shape.
 	_ = os.WriteFile(path, []byte(`{
-  "gpt-5.2": {
-    "litellm_provider": "openai",
-    "mode": "chat",
-    "max_input_tokens": 1000,
-    "max_output_tokens": 1000
-  }
+  "data": [
+    {
+      "id": "openai/gpt-5.2",
+      "context_length": 1000,
+      "top_provider": {"max_completion_tokens": 1000}
+    }
+  ]
 }`), 0o644)
 	return path
 }

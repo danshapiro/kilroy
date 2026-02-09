@@ -18,6 +18,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
+	applyConfigDefaults(cfg)
 
 	// Prepare graph (parse + transforms + validate).
 	g, _, err := Prepare(dotSource)
@@ -86,19 +87,19 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		return nil, err
 	}
 
-	// Resolve + snapshot the LiteLLM model catalog for this run (repeatability).
-	resolved, err := modeldb.ResolveLiteLLMCatalog(
+	// Resolve + snapshot the model catalog for this run (repeatability).
+	resolved, err := modeldb.ResolveModelCatalog(
 		ctx,
-		cfg.ModelDB.LiteLLMCatalogPath,
+		cfg.ModelDB.OpenRouterModelInfoPath,
 		opts.LogsRoot,
-		modeldb.CatalogUpdatePolicy(strings.ToLower(strings.TrimSpace(cfg.ModelDB.LiteLLMCatalogUpdatePolicy))),
-		cfg.ModelDB.LiteLLMCatalogURL,
-		time.Duration(cfg.ModelDB.LiteLLMCatalogFetchTimeoutMS)*time.Millisecond,
+		modeldb.CatalogUpdatePolicy(strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy))),
+		cfg.ModelDB.OpenRouterModelInfoURL,
+		time.Duration(cfg.ModelDB.OpenRouterModelInfoFetchTimeoutMS)*time.Millisecond,
 	)
 	if err != nil {
 		return nil, err
 	}
-	catalog, err := modeldb.LoadLiteLLMCatalog(resolved.SnapshotPath)
+	catalog, err := loadCatalogForRun(resolved.SnapshotPath)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +195,7 @@ func backendFor(cfg *RunConfigFile, provider string) BackendKind {
 	return ""
 }
 
-func validateProviderModelPairs(g *model.Graph, cfg *RunConfigFile, catalog *modeldb.LiteLLMCatalog, opts RunOptions) error {
+func validateProviderModelPairs(g *model.Graph, cfg *RunConfigFile, catalog *modeldb.Catalog, opts RunOptions) error {
 	if g == nil || cfg == nil || catalog == nil {
 		return nil
 	}
@@ -203,11 +204,7 @@ func validateProviderModelPairs(g *model.Graph, cfg *RunConfigFile, catalog *mod
 			continue
 		}
 		provider := normalizeProviderKey(n.Attr("llm_provider", ""))
-		modelID := strings.TrimSpace(n.Attr("llm_model", ""))
-		if modelID == "" {
-			// Best-effort compatibility with stylesheet examples that use "model".
-			modelID = strings.TrimSpace(n.Attr("model", ""))
-		}
+		modelID := modelIDForNode(n)
 		if provider == "" || modelID == "" {
 			continue
 		}
@@ -218,11 +215,90 @@ func validateProviderModelPairs(g *model.Graph, cfg *RunConfigFile, catalog *mod
 		if _, forced := forceModelForProvider(opts.ForceModels, provider); forced {
 			continue
 		}
-		if !catalogHasProviderModel(catalog, provider, modelID) {
+		if !modeldb.CatalogHasProviderModel(catalog, provider, modelID) {
 			return fmt.Errorf("preflight: llm_provider=%s backend=%s model=%s not present in run catalog", provider, backend, modelID)
 		}
 	}
 	return nil
+}
+
+func loadCatalogForRun(path string) (*modeldb.Catalog, error) {
+	cat, err := modeldb.LoadCatalogFromOpenRouterJSON(path)
+	if err == nil {
+		return cat, nil
+	}
+	legacy, legacyErr := modeldb.LoadLegacyLiteLLMCatalog(path)
+	if legacyErr != nil {
+		return nil, fmt.Errorf("load model catalog snapshot %q failed (openrouter=%v, litellm=%v)", path, err, legacyErr)
+	}
+	return catalogFromLiteLLM(legacy), nil
+}
+
+func modelIDForNode(n *model.Node) string {
+	if n == nil {
+		return ""
+	}
+	modelID := strings.TrimSpace(n.Attr("llm_model", ""))
+	if modelID == "" {
+		// Best-effort compatibility with stylesheet examples that use "model".
+		modelID = strings.TrimSpace(n.Attr("model", ""))
+	}
+	return modelID
+}
+
+func catalogFromLiteLLM(legacy *modeldb.LiteLLMCatalog) *modeldb.Catalog {
+	if legacy == nil {
+		return nil
+	}
+	out := &modeldb.Catalog{
+		Path:   legacy.Path,
+		SHA256: legacy.SHA256,
+		Models: make(map[string]modeldb.ModelEntry, len(legacy.Models)),
+	}
+	for id, m := range legacy.Models {
+		ctx := parseCatalogInt(m.MaxInputTokens)
+		if ctx == 0 {
+			ctx = parseCatalogInt(m.MaxTokens)
+		}
+		maxOutVal := parseCatalogInt(m.MaxOutputTokens)
+		if maxOutVal == 0 {
+			maxOutVal = parseCatalogInt(m.MaxTokens)
+		}
+		var maxOut *int
+		if maxOutVal > 0 {
+			v := maxOutVal
+			maxOut = &v
+		}
+		out.Models[id] = modeldb.ModelEntry{
+			Provider:           m.LiteLLMProvider,
+			Mode:               m.Mode,
+			ContextWindow:      ctx,
+			MaxOutputTokens:    maxOut,
+			InputCostPerToken:  m.InputCostPerToken,
+			OutputCostPerToken: m.OutputCostPerToken,
+		}
+	}
+	return out
+}
+
+func parseCatalogInt(v any) int {
+	switch x := v.(type) {
+	case int:
+		return x
+	case int32:
+		return int(x)
+	case int64:
+		return int(x)
+	case float32:
+		return int(x)
+	case float64:
+		return int(x)
+	case string:
+		n, _ := strconv.Atoi(strings.TrimSpace(x))
+		return n
+	default:
+		return 0
+	}
 }
 
 func createContextWithFallback(ctx context.Context, client *cxdb.Client, bin *cxdb.BinaryClient) (cxdb.ContextInfo, error) {
