@@ -200,13 +200,14 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		env := agent.NewLocalExecutionEnvironment(execCtx.WorktreeDir)
 		text, used, err := r.withFailoverText(ctx, execCtx, node, client, provider, modelID, func(prov string, mid string) (string, error) {
 			var profile agent.ProviderProfile
+			var profileErr error
 			if rt, ok := r.providerRuntimes[normalizeProviderKey(prov)]; ok {
-				profile, err = profileForRuntimeProvider(rt, mid)
+				profile, profileErr = profileForRuntimeProvider(rt, mid)
 			} else {
-				profile, err = profileForProvider(prov, mid)
+				profile, profileErr = profileForProvider(prov, mid)
 			}
-			if err != nil {
-				return "", err
+			if profileErr != nil {
+				return "", profileErr
 			}
 			sessCfg := agent.SessionConfig{}
 			if reasoning != "" {

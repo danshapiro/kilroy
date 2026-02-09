@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/strongdm/kilroy/internal/llm"
 )
@@ -69,6 +70,72 @@ func TestAdapter_Stream_EmitsFinishEvent(t *testing.T) {
 	}
 	if !sawFinish {
 		t.Fatalf("expected finish event")
+	}
+}
+
+func TestAdapter_Stream_MapsToolCallDeltasToEventsAndFinalResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"id\":\"c3\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"REA\"}}]},\"finish_reason\":null}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"id\":\"c3\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"arguments\":\"DME.md\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}],\"usage\":{\"prompt_tokens\":2,\"completion_tokens\":4,\"total_tokens\":6}}\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	a := NewAdapter(Config{Provider: "zai", APIKey: "k", BaseURL: srv.URL})
+	stream, err := a.Stream(context.Background(), llm.Request{
+		Provider: "zai",
+		Model:    "glm-4.7",
+		Messages: []llm.Message{llm.User("hi")},
+		Tools: []llm.ToolDefinition{{
+			Name:       "read_file",
+			Parameters: map[string]any{"type": "object"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+
+	var (
+		sawStart   bool
+		sawDelta   bool
+		sawEnd     bool
+		finishResp *llm.Response
+	)
+	for ev := range stream.Events() {
+		switch ev.Type {
+		case llm.StreamEventToolCallStart:
+			sawStart = true
+		case llm.StreamEventToolCallDelta:
+			sawDelta = true
+		case llm.StreamEventToolCallEnd:
+			sawEnd = true
+			if ev.ToolCall == nil || ev.ToolCall.ID != "call_1" {
+				t.Fatalf("unexpected tool call end payload: %#v", ev.ToolCall)
+			}
+			if got := string(ev.ToolCall.Arguments); got != "{\"path\":\"README.md\"}" {
+				t.Fatalf("tool args mismatch: %q", got)
+			}
+		case llm.StreamEventFinish:
+			finishResp = ev.Response
+		}
+	}
+	if !sawStart || !sawDelta || !sawEnd {
+		t.Fatalf("expected tool start/delta/end events, got start=%v delta=%v end=%v", sawStart, sawDelta, sawEnd)
+	}
+	if finishResp == nil {
+		t.Fatalf("expected finish response payload")
+	}
+	calls := finishResp.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("expected one final tool call, got %d", len(calls))
+	}
+	if calls[0].ID != "call_1" || calls[0].Name != "read_file" {
+		t.Fatalf("unexpected final tool call: %#v", calls[0])
+	}
+	if got := string(calls[0].Arguments); got != "{\"path\":\"README.md\"}" {
+		t.Fatalf("final tool args mismatch: %q", got)
 	}
 }
 
@@ -173,5 +240,31 @@ func TestAdapter_Stream_UsageOnlyChunkPreservesTokenAccounting(t *testing.T) {
 	}
 	if finishUsage.TotalTokens != 12 {
 		t.Fatalf("usage mismatch: %#v", finishUsage)
+	}
+}
+
+func TestWithDefaultRequestDeadline_AddsDeadlineWhenMissing(t *testing.T) {
+	ctx, cancel := withDefaultRequestDeadline(context.Background())
+	defer cancel()
+
+	if _, ok := ctx.Deadline(); !ok {
+		t.Fatalf("expected derived context deadline")
+	}
+}
+
+func TestWithDefaultRequestDeadline_PreservesExistingDeadline(t *testing.T) {
+	origCtx, origCancel := context.WithTimeout(context.Background(), time.Hour)
+	defer origCancel()
+	origDeadline, _ := origCtx.Deadline()
+
+	ctx, cancel := withDefaultRequestDeadline(origCtx)
+	defer cancel()
+
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		t.Fatalf("expected deadline to remain present")
+	}
+	if !deadline.Equal(origDeadline) {
+		t.Fatalf("deadline changed: got %v want %v", deadline, origDeadline)
 	}
 }

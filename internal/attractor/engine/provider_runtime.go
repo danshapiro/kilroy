@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/strongdm/kilroy/internal/providerspec"
@@ -28,7 +29,13 @@ func resolveProviderRuntimes(cfg *RunConfigFile) (map[string]ProviderRuntime, er
 	if cfg == nil {
 		return out, nil
 	}
-	for rawKey, pc := range cfg.LLM.Providers {
+	rawKeys := make([]string, 0, len(cfg.LLM.Providers))
+	for rawKey := range cfg.LLM.Providers {
+		rawKeys = append(rawKeys, rawKey)
+	}
+	sort.Strings(rawKeys)
+	for _, rawKey := range rawKeys {
+		pc := cfg.LLM.Providers[rawKey]
 		key := providerspec.CanonicalProviderKey(rawKey)
 		if key == "" {
 			continue

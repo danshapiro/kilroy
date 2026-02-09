@@ -29,6 +29,8 @@ type Adapter struct {
 	client *http.Client
 }
 
+const defaultRequestTimeout = 10 * time.Minute
+
 func NewAdapter(cfg Config) *Adapter {
 	cfg.Provider = strings.ToLower(strings.TrimSpace(cfg.Provider))
 	cfg.BaseURL = strings.TrimRight(strings.TrimSpace(cfg.BaseURL), "/")
@@ -50,12 +52,15 @@ func NewAdapter(cfg Config) *Adapter {
 func (a *Adapter) Name() string { return a.cfg.Provider }
 
 func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
+	requestCtx, cancel := withDefaultRequestDeadline(ctx)
+	defer cancel()
+
 	body, err := toChatCompletionsBody(req, a.cfg.OptionsKey, chatCompletionsBodyOptions{})
 	if err != nil {
 		return llm.Response{}, err
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.BaseURL+a.cfg.Path, bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(requestCtx, http.MethodPost, a.cfg.BaseURL+a.cfg.Path, bytes.NewReader(body))
 	if err != nil {
 		return llm.Response{}, llm.WrapContextError(a.cfg.Provider, err)
 	}
@@ -75,19 +80,24 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 }
 
 func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, error) {
-	sctx, cancel := context.WithCancel(ctx)
+	baseCtx, baseCancel := withDefaultRequestDeadline(ctx)
+	sctx, cancel := context.WithCancel(baseCtx)
+	cancelAll := func() {
+		cancel()
+		baseCancel()
+	}
 	body, err := toChatCompletionsBody(req, a.cfg.OptionsKey, chatCompletionsBodyOptions{
 		Stream:       true,
 		IncludeUsage: true,
 	})
 	if err != nil {
-		cancel()
+		cancelAll()
 		return nil, err
 	}
 
 	httpReq, err := http.NewRequestWithContext(sctx, http.MethodPost, a.cfg.BaseURL+a.cfg.Path, bytes.NewReader(body))
 	if err != nil {
-		cancel()
+		cancelAll()
 		return nil, llm.WrapContextError(a.cfg.Provider, err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+a.cfg.APIKey)
@@ -98,18 +108,19 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 
 	resp, err := a.client.Do(httpReq)
 	if err != nil {
-		cancel()
+		cancelAll()
 		return nil, llm.WrapContextError(a.cfg.Provider, err)
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
-		cancel()
+		cancelAll()
 		_, perr := parseChatCompletionsResponse(a.cfg.Provider, req.Model, resp)
 		return nil, perr
 	}
 
-	s := llm.NewChanStream(cancel)
+	s := llm.NewChanStream(cancelAll)
 	go func() {
+		defer cancelAll()
 		defer resp.Body.Close()
 		defer s.CloseSend()
 
@@ -126,6 +137,11 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 				return nil
 			}
 			if payload == "[DONE]" {
+				if state.TextOpen {
+					s.Send(llm.StreamEvent{Type: llm.StreamEventTextEnd, TextID: state.TextID})
+					state.TextOpen = false
+				}
+				state.closeOpenToolCalls(s)
 				final := state.FinalResponse()
 				s.Send(llm.StreamEvent{
 					Type:         llm.StreamEventFinish,
@@ -402,6 +418,9 @@ type chatStreamState struct {
 
 	Text     strings.Builder
 	TextOpen bool
+	ToolSeq  []string
+	Tools    map[string]*chatStreamToolCall
+	NextID   int
 
 	Finish llm.FinishReason
 	Usage  llm.Usage
@@ -409,6 +428,25 @@ type chatStreamState struct {
 
 func (st *chatStreamState) FinalResponse() llm.Response {
 	msg := llm.Assistant(st.Text.String())
+	for _, key := range st.ToolSeq {
+		tc := st.Tools[key]
+		if tc == nil {
+			continue
+		}
+		var args json.RawMessage
+		if tc.Args.Len() > 0 {
+			args = json.RawMessage(tc.Args.String())
+		}
+		msg.Content = append(msg.Content, llm.ContentPart{
+			Kind: llm.ContentToolCall,
+			ToolCall: &llm.ToolCallData{
+				ID:        st.ensureToolCallID(tc),
+				Type:      firstNonEmpty(tc.Type, "function"),
+				Name:      tc.Name,
+				Arguments: args,
+			},
+		})
+	}
 	finish := st.Finish
 	if strings.TrimSpace(finish.Reason) == "" {
 		finish = llm.FinishReason{Reason: "stop", Raw: "stop"}
@@ -420,6 +458,123 @@ func (st *chatStreamState) FinalResponse() llm.Response {
 		Finish:   finish,
 		Usage:    st.Usage,
 	}
+}
+
+type chatStreamToolCall struct {
+	ID      string
+	Name    string
+	Type    string
+	Args    strings.Builder
+	Started bool
+	Ended   bool
+}
+
+func (st *chatStreamState) ensureToolCallID(tc *chatStreamToolCall) string {
+	if tc == nil {
+		return ""
+	}
+	if strings.TrimSpace(tc.ID) != "" {
+		return strings.TrimSpace(tc.ID)
+	}
+	st.NextID++
+	tc.ID = fmt.Sprintf("tool_call_%d", st.NextID)
+	return tc.ID
+}
+
+func (st *chatStreamState) ensureToolCall(key string) *chatStreamToolCall {
+	if st.Tools == nil {
+		st.Tools = map[string]*chatStreamToolCall{}
+	}
+	tc := st.Tools[key]
+	if tc != nil {
+		return tc
+	}
+	tc = &chatStreamToolCall{}
+	st.Tools[key] = tc
+	st.ToolSeq = append(st.ToolSeq, key)
+	return tc
+}
+
+func (st *chatStreamState) emitToolCallDelta(s *llm.ChanStream, key string, raw map[string]any) {
+	tc := st.ensureToolCall(key)
+	if id := strings.TrimSpace(asString(raw["id"])); id != "" && strings.TrimSpace(tc.ID) == "" {
+		tc.ID = id
+	}
+	if kind := strings.TrimSpace(asString(raw["type"])); kind != "" {
+		tc.Type = kind
+	} else if strings.TrimSpace(tc.Type) == "" {
+		tc.Type = "function"
+	}
+	if fn, ok := raw["function"].(map[string]any); ok {
+		if name := strings.TrimSpace(asString(fn["name"])); name != "" {
+			tc.Name = name
+		}
+		if argsDelta := asString(fn["arguments"]); argsDelta != "" {
+			tc.Args.WriteString(argsDelta)
+			if !tc.Started {
+				tc.Started = true
+				start := llm.ToolCallData{
+					ID:   st.ensureToolCallID(tc),
+					Type: firstNonEmpty(tc.Type, "function"),
+					Name: tc.Name,
+				}
+				s.Send(llm.StreamEvent{Type: llm.StreamEventToolCallStart, ToolCall: &start})
+			}
+			delta := llm.ToolCallData{
+				ID:        st.ensureToolCallID(tc),
+				Type:      firstNonEmpty(tc.Type, "function"),
+				Name:      tc.Name,
+				Arguments: []byte(tc.Args.String()),
+			}
+			s.Send(llm.StreamEvent{Type: llm.StreamEventToolCallDelta, ToolCall: &delta})
+			return
+		}
+	}
+	if !tc.Started {
+		tc.Started = true
+		start := llm.ToolCallData{
+			ID:   st.ensureToolCallID(tc),
+			Type: firstNonEmpty(tc.Type, "function"),
+			Name: tc.Name,
+		}
+		s.Send(llm.StreamEvent{Type: llm.StreamEventToolCallStart, ToolCall: &start})
+	}
+}
+
+func (st *chatStreamState) closeOpenToolCalls(s *llm.ChanStream) {
+	for _, key := range st.ToolSeq {
+		tc := st.Tools[key]
+		if tc == nil || tc.Ended {
+			continue
+		}
+		if !tc.Started {
+			tc.Started = true
+			start := llm.ToolCallData{
+				ID:   st.ensureToolCallID(tc),
+				Type: firstNonEmpty(tc.Type, "function"),
+				Name: tc.Name,
+			}
+			s.Send(llm.StreamEvent{Type: llm.StreamEventToolCallStart, ToolCall: &start})
+		}
+		end := llm.ToolCallData{
+			ID:        st.ensureToolCallID(tc),
+			Type:      firstNonEmpty(tc.Type, "function"),
+			Name:      tc.Name,
+			Arguments: []byte(tc.Args.String()),
+		}
+		s.Send(llm.StreamEvent{Type: llm.StreamEventToolCallEnd, ToolCall: &end})
+		tc.Ended = true
+	}
+}
+
+func streamToolCallKey(raw map[string]any, ordinal int) string {
+	if idx := strings.TrimSpace(asString(raw["index"])); idx != "" {
+		return "idx:" + idx
+	}
+	if id := strings.TrimSpace(asString(raw["id"])); id != "" {
+		return "id:" + id
+	}
+	return fmt.Sprintf("ord:%d", ordinal)
 }
 
 func emitChatCompletionsChunkEvents(s *llm.ChanStream, st *chatStreamState, chunk map[string]any) {
@@ -446,6 +601,15 @@ func emitChatCompletionsChunkEvents(s *llm.ChanStream, st *chatStreamState, chun
 		st.Text.WriteString(text)
 		s.Send(llm.StreamEvent{Type: llm.StreamEventTextDelta, TextID: st.TextID, Delta: text})
 	}
+	if calls, ok := delta["tool_calls"].([]any); ok {
+		for i, entry := range calls {
+			raw, _ := entry.(map[string]any)
+			if raw == nil {
+				continue
+			}
+			st.emitToolCallDelta(s, streamToolCallKey(raw, i), raw)
+		}
+	}
 
 	if fin := strings.TrimSpace(asString(choice["finish_reason"])); fin != "" {
 		st.Finish = llm.FinishReason{Reason: normalizeFinishReason(fin), Raw: fin}
@@ -453,6 +617,17 @@ func emitChatCompletionsChunkEvents(s *llm.ChanStream, st *chatStreamState, chun
 			s.Send(llm.StreamEvent{Type: llm.StreamEventTextEnd, TextID: st.TextID})
 			st.TextOpen = false
 		}
+		st.closeOpenToolCalls(s)
 		s.Send(llm.StreamEvent{Type: llm.StreamEventStepFinish, FinishReason: &st.Finish})
 	}
+}
+
+func withDefaultRequestDeadline(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return context.WithTimeout(context.Background(), defaultRequestTimeout)
+	}
+	if _, ok := ctx.Deadline(); ok {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, defaultRequestTimeout)
 }

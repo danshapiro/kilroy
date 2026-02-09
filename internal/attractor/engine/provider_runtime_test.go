@@ -1,9 +1,6 @@
 package engine
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestResolveProviderRuntimes_MergesBuiltinAndConfigOverrides(t *testing.T) {
 	cfg := &RunConfigFile{}
@@ -56,7 +53,11 @@ func TestResolveProviderRuntimes_RejectsCanonicalAliasCollisions(t *testing.T) {
 	}
 
 	_, err := resolveProviderRuntimes(cfg)
-	if err == nil || !strings.Contains(err.Error(), "duplicate provider config after canonicalization") {
+	if err == nil {
+		t.Fatalf("expected canonical collision error, got nil")
+	}
+	const want = `duplicate provider config after canonicalization: "z-ai" and "zai" both map to "zai"`
+	if err.Error() != want {
 		t.Fatalf("expected canonical collision error, got %v", err)
 	}
 }

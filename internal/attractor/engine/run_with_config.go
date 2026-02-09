@@ -182,24 +182,6 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	return res, nil
 }
 
-func hasProviderBackend(cfg *RunConfigFile, provider string) bool {
-	backend := backendFor(cfg, provider)
-	return backend == BackendAPI || backend == BackendCLI
-}
-
-func backendFor(cfg *RunConfigFile, provider string) BackendKind {
-	if cfg == nil {
-		return ""
-	}
-	for k, v := range cfg.LLM.Providers {
-		if normalizeProviderKey(k) != provider {
-			continue
-		}
-		return v.Backend
-	}
-	return ""
-}
-
 func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, opts RunOptions) error {
 	if g == nil || catalog == nil {
 		return nil
