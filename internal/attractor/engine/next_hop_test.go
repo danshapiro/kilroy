@@ -100,6 +100,66 @@ digraph G {
 	}
 }
 
+func TestResolveNextHop_FanInFail_DeterministicBlocksRetryTarget(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  graph [retry_target="retry_global"]
+  join [shape=tripleoctagon, retry_target="retry_node"]
+  verify [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  retry_node [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  retry_global [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  join -> verify
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	hop, err := resolveNextHop(g, "join", runtime.Outcome{
+		Status:        runtime.StatusFail,
+		FailureReason: "all parallel branches failed",
+	}, runtime.NewContext(), failureClassDeterministic)
+	if err != nil {
+		t.Fatalf("resolveNextHop: %v", err)
+	}
+	if hop != nil {
+		t.Fatalf("expected nil hop for deterministic fan-in failure with retry_target, got edge to %q (source=%s)", hop.Edge.To, hop.Source)
+	}
+}
+
+func TestResolveNextHop_FanInFail_TransientAllowsRetryTarget(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  graph [retry_target="retry_global"]
+  join [shape=tripleoctagon, retry_target="retry_node"]
+  verify [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  retry_node [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  retry_global [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  join -> verify
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+
+	hop, err := resolveNextHop(g, "join", runtime.Outcome{
+		Status:        runtime.StatusFail,
+		FailureReason: "upstream timeout",
+	}, runtime.NewContext(), failureClassTransientInfra)
+	if err != nil {
+		t.Fatalf("resolveNextHop: %v", err)
+	}
+	if hop == nil || hop.Edge == nil {
+		t.Fatalf("expected retry target hop for transient fan-in failure, got nil")
+	}
+	if hop.Edge.To != "retry_node" {
+		t.Fatalf("next hop target: got %q want %q", hop.Edge.To, "retry_node")
+	}
+	if hop.Source != nextHopSourceRetryTarget {
+		t.Fatalf("hop source: got %q want %q", hop.Source, nextHopSourceRetryTarget)
+	}
+}
+
 func TestResolveNextHop_NonFanIn_PreservesSelectNextEdgeBehavior(t *testing.T) {
 	g, err := dot.Parse([]byte(`
 digraph G {
