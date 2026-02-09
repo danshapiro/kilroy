@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/strongdm/kilroy/internal/attractor/engine"
+	"github.com/strongdm/kilroy/internal/providerspec"
 )
 
 func main() {
@@ -230,10 +231,8 @@ func parseForceModelFlags(specs []string) (map[string]string, []string, error) {
 		}
 		provider := normalizeRunProviderKey(parts[0])
 		modelID := strings.TrimSpace(parts[1])
-		switch provider {
-		case "openai", "anthropic", "google":
-		default:
-			return nil, nil, fmt.Errorf("--force-model %q has unsupported provider %q (allowed: openai, anthropic, google, gemini)", raw, strings.TrimSpace(parts[0]))
+		if !isSupportedForceModelProvider(provider) {
+			return nil, nil, fmt.Errorf("--force-model %q has unsupported provider %q (allowed: %s)", raw, strings.TrimSpace(parts[0]), supportedForceModelProvidersCSV())
 		}
 		if modelID == "" {
 			return nil, nil, fmt.Errorf("--force-model %q has empty model id", raw)
@@ -257,13 +256,21 @@ func parseForceModelFlags(specs []string) (map[string]string, []string, error) {
 }
 
 func normalizeRunProviderKey(provider string) string {
-	provider = strings.ToLower(strings.TrimSpace(provider))
-	switch provider {
-	case "gemini":
-		return "google"
-	default:
-		return provider
+	return providerspec.CanonicalProviderKey(provider)
+}
+
+func isSupportedForceModelProvider(provider string) bool {
+	_, ok := providerspec.Builtin(provider)
+	return ok
+}
+
+func supportedForceModelProvidersCSV() string {
+	keys := make([]string, 0, len(providerspec.Builtins()))
+	for key := range providerspec.Builtins() {
+		keys = append(keys, key)
 	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
 
 func attractorValidate(args []string) {

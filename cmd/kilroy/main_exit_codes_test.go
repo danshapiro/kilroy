@@ -521,6 +521,30 @@ func TestParseForceModelFlags_NormalizesAndCanonicalizes(t *testing.T) {
 	}
 }
 
+func TestParseForceModelFlags_AcceptsKimiAndZaiAliases(t *testing.T) {
+	got, specs, err := parseForceModelFlags([]string{
+		"moonshot=kimi-k2.5",
+		"z-ai=glm-4.7",
+	})
+	if err != nil {
+		t.Fatalf("parseForceModelFlags: %v", err)
+	}
+	want := map[string]string{
+		"kimi": "kimi-k2.5",
+		"zai":  "glm-4.7",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("overrides: got %#v want %#v", got, want)
+	}
+	wantSpecs := []string{
+		"kimi=kimi-k2.5",
+		"zai=glm-4.7",
+	}
+	if !reflect.DeepEqual(specs, wantSpecs) {
+		t.Fatalf("canonical specs: got %#v want %#v", specs, wantSpecs)
+	}
+}
+
 func TestParseForceModelFlags_RejectsInvalidShape(t *testing.T) {
 	if _, _, err := parseForceModelFlags([]string{"openai"}); err == nil {
 		t.Fatalf("expected parse error for missing '='")
