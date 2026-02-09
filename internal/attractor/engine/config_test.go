@@ -359,6 +359,23 @@ llm:
 	}
 }
 
+func TestBackwardCompatibility_OpenAIAnthropicGoogleStillValid(t *testing.T) {
+	cfg := &RunConfigFile{Version: 1}
+	cfg.Repo.Path = "/tmp/repo"
+	cfg.CXDB.BinaryAddr = "127.0.0.1:9009"
+	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:9010"
+	cfg.ModelDB.LiteLLMCatalogPath = "/tmp/catalog.json"
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai":    {Backend: BackendAPI},
+		"anthropic": {Backend: BackendAPI},
+		"google":    {Backend: BackendAPI},
+	}
+	applyConfigDefaults(cfg)
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+}
+
 func TestLoadRunConfigFile_InvalidCLIProfile(t *testing.T) {
 	dir := t.TempDir()
 	yml := filepath.Join(dir, "run.yaml")
