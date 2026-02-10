@@ -116,3 +116,10 @@ func TestRunSubgraphUntil_DeterministicFailureCycleBreaksAtLimit(t *testing.T) {
 		t.Fatalf("expected deterministic failure cycle error, got %v", err)
 	}
 }
+
+func TestDeterministicFailureCycleBreaker_IgnoresCanceledClass(t *testing.T) {
+	err := runCanceledCycleFixture(t)
+	if err != nil && strings.Contains(err.Error(), "deterministic failure cycle") {
+		t.Fatalf("canceled failures should not trip deterministic cycle breaker: %v", err)
+	}
+}

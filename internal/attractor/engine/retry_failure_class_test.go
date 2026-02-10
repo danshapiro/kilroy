@@ -314,3 +314,12 @@ func TestRun_UnclassifiedTransientFailure_StillRetries(t *testing.T) {
 		t.Fatalf("attempts: got %d want 2 (transient should retry once then succeed)", handler.calls)
 	}
 }
+
+func TestNormalizedFailureClass_CanceledPreserved(t *testing.T) {
+	if got := normalizedFailureClass("canceled"); got != failureClassCanceled {
+		t.Fatalf("normalized class=%q want %q", got, failureClassCanceled)
+	}
+	if got := normalizedFailureClass("cancelled"); got != failureClassCanceled {
+		t.Fatalf("normalized class=%q want %q", got, failureClassCanceled)
+	}
+}

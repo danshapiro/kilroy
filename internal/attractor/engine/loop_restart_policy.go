@@ -12,6 +12,7 @@ import (
 const (
 	failureClassTransientInfra       = "transient_infra"
 	failureClassDeterministic        = "deterministic"
+	failureClassCanceled             = "canceled"
 	defaultLoopRestartSignatureLimit = 3
 )
 
@@ -64,6 +65,9 @@ func classifyFailureClass(out runtime.Outcome) string {
 	if reason == "" {
 		return failureClassDeterministic
 	}
+	if strings.Contains(reason, "canceled") || strings.Contains(reason, "cancelled") {
+		return failureClassCanceled
+	}
 	for _, hint := range transientInfraReasonHints {
 		if strings.Contains(reason, hint) {
 			return failureClassTransientInfra
@@ -96,6 +100,8 @@ func normalizedFailureClass(raw string) string {
 		return ""
 	case "transient", "transient_infra", "transient-infra", "infra_transient", "transient infra", "infrastructure_transient", "retryable":
 		return failureClassTransientInfra
+	case "canceled", "cancelled":
+		return failureClassCanceled
 	case "deterministic", "non_transient", "non-transient", "permanent", "logic", "product":
 		return failureClassDeterministic
 	default:

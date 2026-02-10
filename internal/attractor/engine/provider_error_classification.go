@@ -210,6 +210,14 @@ func classifyAPIError(err error) (failureClass string, failureSignature string) 
 	provider := "api"
 	detail := "unknown"
 
+	var abortErr *llm.AbortError
+	if errors.As(err, &abortErr) {
+		if p := strings.TrimSpace(abortErr.Provider()); p != "" {
+			provider = p
+		}
+		return failureClassCanceled, fmt.Sprintf("api_canceled|%s|abort", provider)
+	}
+
 	// Typed LLM errors carry structured retryability and provider info.
 	var llmErr llm.Error
 	if errors.As(err, &llmErr) {

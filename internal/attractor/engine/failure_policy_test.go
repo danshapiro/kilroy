@@ -38,6 +38,12 @@ func TestShouldRetryOutcome_ClassGated(t *testing.T) {
 			want:  false,
 		},
 		{
+			name:  "retry canceled does not retry",
+			out:   runtime.Outcome{Status: runtime.StatusRetry, FailureReason: "operator canceled"},
+			class: failureClassCanceled,
+			want:  false,
+		},
+		{
 			name:  "unknown class defaults fail-closed",
 			out:   runtime.Outcome{Status: runtime.StatusFail, FailureReason: "unknown"},
 			class: "",

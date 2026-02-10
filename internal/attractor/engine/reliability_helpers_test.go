@@ -317,6 +317,32 @@ digraph G {
 	return logsRoot, err
 }
 
+func runCanceledCycleFixture(t *testing.T) error {
+	t.Helper()
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+
+	dot := []byte(`
+digraph G {
+  graph [goal="subgraph canceled cycle fixture", loop_restart_signature_limit="2"]
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=diamond, type="canceled_cycle_fixture"]
+  b [shape=diamond, type="canceled_cycle_fixture"]
+  start -> a
+  a -> b [condition="outcome=fail"]
+  b -> a [condition="outcome=fail"]
+  a -> exit [condition="outcome=success"]
+  b -> exit [condition="outcome=success"]
+}
+`)
+	eng := newReliabilityFixtureEngine(t, repo, logsRoot, "subgraph-canceled-cycle-fixture", dot)
+	eng.Registry.Register("canceled_cycle_fixture", &canceledCycleFixtureHandler{maxFailCalls: 4})
+
+	_, err := runSubgraphUntil(context.Background(), eng, "a", "")
+	return err
+}
+
 func runStatusIngestionProgressFixture(t *testing.T) []map[string]any {
 	t.Helper()
 	return runProgressFixtureByScenario(t, "status_ingestion")
@@ -465,6 +491,28 @@ func (h *cancelFixtureHandler) Execute(ctx context.Context, exec *Execution, nod
 type deterministicCycleFixtureHandler struct {
 	calls        int
 	maxFailCalls int
+}
+
+type canceledCycleFixtureHandler struct {
+	calls        int
+	maxFailCalls int
+}
+
+func (h *canceledCycleFixtureHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
+	_ = ctx
+	_ = exec
+	_ = node
+	h.calls++
+	if h.calls > h.maxFailCalls {
+		return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "fixture canceled-cycle stop"}, nil
+	}
+	return runtime.Outcome{
+		Status:        runtime.StatusFail,
+		FailureReason: "operator canceled",
+		ContextUpdates: map[string]any{
+			"failure_class": "canceled",
+		},
+	}, nil
 }
 
 func (h *deterministicCycleFixtureHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {

@@ -1079,6 +1079,7 @@ func canceledOutcomeForRetry(ctx context.Context, out runtime.Outcome) runtime.O
 	if out.ContextUpdates == nil {
 		out.ContextUpdates = map[string]any{}
 	}
+	out.ContextUpdates["failure_class"] = failureClassCanceled
 	if out.SuggestedNextIDs == nil {
 		out.SuggestedNextIDs = []string{}
 	}

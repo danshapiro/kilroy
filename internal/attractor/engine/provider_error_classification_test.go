@@ -233,9 +233,9 @@ func TestClassifyAPIError(t *testing.T) {
 			wantClass: failureClassTransientInfra,
 		},
 		{
-			name:      "AbortError_deterministic",
+			name:      "AbortError_canceled",
 			err:       llm.NewAbortError("user cancelled"),
-			wantClass: failureClassDeterministic,
+			wantClass: failureClassCanceled,
 		},
 		{
 			name:      "InvalidToolCallError_deterministic",
@@ -307,5 +307,12 @@ func TestClassifyAPIError(t *testing.T) {
 				t.Fatalf("classifyAPIError(%v): signature is empty", tc.err)
 			}
 		})
+	}
+}
+
+func TestClassifyAPIError_AbortErrorMapsToCanceledClass(t *testing.T) {
+	cls, _ := classifyAPIError(llm.NewAbortError("operator canceled"))
+	if cls != failureClassCanceled {
+		t.Fatalf("class=%q want %q", cls, failureClassCanceled)
 	}
 }
