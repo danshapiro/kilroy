@@ -315,6 +315,11 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	// ($goal was already expanded at parse/prepare time.)
 	expandBaseSHA(e.Graph, baseSHA)
 
+	// Run pre-pipeline setup commands (e.g., npm install) in the worktree.
+	if err := e.executeSetupCommands(ctx); err != nil {
+		return nil, fmt.Errorf("setup commands failed: %w", err)
+	}
+
 	// Capture the original logs root for loop_restart (attractor-spec §3.2 Step 7).
 	e.baseLogsRoot = e.LogsRoot
 

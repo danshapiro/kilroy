@@ -76,6 +76,11 @@ type RunConfigFile struct {
 		RunBranchPrefix string `json:"run_branch_prefix" yaml:"run_branch_prefix"`
 		CommitPerNode   bool   `json:"commit_per_node" yaml:"commit_per_node"`
 	} `json:"git" yaml:"git"`
+
+	Setup struct {
+		Commands  []string `json:"commands,omitempty" yaml:"commands,omitempty"`
+		TimeoutMS int      `json:"timeout_ms,omitempty" yaml:"timeout_ms,omitempty"`
+	} `json:"setup,omitempty" yaml:"setup,omitempty"`
 }
 
 func LoadRunConfigFile(path string) (*RunConfigFile, error) {
@@ -146,6 +151,9 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	}
 	if cfg.CXDB.Autostart.PollIntervalMS == 0 {
 		cfg.CXDB.Autostart.PollIntervalMS = 250
+	}
+	if cfg.Setup.TimeoutMS == 0 {
+		cfg.Setup.TimeoutMS = 300000 // 5 minutes
 	}
 	cfg.CXDB.Autostart.Command = trimNonEmpty(cfg.CXDB.Autostart.Command)
 	cfg.CXDB.Autostart.UI.Command = trimNonEmpty(cfg.CXDB.Autostart.UI.Command)
