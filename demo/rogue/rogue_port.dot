@@ -15,6 +15,11 @@ digraph rogue_wasm_port {
 
     start [shape=Mdiamond, label="Start"]
     exit  [shape=Msquare, label="Exit"]
+    check_toolchain [
+        shape=parallelogram,
+        max_retries=0,
+        tool_command="bash -lc 'set -euo pipefail; command -v cargo >/dev/null || { echo \"missing required tool: cargo\" >&2; exit 1; }; command -v rustup >/dev/null || { echo \"missing required tool: rustup (install via rustup.rs)\" >&2; exit 1; }; command -v wasm-pack >/dev/null || { echo \"missing required tool: wasm-pack (install with: cargo install wasm-pack)\" >&2; exit 1; }; rustup target list --installed | grep -qx wasm32-unknown-unknown || { echo \"missing required rust target: wasm32-unknown-unknown (install with: rustup target add wasm32-unknown-unknown)\" >&2; exit 1; }'"
+    ]
 
     // =========================================================================
     // Phase 1: Spec expansion — bootstrap .ai/spec.md from inline requirements
@@ -229,7 +234,8 @@ digraph rogue_wasm_port {
     // =========================================================================
 
     // Phase 1-2: Spec and analysis
-    start -> expand_spec
+    start -> check_toolchain
+    check_toolchain -> expand_spec [condition="outcome=success"]
     expand_spec -> impl_analysis
     impl_analysis -> verify_analysis -> check_analysis
     check_analysis -> impl_architecture     [condition="outcome=success"]
