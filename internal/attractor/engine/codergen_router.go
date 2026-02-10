@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -973,19 +974,24 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	}
 
 	if runErr != nil && codexSemantics {
-		stderrBytes, readErr := os.ReadFile(stderrPath)
-		if readErr == nil && isStateDBDiscrepancy(string(stderrBytes)) {
-			warnEngine(execCtx, "codex state-db discrepancy detected; retrying once with fresh state root")
-			_ = copyFileContents(stdoutPath, filepath.Join(stageDir, "stdout.state_db_failure.log"))
-			_ = copyFileContents(stderrPath, filepath.Join(stageDir, "stderr.state_db_failure.log"))
+		maxStateDBRetries := codexStateDBMaxRetries()
+		for stateDBAttempt := 1; stateDBAttempt <= maxStateDBRetries; stateDBAttempt++ {
+			stderrBytes, readErr := os.ReadFile(stderrPath)
+			if readErr != nil || !isStateDBDiscrepancy(string(stderrBytes)) {
+				break
+			}
+			warnEngine(execCtx, fmt.Sprintf("codex state-db discrepancy detected; retrying with fresh state root (%d/%d)", stateDBAttempt, maxStateDBRetries))
+			_ = copyFileContents(stdoutPath, filepath.Join(stageDir, fmt.Sprintf("stdout.state_db_failure_%d.log", stateDBAttempt)))
+			_ = copyFileContents(stderrPath, filepath.Join(stageDir, fmt.Sprintf("stderr.state_db_failure_%d.log", stateDBAttempt)))
 
-			retryEnv, retryMeta, buildErr := buildCodexIsolatedEnvWithName(stageDir, "codex-home-retry1")
+			retryEnv, retryMeta, buildErr := buildCodexIsolatedEnvWithName(stageDir, fmt.Sprintf("codex-home-retry%d", stateDBAttempt))
 			if buildErr != nil {
 				return "", classifiedFailure(buildErr, readStderr()), nil
 			}
 			isolatedEnv = retryEnv
 			inv["state_db_fallback_retry"] = true
 			inv["state_db_fallback_reason"] = "state_db_record_discrepancy"
+			inv["state_db_retry_attempt"] = stateDBAttempt
 			if retryRoot, ok := retryMeta["state_root"]; ok {
 				inv["state_db_retry_state_root"] = retryRoot
 			}
@@ -1226,6 +1232,18 @@ func scrubConflictingProviderEnvKeys(base []string, providerKey string) []string
 		out = append(out, entry)
 	}
 	return out
+}
+
+func codexStateDBMaxRetries() int {
+	v := strings.TrimSpace(os.Getenv("KILROY_CODEX_STATE_DB_MAX_RETRIES"))
+	if v == "" {
+		return 2
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 2
+	}
+	return n
 }
 
 func codexIdleTimeout() time.Duration {
