@@ -18,9 +18,9 @@ import (
 
 type Adapter struct {
 	Provider string
-	APIKey  string
-	BaseURL string
-	Client  *http.Client
+	APIKey   string
+	BaseURL  string
+	Client   *http.Client
 }
 
 func init() {
@@ -412,6 +412,10 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 			toolName    string
 			toolStarted bool
 			toolArgs    strings.Builder
+			toolArgsSrc struct {
+				fromStart bool
+				fromDelta bool
+			}
 
 			// thinking / redacted_thinking
 			thinkingStarted bool
@@ -495,6 +499,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 						if inAny, ok := cb["input"]; ok && inAny != nil && st.toolArgs.Len() == 0 {
 							if b, err := json.Marshal(inAny); err == nil && len(b) > 0 && string(b) != "null" {
 								st.toolArgs.Write(b)
+								st.toolArgsSrc.fromStart = true
 							}
 						}
 						if !st.toolStarted && strings.TrimSpace(st.toolID) != "" {
@@ -548,7 +553,15 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 						}
 					case "input_json_delta":
 						if delta, _ := d["partial_json"].(string); delta != "" {
+							// Some providers emit tool_use.input in content_block_start and then stream
+							// a canonical JSON payload via input_json_delta. Treat the first delta as
+							// authoritative to avoid concatenating two top-level JSON values.
+							if st.toolArgsSrc.fromStart && !st.toolArgsSrc.fromDelta {
+								st.toolArgs.Reset()
+								st.toolArgsSrc.fromStart = false
+							}
 							st.toolArgs.WriteString(delta)
+							st.toolArgsSrc.fromDelta = true
 							if !st.toolStarted && strings.TrimSpace(st.toolID) != "" {
 								st.toolStarted = true
 								tc := llm.ToolCallData{ID: st.toolID, Name: st.toolName, Type: "function"}
