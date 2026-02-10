@@ -19,6 +19,18 @@
 **Step 1: Write failing tests for explicit status contract behavior**
 
 ```go
+func TestStageStatusContract_AbsolutePaths_FromRelativeWorktreeInput(t *testing.T) {
+    rel := filepath.Join("tmp", "wt")
+    c := buildStageStatusContract(rel)
+
+    if !filepath.IsAbs(c.PrimaryPath) {
+        t.Fatalf("primary path must be absolute, got %q", c.PrimaryPath)
+    }
+    if !filepath.IsAbs(c.FallbackPath) {
+        t.Fatalf("fallback path must be absolute, got %q", c.FallbackPath)
+    }
+}
+
 func TestStageStatusContract_DefaultPaths(t *testing.T) {
     wt := t.TempDir()
     c := buildStageStatusContract(wt)
@@ -42,11 +54,17 @@ func TestRunWithConfig_CLIBackend_StatusContractPath_HandlesNestedCD(t *testing.
     // When present, it cds into demo/rogue/rogue-wasm and writes status to that absolute path.
     // This reproduces the rogue verify_scaffold failure mode while proving the fix.
 }
+
+func TestRunWithConfig_CLIBackend_StatusContract_ClearsStaleWorktreeStatusBeforeStage(t *testing.T) {
+    // Seed worktree root status.json with stale data before codergen executes.
+    // Fake CLI writes no status file.
+    // Assert stage does NOT ingest the stale file (must fail missing status.json, not stale outcome).
+}
 ```
 
 **Step 2: Run tests to verify failure before implementation**
 
-Run: `go test ./internal/attractor/engine -run 'StageStatusContract|StatusContractPath_HandlesNestedCD' -count=1`
+Run: `go test ./internal/attractor/engine -run 'StageStatusContract|AbsolutePaths_FromRelativeWorktreeInput|StatusContractPath_HandlesNestedCD|StatusContract_ClearsStaleWorktreeStatusBeforeStage' -count=1`
 Expected: FAIL with `undefined: buildStageStatusContract` and missing contract symbols.
 
 **Step 3: Add a failing assertion that the status contract is visible in codergen prompt artifacts**
@@ -62,7 +80,7 @@ func TestRunWithConfig_CLIBackend_StatusContractPromptPreambleWritten(t *testing
 
 **Step 4: Re-run targeted tests and confirm expected failures**
 
-Run: `go test ./internal/attractor/engine -run 'StageStatusContract|StatusContractPromptPreambleWritten' -count=1`
+Run: `go test ./internal/attractor/engine -run 'StageStatusContract|AbsolutePaths_FromRelativeWorktreeInput|StatusContract_ClearsStaleWorktreeStatusBeforeStage|StatusContractPromptPreambleWritten' -count=1`
 Expected: FAIL on missing preamble/contract implementation.
 
 **Step 5: Commit the failing test scaffolding**
@@ -107,8 +125,12 @@ func buildStageStatusContract(worktreeDir string) stageStatusContract {
     if wt == "" {
         return stageStatusContract{}
     }
-    primary := filepath.Join(wt, "status.json")
-    fallback := filepath.Join(wt, ".ai", "status.json")
+    wtAbs, err := filepath.Abs(wt)
+    if err != nil {
+        return stageStatusContract{}
+    }
+    primary := filepath.Join(wtAbs, "status.json")
+    fallback := filepath.Join(wtAbs, ".ai", "status.json")
     return stageStatusContract{
         PrimaryPath:  primary,
         FallbackPath: fallback,
@@ -140,6 +162,12 @@ func buildStageStatusContract(worktreeDir string) stageStatusContract {
 contract := buildStageStatusContract(exec.WorktreeDir)
 worktreeStatusPaths := contract.Fallbacks
 
+// Preserve current behavior: remove stale worktree status files from prior stages
+// so fallback ingestion cannot attribute old outcomes to the current node.
+for _, statusPath := range worktreeStatusPaths {
+    _ = os.Remove(statusPath.path)
+}
+
 promptParts := make([]string, 0, 3)
 if strings.TrimSpace(contract.PromptPreamble) != "" {
     promptParts = append(promptParts, strings.TrimSpace(contract.PromptPreamble))
@@ -170,7 +198,7 @@ if err != nil {
 
 **Step 4: Run targeted tests and verify pass**
 
-Run: `go test ./internal/attractor/engine -run 'StageStatusContract|StatusContractPath_HandlesNestedCD|StatusContractPromptPreambleWritten' -count=1`
+Run: `go test ./internal/attractor/engine -run 'StageStatusContract|AbsolutePaths_FromRelativeWorktreeInput|StatusContractPath_HandlesNestedCD|StatusContract_ClearsStaleWorktreeStatusBeforeStage|StatusContractPromptPreambleWritten' -count=1`
 Expected: PASS.
 
 **Step 5: Commit**
