@@ -32,7 +32,9 @@ func TestFinalOutcomeSave_UsesAtomicWrite(t *testing.T) {
 
     b, err := os.ReadFile(path)
     require.NoError(t, err)
-    require.Contains(t, string(b), "\"status\": \"fail\"")
+    var got FinalOutcome
+    require.NoError(t, json.Unmarshal(b, &got))
+    require.Equal(t, FinalFail, got.Status)
 }
 ```
 
@@ -44,7 +46,7 @@ Expected: FAIL or missing atomic-writer assertions.
 **Step 3: Implement helper and migrate `Save`/`writeJSON` callers**
 
 ```go
-func WriteJSONAtomicFile(path string, v any) (err error) {
+func WriteFileAtomic(path string, data []byte) (err error) {
     if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
         return err
     }
@@ -60,12 +62,7 @@ func WriteJSONAtomicFile(path string, v any) (err error) {
         }
     }()
 
-    b, err := json.MarshalIndent(v, "", "  ")
-    if err != nil {
-        _ = tmp.Close()
-        return err
-    }
-    if _, err := tmp.Write(b); err != nil {
+    if _, err := tmp.Write(data); err != nil {
         _ = tmp.Close()
         return err
     }
@@ -82,6 +79,14 @@ func WriteJSONAtomicFile(path string, v any) (err error) {
     }
     tmpName = ""
     return nil
+}
+
+func WriteJSONAtomicFile(path string, v any) error {
+    b, err := json.MarshalIndent(v, "", "  ")
+    if err != nil {
+        return err
+    }
+    return WriteFileAtomic(path, b)
 }
 ```
 
@@ -108,9 +113,32 @@ git commit -m "runtime/engine: use atomic json writes for final/checkpoint and s
 **Step 1: Add failing tests for precedence and fallback behavior**
 
 ```go
-func TestCodergenStatusIngestion_CanonicalStageStatusWins(t *testing.T) {}
-func TestCodergenStatusIngestion_FallbackOnlyWhenCanonicalMissing(t *testing.T) {}
-func TestCodergenStatusIngestion_InvalidFallbackIsRejected(t *testing.T) {}
+func TestCodergenStatusIngestion_CanonicalStageStatusWins(t *testing.T) {
+    out, source := runStatusIngestionFixture(t, true, true, false)
+    if source != "canonical" {
+        t.Fatalf("source=%q want canonical", source)
+    }
+    if out.Status != runtime.StatusSuccess {
+        t.Fatalf("status=%q want %q", out.Status, runtime.StatusSuccess)
+    }
+}
+
+func TestCodergenStatusIngestion_FallbackOnlyWhenCanonicalMissing(t *testing.T) {
+    out, source := runStatusIngestionFixture(t, false, true, false)
+    if source != "worktree" {
+        t.Fatalf("source=%q want worktree", source)
+    }
+    if out.Status != runtime.StatusFail {
+        t.Fatalf("status=%q want %q", out.Status, runtime.StatusFail)
+    }
+}
+
+func TestCodergenStatusIngestion_InvalidFallbackIsRejected(t *testing.T) {
+    _, source := runStatusIngestionFixture(t, false, false, true)
+    if source != "" {
+        t.Fatalf("source=%q want empty", source)
+    }
+}
 ```
 
 **Step 2: Run ingestion-focused tests and confirm failure gaps**
@@ -130,11 +158,13 @@ func copyFirstValidFallbackStatus(stageStatusPath string, fallbackPaths []string
         if err != nil {
             continue
         }
-        out, err := runtime.DecodeOutcomeJSON(b)
+        // Validate that the fallback payload can drive routing.
+        _, err = runtime.DecodeOutcomeJSON(b)
         if err != nil {
             continue
         }
-        if err := writeJSON(stageStatusPath, out); err != nil {
+        // Preserve raw payload bytes so we do not drop unknown legacy fields.
+        if err := runtime.WriteFileAtomic(stageStatusPath, b); err != nil {
             return "", err
         }
         _ = os.Remove(p)
@@ -167,7 +197,16 @@ git commit -m "engine: make status ingestion precedence deterministic and reject
 
 ```go
 func TestRunWithConfig_HeartbeatStopsAfterProcessExit(t *testing.T) {
-    // run short codergen CLI, then assert no heartbeat events after matching stage_attempt_end
+    events := runHeartbeatFixture(t)
+    endIdx := findEventIndex(events, "stage_attempt_end", "a")
+    if endIdx < 0 {
+        t.Fatal("missing stage_attempt_end for node a")
+    }
+    for _, ev := range events[endIdx+1:] {
+        if ev["event"] == "stage_heartbeat" && ev["node_id"] == "a" {
+            t.Fatalf("unexpected heartbeat after attempt end: %+v", ev)
+        }
+    }
 }
 ```
 
@@ -227,7 +266,12 @@ git commit -m "engine: stop codergen heartbeat goroutine as soon as stage proces
 **Step 1: Add failing test where branch activity should prevent parent stall timeout**
 
 ```go
-func TestRun_StallWatchdog_ParallelBranchProgressKeepsParentAlive(t *testing.T) {}
+func TestRun_StallWatchdog_ParallelBranchProgressKeepsParentAlive(t *testing.T) {
+    err := runParallelWatchdogFixture(t, 500*time.Millisecond)
+    if err != nil {
+        t.Fatalf("expected no stall watchdog timeout, got %v", err)
+    }
+}
 ```
 
 **Step 2: Run watchdog/parallel tests to confirm failure**
@@ -257,10 +301,18 @@ func copyMap(in map[string]any) map[string]any {
 }
 
 branchEng.progressSink = func(ev map[string]any) {
-    tagged := copyMap(ev)
-    tagged["branch_key"] = key
-    tagged["branch_logs_root"] = branchRoot
-    exec.Engine.appendProgress(tagged)
+    eventName := strings.TrimSpace(fmt.Sprint(ev["event"]))
+    if eventName == "" {
+        return
+    }
+    // Emit a normalized parent-only liveness event to avoid interleaving full
+    // branch progress streams into parent progress.ndjson.
+    exec.Engine.appendProgress(map[string]any{
+        "event":            "branch_liveness",
+        "branch_key":       key,
+        "branch_logs_root": branchRoot,
+        "branch_event":     eventName,
+    })
 }
 ```
 
@@ -286,8 +338,19 @@ git commit -m "engine: forward branch liveness to parent watchdog in parallel fa
 **Step 1: Add failing tests proving no new attempts start after cancellation**
 
 ```go
-func TestRunSubgraphUntil_ContextCanceled_StopsBeforeNextNode(t *testing.T) {}
-func TestParallelCancelPrecedence_IgnorePolicyDoesNotScheduleNewWork(t *testing.T) {}
+func TestRunSubgraphUntil_ContextCanceled_StopsBeforeNextNode(t *testing.T) {
+    got := runCanceledSubgraphFixture(t)
+    if got.scheduledAfterCancel {
+        t.Fatalf("scheduled node %q after cancellation", got.nextNode)
+    }
+}
+
+func TestParallelCancelPrecedence_IgnorePolicyDoesNotScheduleNewWork(t *testing.T) {
+    got := runParallelCancelFixture(t, "ignore")
+    if got.startedNodesAfterCancel > 0 {
+        t.Fatalf("started %d nodes after cancel", got.startedNodesAfterCancel)
+    }
+}
 ```
 
 **Step 2: Run cancel guard tests and confirm failure**
@@ -300,7 +363,12 @@ Expected: FAIL with post-cancel node scheduling.
 ```go
 for {
     if err := runContextError(ctx); err != nil {
-        return parallelBranchResult{}, err
+        return parallelBranchResult{
+            HeadSHA:    headSHA,
+            LastNodeID: lastNode,
+            Outcome:    lastOutcome,
+            Completed:  completed,
+        }, err
     }
 
     out, err := eng.executeWithRetry(ctx, node, nodeRetries)
@@ -308,7 +376,12 @@ for {
         return parallelBranchResult{}, err
     }
     if err := runContextError(ctx); err != nil {
-        return parallelBranchResult{}, err
+        return parallelBranchResult{
+            HeadSHA:    headSHA,
+            LastNodeID: lastNode,
+            Outcome:    out,
+            Completed:  completed,
+        }, err
     }
 
     next, err := selectNextEdge(...)
@@ -339,7 +412,12 @@ git commit -m "engine: stop subgraph traversal immediately when run context is c
 **Step 1: Add failing subgraph-specific cycle-breaker test**
 
 ```go
-func TestRunSubgraphUntil_DeterministicFailureCycleBreaksAtLimit(t *testing.T) {}
+func TestRunSubgraphUntil_DeterministicFailureCycleBreaksAtLimit(t *testing.T) {
+    err := runDeterministicSubgraphCycleFixture(t, 2)
+    if err == nil || !strings.Contains(err.Error(), "deterministic failure cycle") {
+        t.Fatalf("expected deterministic failure cycle error, got %v", err)
+    }
+}
 ```
 
 **Step 2: Run cycle tests and confirm missing subgraph parity**
@@ -383,8 +461,25 @@ git commit -m "engine: apply deterministic failure cycle breaker in subgraph tra
 **Step 1: Add failing tests for failure metadata pass-through**
 
 ```go
-func TestConditionalPassThrough_PreservesFailureReasonAndClass(t *testing.T) {}
-func TestSubgraphContext_PreservesFailureReasonAcrossNodes(t *testing.T) {}
+func TestConditionalPassThrough_PreservesFailureReasonAndClass(t *testing.T) {
+    out := runConditionalFixture(t, "fail", "provider timeout", "transient_infra")
+    if out.FailureReason != "provider timeout" {
+        t.Fatalf("failure_reason=%q", out.FailureReason)
+    }
+    if out.ContextUpdates["failure_class"] != "transient_infra" {
+        t.Fatalf("failure_class=%v", out.ContextUpdates["failure_class"])
+    }
+}
+
+func TestSubgraphContext_PreservesFailureReasonAcrossNodes(t *testing.T) {
+    ctx := runSubgraphFailureFixture(t)
+    if got := ctx.GetString("failure_reason", ""); got == "" {
+        t.Fatal("failure_reason missing in context")
+    }
+    if got := ctx.GetString("failure_class", ""); got == "" {
+        t.Fatal("failure_class missing in context")
+    }
+}
 ```
 
 **Step 2: Run pass-through tests and confirm gaps**
@@ -433,8 +528,19 @@ git commit -m "engine: preserve failure reason/class metadata across conditional
 **Step 1: Add failing tests for canceled-class semantics**
 
 ```go
-func TestClassifyAPIError_AbortErrorMapsToCanceledClass(t *testing.T) {}
-func TestShouldRetryOutcome_CanceledNeverRetries(t *testing.T) {}
+func TestClassifyAPIError_AbortErrorMapsToCanceledClass(t *testing.T) {
+    cls, _ := classifyAPIError(llm.NewAbortError("operator canceled"))
+    if cls != failureClassCanceled {
+        t.Fatalf("class=%q want %q", cls, failureClassCanceled)
+    }
+}
+
+func TestShouldRetryOutcome_CanceledNeverRetries(t *testing.T) {
+    out := runtime.Outcome{Status: runtime.StatusFail, FailureReason: "run canceled"}
+    if shouldRetryOutcome(out, failureClassCanceled) {
+        t.Fatal("canceled outcome must not retry")
+    }
+}
 ```
 
 **Step 2: Run classification/retry tests and confirm failure**
@@ -451,7 +557,14 @@ const (
     failureClassCanceled       = "canceled"
 )
 
-// classifyAPIError: keep WrapContextError contract; classify llm.AbortError as canceled.
+func classifyAPIError(err error) (string, string) {
+    var abortErr *llm.AbortError
+    if errors.As(err, &abortErr) {
+        return failureClassCanceled, "api_canceled|api|abort"
+    }
+    // Keep WrapContextError contract for context-derived errors.
+    // Existing typed/non-typed logic follows...
+}
 ```
 
 **Step 4: Re-run classifier and retry-policy tests**
@@ -479,8 +592,22 @@ git commit -m "engine: introduce canceled failure class and prevent canceled out
 **Step 1: Add failing tests for explicit `failover: []` meaning "hard pin"**
 
 ```go
-func TestWithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t *testing.T) {}
-func TestResolveProviderRuntimes_ExplicitEmptyFailoverPreserved(t *testing.T) {}
+func TestWithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t *testing.T) {
+    _, _, err := runNoFailoverFixture(t)
+    if err == nil || !strings.Contains(err.Error(), "no failover allowed") {
+        t.Fatalf("expected explicit no-failover error, got %v", err)
+    }
+}
+
+func TestResolveProviderRuntimes_ExplicitEmptyFailoverPreserved(t *testing.T) {
+    rt := loadProviderRuntimeFixture(t, "zai", []string{})
+    if !rt.FailoverExplicit {
+        t.Fatal("expected failover to be marked explicit")
+    }
+    if len(rt.Failover) != 0 {
+        t.Fatalf("expected zero failover targets, got %v", rt.Failover)
+    }
+}
 ```
 
 **Step 2: Run failover tests and confirm failure behavior**
@@ -491,9 +618,19 @@ Expected: FAIL if any implicit fallback still occurs.
 **Step 3: Wire no-failover behavior in router runtime path**
 
 ```go
-order := failoverOrderFromRuntime(provider, runtimes)
-if len(order) == 0 {
+// provider_runtime.go
+if pc.Failover != nil {
+    rt.FailoverExplicit = true
+    rt.Failover = providerspec.CanonicalizeProviderList(pc.Failover)
+}
+
+// codergen_router.go
+order, explicit := failoverOrderFromRuntime(provider, runtimes)
+if explicit && len(order) == 0 {
     return "", providerUse{}, fmt.Errorf("no failover allowed by runtime config for provider %s", provider)
+}
+if !explicit && len(order) == 0 {
+    order = failoverOrder(provider) // legacy default only when failover omitted
 }
 ```
 
@@ -521,9 +658,26 @@ git commit -m "engine/config: enforce explicit no-failover behavior and pin rogu
 **Step 1: Add failing tests for required progress events**
 
 ```go
-func TestProgressIncludesStatusIngestionDecisionEvent(t *testing.T) {}
-func TestProgressIncludesSubgraphCycleBreakEvent(t *testing.T) {}
-func TestProgressIncludesCancellationExitEvent(t *testing.T) {}
+func TestProgressIncludesStatusIngestionDecisionEvent(t *testing.T) {
+    events := runProgressFixture(t)
+    if !hasEvent(events, "status_ingestion_decision") {
+        t.Fatal("missing status_ingestion_decision event")
+    }
+}
+
+func TestProgressIncludesSubgraphCycleBreakEvent(t *testing.T) {
+    events := runProgressFixture(t)
+    if !hasEvent(events, "subgraph_deterministic_failure_cycle_breaker") {
+        t.Fatal("missing subgraph cycle breaker event")
+    }
+}
+
+func TestProgressIncludesCancellationExitEvent(t *testing.T) {
+    events := runProgressFixture(t)
+    if !hasEvent(events, "subgraph_canceled_exit") {
+        t.Fatal("missing subgraph cancellation exit event")
+    }
+}
 ```
 
 **Step 2: Run progress tests and confirm missing events**
@@ -626,8 +780,8 @@ Expected: Build succeeds; graph validator prints success.
 **Step 4: Run one rogue-fast validation execution and capture artifacts**
 
 Run:
-- if `run-fast.yaml` is real-provider: execute only the exact user-approved production command
-- otherwise: `./kilroy attractor run --detach --graph demo/rogue/rogue_fast.dot --config demo/rogue/run-fast.yaml --allow-test-shim --run-id rogue-fast-validation-$(date +%Y%m%d-%H%M%S) --logs-root ~/.local/state/kilroy/attractor`
+- if `run-fast.yaml` is real-provider and credentials are available: execute only the exact user-approved production command
+- if credentials are unavailable: execute a test-shim dry run using a copied shim config (same graph/runtime policy, `llm.cli_profile=test_shim`, explicit shim executables, `--allow-test-shim`)
 
 Expected: run starts, logs directory created, and `live.json`/`progress.ndjson` appear.
 
@@ -644,6 +798,7 @@ git commit -m "postmortem: record regression evidence and rogue-fast validation 
 - Do not skip failing-test confirmation before implementation.
 - Re-run `go test ./internal/attractor/... -count=1` after any task that touches engine traversal/routing.
 - Re-run `go test ./internal/llm/... -count=1` after any task that touches provider error handling.
+- `internal/attractor/engine/progress_test.go` is touched in Task 3 and Task 10; merge/rebase those edits before either commit to avoid test drift.
 
 ## Suggested Execution Branch
 
