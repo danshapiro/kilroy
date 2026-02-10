@@ -256,7 +256,7 @@ digraph G {
 	eng := newReliabilityFixtureEngine(t, repo, logsRoot, "subgraph-cancel-fixture", dot)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	eng.Registry.Register("cancel_fixture", &cancelFixtureHandler{cancel: cancel})
+	eng.Registry.Register("cancel_fixture", &cancelAfterSuccessFixtureHandler{cancel: cancel})
 	_, runErr := runSubgraphUntil(ctx, eng, "a", "")
 
 	events := readFixtureProgressEvents(t, filepath.Join(logsRoot, "progress.ndjson"))
@@ -473,18 +473,18 @@ func newReliabilityFixtureEngine(t *testing.T, repo, logsRoot, runID string, dot
 	return eng
 }
 
-type cancelFixtureHandler struct {
+type cancelAfterSuccessFixtureHandler struct {
 	cancel context.CancelFunc
 }
 
-func (h *cancelFixtureHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
+func (h *cancelAfterSuccessFixtureHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
 	_ = ctx
 	_ = exec
 	_ = node
 	if h.cancel != nil {
 		h.cancel()
 	}
-	return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "fixture canceled"}, nil
+	return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "fixture requested cancellation after success"}, nil
 }
 
 type deterministicCycleFixtureHandler struct {

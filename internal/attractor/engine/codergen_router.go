@@ -392,7 +392,7 @@ func (r *CodergenRouter) withFailoverText(
 		lastErr = fmt.Errorf("llm call failed (no attempts made)")
 	}
 	if failoverExplicit && len(order) == 0 && shouldFailoverLLMError(lastErr) {
-		return "", cands[0], fmt.Errorf("no failover allowed by runtime config for provider %s", primaryProvider)
+		return "", cands[0], fmt.Errorf("no failover allowed by runtime config for provider %s: %w", primaryProvider, lastErr)
 	}
 	return "", cands[0], lastErr
 }

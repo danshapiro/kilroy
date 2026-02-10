@@ -8,7 +8,7 @@ import (
 
 // WriteFileAtomic writes data to path by writing to a temp file in the same
 // directory and renaming it into place.
-func WriteFileAtomic(path string, data []byte) (err error) {
+func WriteFileAtomic(path string, data []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}

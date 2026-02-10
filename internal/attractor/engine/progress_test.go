@@ -94,3 +94,33 @@ func TestProgressIncludesCancellationExitEvent(t *testing.T) {
 		t.Fatal("missing subgraph cancellation exit event")
 	}
 }
+
+func TestCopyMap_DeepCopiesNestedCollections(t *testing.T) {
+	input := map[string]any{
+		"event":      "copy-check",
+		"nested":     map[string]any{"k": "v"},
+		"list":       []any{map[string]any{"id": "1"}, "x"},
+		"typed_map":  map[string]string{"alpha": "one"},
+		"typed_list": []string{"a", "b"},
+	}
+
+	got := copyMap(input)
+
+	input["nested"].(map[string]any)["k"] = "mutated"
+	input["list"].([]any)[0].(map[string]any)["id"] = "9"
+	input["typed_map"].(map[string]string)["alpha"] = "changed"
+	input["typed_list"].([]string)[0] = "z"
+
+	if gotNested := got["nested"].(map[string]any)["k"]; gotNested != "v" {
+		t.Fatalf("nested map was aliased: got %v want %v", gotNested, "v")
+	}
+	if gotID := got["list"].([]any)[0].(map[string]any)["id"]; gotID != "1" {
+		t.Fatalf("nested list map was aliased: got %v want %v", gotID, "1")
+	}
+	if gotAlpha := got["typed_map"].(map[string]string)["alpha"]; gotAlpha != "one" {
+		t.Fatalf("typed map was aliased: got %v want %v", gotAlpha, "one")
+	}
+	if gotFirst := got["typed_list"].([]string)[0]; gotFirst != "a" {
+		t.Fatalf("typed list was aliased: got %v want %v", gotFirst, "a")
+	}
+}

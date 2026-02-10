@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"time"
 )
@@ -90,7 +91,78 @@ func copyMap(in map[string]any) map[string]any {
 	}
 	out := make(map[string]any, len(in))
 	for k, v := range in {
-		out[k] = v
+		out[k] = deepCopyAny(v)
 	}
 	return out
+}
+
+func deepCopyAny(v any) any {
+	switch typed := v.(type) {
+	case map[string]any:
+		return copyMap(typed)
+	case []any:
+		out := make([]any, len(typed))
+		for i := range typed {
+			out[i] = deepCopyAny(typed[i])
+		}
+		return out
+	}
+
+	rv := reflect.ValueOf(v)
+	if !rv.IsValid() {
+		return nil
+	}
+
+	switch rv.Kind() {
+	case reflect.Map:
+		if rv.IsNil() {
+			return v
+		}
+		out := reflect.MakeMapWithSize(rv.Type(), rv.Len())
+		it := rv.MapRange()
+		for it.Next() {
+			key := it.Key()
+			value := it.Value()
+			copied := reflect.ValueOf(deepCopyAny(value.Interface()))
+			if !copied.IsValid() {
+				out.SetMapIndex(key, reflect.Zero(rv.Type().Elem()))
+				continue
+			}
+			if copied.Type().AssignableTo(rv.Type().Elem()) {
+				out.SetMapIndex(key, copied)
+				continue
+			}
+			if copied.Type().ConvertibleTo(rv.Type().Elem()) {
+				out.SetMapIndex(key, copied.Convert(rv.Type().Elem()))
+				continue
+			}
+			out.SetMapIndex(key, value)
+		}
+		return out.Interface()
+	case reflect.Slice:
+		if rv.IsNil() {
+			return v
+		}
+		out := reflect.MakeSlice(rv.Type(), rv.Len(), rv.Len())
+		for i := 0; i < rv.Len(); i++ {
+			value := rv.Index(i)
+			copied := reflect.ValueOf(deepCopyAny(value.Interface()))
+			if !copied.IsValid() {
+				out.Index(i).Set(reflect.Zero(rv.Type().Elem()))
+				continue
+			}
+			if copied.Type().AssignableTo(rv.Type().Elem()) {
+				out.Index(i).Set(copied)
+				continue
+			}
+			if copied.Type().ConvertibleTo(rv.Type().Elem()) {
+				out.Index(i).Set(copied.Convert(rv.Type().Elem()))
+				continue
+			}
+			out.Index(i).Set(value)
+		}
+		return out.Interface()
+	default:
+		return v
+	}
 }
