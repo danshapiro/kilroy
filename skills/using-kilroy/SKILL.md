@@ -21,6 +21,8 @@ kilroy attractor run --graph <file.dot> --config <run.yaml> [--run-id <id>] [--l
 kilroy attractor resume --logs-root <dir>
 kilroy attractor resume --cxdb <http_base_url> --context-id <id>
 kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]
+kilroy attractor status --logs-root <dir> [--json]
+kilroy attractor stop --logs-root <dir> [--grace-ms <ms>] [--force]
 kilroy attractor validate --graph <file.dot>
 kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] [--repo <path>] [--no-validate] <requirements>
 ```
@@ -51,6 +53,26 @@ kilroy attractor run --graph pipeline.dot --config run.yaml
 
 ```bash
 kilroy attractor resume --logs-root <path>
+```
+
+6. For long runs, launch detached so work continues after shell/session exits:
+
+```bash
+./kilroy attractor run --detach --graph pipeline.dot --config run.yaml --run-id <run_id> --logs-root <logs_root>
+```
+
+7. Observe run health and preflight behavior:
+
+```bash
+./kilroy attractor status --logs-root <logs_root>
+cat <logs_root>/preflight_report.json
+tail -f <logs_root>/progress.ndjson
+```
+
+8. Intervene when a run is stuck or needs termination:
+
+```bash
+./kilroy attractor stop --logs-root <logs_root> --grace-ms 30000 --force
 ```
 
 ## Ingest Details
@@ -129,6 +151,9 @@ Notes:
 - Provider keys accept `openai`, `anthropic`, `google` (`gemini` alias maps to `google`).
 - If a graph node uses provider `P`, `llm.providers.P.backend` must be set (`api` or `cli`).
 - In v1 behavior, runs require a clean repo and checkpoint each node.
+- Prefer first-class run config policy knobs over env tuning:
+  - `runtime_policy` for stage timeout, stall watchdog, and retry cap.
+  - `preflight.prompt_probes` for prompt-probe mode/transports/policy.
 
 ## Provider Backends
 

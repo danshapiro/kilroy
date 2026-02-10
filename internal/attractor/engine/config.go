@@ -36,6 +36,26 @@ type ProviderConfig struct {
 	Failover   []string          `json:"failover,omitempty" yaml:"failover,omitempty"`
 }
 
+type RuntimePolicyConfig struct {
+	StageTimeoutMS       *int `json:"stage_timeout_ms,omitempty" yaml:"stage_timeout_ms,omitempty"`
+	StallTimeoutMS       *int `json:"stall_timeout_ms,omitempty" yaml:"stall_timeout_ms,omitempty"`
+	StallCheckIntervalMS *int `json:"stall_check_interval_ms,omitempty" yaml:"stall_check_interval_ms,omitempty"`
+	MaxLLMRetries        *int `json:"max_llm_retries,omitempty" yaml:"max_llm_retries,omitempty"`
+}
+
+type PromptProbeConfig struct {
+	Enabled     *bool    `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	Transports  []string `json:"transports,omitempty" yaml:"transports,omitempty"`
+	TimeoutMS   *int     `json:"timeout_ms,omitempty" yaml:"timeout_ms,omitempty"`
+	Retries     *int     `json:"retries,omitempty" yaml:"retries,omitempty"`
+	BaseDelayMS *int     `json:"base_delay_ms,omitempty" yaml:"base_delay_ms,omitempty"`
+	MaxDelayMS  *int     `json:"max_delay_ms,omitempty" yaml:"max_delay_ms,omitempty"`
+}
+
+type PreflightConfig struct {
+	PromptProbes PromptProbeConfig `json:"prompt_probes,omitempty" yaml:"prompt_probes,omitempty"`
+}
+
 type RunConfigFile struct {
 	Version int `json:"version" yaml:"version"`
 
@@ -76,6 +96,9 @@ type RunConfigFile struct {
 		RunBranchPrefix string `json:"run_branch_prefix" yaml:"run_branch_prefix"`
 		CommitPerNode   bool   `json:"commit_per_node" yaml:"commit_per_node"`
 	} `json:"git" yaml:"git"`
+
+	RuntimePolicy RuntimePolicyConfig `json:"runtime_policy,omitempty" yaml:"runtime_policy,omitempty"`
+	Preflight     PreflightConfig     `json:"preflight,omitempty" yaml:"preflight,omitempty"`
 }
 
 func LoadRunConfigFile(path string) (*RunConfigFile, error) {
@@ -112,7 +135,7 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	if cfg.Git.RunBranchPrefix == "" {
 		cfg.Git.RunBranchPrefix = "attractor/run"
 	}
-	// metaspec default.
+	// metaspec v1 forces commit_per_node=true; explicit false is ignored.
 	if !cfg.Git.CommitPerNode {
 		cfg.Git.CommitPerNode = true
 	}
@@ -150,6 +173,26 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	cfg.CXDB.Autostart.Command = trimNonEmpty(cfg.CXDB.Autostart.Command)
 	cfg.CXDB.Autostart.UI.Command = trimNonEmpty(cfg.CXDB.Autostart.UI.Command)
 	cfg.CXDB.Autostart.UI.URL = strings.TrimSpace(cfg.CXDB.Autostart.UI.URL)
+
+	// Runtime policy defaults are explicit to preserve stable operator behavior.
+	if cfg.RuntimePolicy.StageTimeoutMS == nil {
+		v := 0
+		cfg.RuntimePolicy.StageTimeoutMS = &v
+	}
+	if cfg.RuntimePolicy.StallTimeoutMS == nil {
+		v := 600000
+		cfg.RuntimePolicy.StallTimeoutMS = &v
+	}
+	if cfg.RuntimePolicy.StallCheckIntervalMS == nil {
+		v := 5000
+		cfg.RuntimePolicy.StallCheckIntervalMS = &v
+	}
+	if cfg.RuntimePolicy.MaxLLMRetries == nil {
+		v := 6
+		cfg.RuntimePolicy.MaxLLMRetries = &v
+	}
+
+	cfg.Preflight.PromptProbes.Transports = trimNonEmpty(cfg.Preflight.PromptProbes.Transports)
 }
 
 func validateConfig(cfg *RunConfigFile) error {
@@ -214,6 +257,48 @@ func validateConfig(cfg *RunConfigFile) error {
 		if strings.EqualFold(cfg.LLM.CLIProfile, "real") && strings.TrimSpace(pc.Executable) != "" {
 			return fmt.Errorf("llm.providers.%s.executable is only allowed when llm.cli_profile=test_shim", prov)
 		}
+	}
+	if cfg.RuntimePolicy.StageTimeoutMS != nil && *cfg.RuntimePolicy.StageTimeoutMS < 0 {
+		return fmt.Errorf("runtime_policy.stage_timeout_ms must be >= 0")
+	}
+	if cfg.RuntimePolicy.StallTimeoutMS != nil && *cfg.RuntimePolicy.StallTimeoutMS < 0 {
+		return fmt.Errorf("runtime_policy.stall_timeout_ms must be >= 0")
+	}
+	if cfg.RuntimePolicy.StallCheckIntervalMS != nil && *cfg.RuntimePolicy.StallCheckIntervalMS < 0 {
+		return fmt.Errorf("runtime_policy.stall_check_interval_ms must be >= 0")
+	}
+	if cfg.RuntimePolicy.MaxLLMRetries != nil && *cfg.RuntimePolicy.MaxLLMRetries < 0 {
+		return fmt.Errorf("runtime_policy.max_llm_retries must be >= 0")
+	}
+	if cfg.RuntimePolicy.StallTimeoutMS != nil && cfg.RuntimePolicy.StallCheckIntervalMS != nil {
+		if *cfg.RuntimePolicy.StallTimeoutMS > 0 && *cfg.RuntimePolicy.StallCheckIntervalMS == 0 {
+			return fmt.Errorf("runtime_policy.stall_check_interval_ms must be > 0 when stall_timeout_ms > 0")
+		}
+	}
+	if cfg.Preflight.PromptProbes.TimeoutMS != nil && *cfg.Preflight.PromptProbes.TimeoutMS < 0 {
+		return fmt.Errorf("preflight.prompt_probes.timeout_ms must be >= 0")
+	}
+	if cfg.Preflight.PromptProbes.Retries != nil && *cfg.Preflight.PromptProbes.Retries < 0 {
+		return fmt.Errorf("preflight.prompt_probes.retries must be >= 0")
+	}
+	if cfg.Preflight.PromptProbes.BaseDelayMS != nil && *cfg.Preflight.PromptProbes.BaseDelayMS < 0 {
+		return fmt.Errorf("preflight.prompt_probes.base_delay_ms must be >= 0")
+	}
+	if cfg.Preflight.PromptProbes.MaxDelayMS != nil && *cfg.Preflight.PromptProbes.MaxDelayMS < 0 {
+		return fmt.Errorf("preflight.prompt_probes.max_delay_ms must be >= 0")
+	}
+	if cfg.Preflight.PromptProbes.BaseDelayMS != nil && cfg.Preflight.PromptProbes.MaxDelayMS != nil {
+		if *cfg.Preflight.PromptProbes.BaseDelayMS > 0 && *cfg.Preflight.PromptProbes.MaxDelayMS > 0 &&
+			*cfg.Preflight.PromptProbes.MaxDelayMS < *cfg.Preflight.PromptProbes.BaseDelayMS {
+			return fmt.Errorf("preflight.prompt_probes.max_delay_ms must be >= base_delay_ms when both are > 0")
+		}
+	}
+	if len(cfg.Preflight.PromptProbes.Transports) > 0 {
+		normalized, err := normalizePromptProbeTransports(cfg.Preflight.PromptProbes.Transports)
+		if err != nil {
+			return err
+		}
+		cfg.Preflight.PromptProbes.Transports = normalized
 	}
 	return nil
 }

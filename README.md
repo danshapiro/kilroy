@@ -155,6 +155,21 @@ git:
   require_clean: false
   run_branch_prefix: attractor/run
   commit_per_node: true
+
+runtime_policy:
+  stage_timeout_ms: 0
+  stall_timeout_ms: 600000
+  stall_check_interval_ms: 5000
+  max_llm_retries: 6
+
+preflight:
+  prompt_probes:
+    enabled: true
+    transports: [complete, stream]
+    timeout_ms: 15000
+    retries: 1
+    base_delay_ms: 500
+    max_delay_ms: 5000
 ```
 
 Important:
@@ -201,6 +216,13 @@ If autostart is used, startup logs are written under `{logs_root}`:
 
 - `cxdb-autostart.log`
 - `cxdb-ui-autostart.log`
+
+Observe and intervene during long runs:
+
+```bash
+./kilroy attractor status --logs-root <logs_root>
+./kilroy attractor stop --logs-root <logs_root> --grace-ms 30000 --force
+```
 
 ## CXDB Autostart Notes
 
@@ -256,6 +278,11 @@ API prompt-probe tuning (preflight):
 - `KILROY_PREFLIGHT_API_PROMPT_PROBE_BASE_DELAY_MS` (default `500`)
 - `KILROY_PREFLIGHT_API_PROMPT_PROBE_MAX_DELAY_MS` (default `5000`)
 
+Run config policy takes precedence over env tuning:
+
+- `runtime_policy.*` controls stage timeout, stall watchdog, and LLM retry cap.
+- `preflight.prompt_probes.*` controls prompt-probe enablement, transports, and probe policy.
+
 Kimi compatibility note:
 
 - Built-in `kimi` defaults target Kimi Coding (`anthropic_messages`, `https://api.kimi.com/coding`).
@@ -290,6 +317,8 @@ kilroy attractor run [--allow-test-shim] [--force-model <provider=model>] --grap
 kilroy attractor resume --logs-root <dir>
 kilroy attractor resume --cxdb <http_base_url> --context-id <id>
 kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]
+kilroy attractor status --logs-root <dir> [--json]
+kilroy attractor stop --logs-root <dir> [--grace-ms <ms>] [--force]
 kilroy attractor validate --graph <file.dot>
 kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] <requirements>
 ```

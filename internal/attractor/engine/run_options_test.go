@@ -30,3 +30,35 @@ func TestRunOptions_ApplyDefaults_DefaultLogsRootUsesXDGStateHomeAndIsOutsideRep
 		t.Fatalf("WorktreeDir: got %q want %q", opts.WorktreeDir, filepath.Join(opts.LogsRoot, "worktree"))
 	}
 }
+
+func TestRunOptionsApplyDefaults_SetsMaxLLMRetriesWhenUnset(t *testing.T) {
+	opts := RunOptions{
+		RepoPath: t.TempDir(),
+	}
+	if err := opts.applyDefaults(); err != nil {
+		t.Fatalf("applyDefaults: %v", err)
+	}
+	if opts.MaxLLMRetries == nil {
+		t.Fatalf("MaxLLMRetries should be set by default")
+	}
+	if got, want := *opts.MaxLLMRetries, 6; got != want {
+		t.Fatalf("MaxLLMRetries=%d want %d", got, want)
+	}
+}
+
+func TestRunOptionsApplyDefaults_PreservesExplicitZeroMaxLLMRetries(t *testing.T) {
+	zero := 0
+	opts := RunOptions{
+		RepoPath:      t.TempDir(),
+		MaxLLMRetries: &zero,
+	}
+	if err := opts.applyDefaults(); err != nil {
+		t.Fatalf("applyDefaults: %v", err)
+	}
+	if opts.MaxLLMRetries == nil {
+		t.Fatalf("MaxLLMRetries should not be nil")
+	}
+	if got, want := *opts.MaxLLMRetries, 0; got != want {
+		t.Fatalf("MaxLLMRetries=%d want %d", got, want)
+	}
+}

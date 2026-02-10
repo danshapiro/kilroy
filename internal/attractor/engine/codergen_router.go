@@ -389,11 +389,16 @@ func (r *CodergenRouter) withFailoverText(
 func attractorLLMRetryPolicy(execCtx *Execution, nodeID string, provider string, modelID string) llm.RetryPolicy {
 	// DefaultUnifiedLLM retries are conservative; Attractor runs should allow more headroom.
 	p := llm.DefaultRetryPolicy()
+	// Keep the current default assignment first.
 	p.MaxRetries = 6
 	p.BaseDelay = 2 * time.Second
 	p.MaxDelay = 120 * time.Second
 	p.BackoffMultiplier = 2.0
 	p.Jitter = true
+	// Override from RunOptions when explicitly configured.
+	if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.Options.MaxLLMRetries != nil {
+		p.MaxRetries = *execCtx.Engine.Options.MaxLLMRetries
+	}
 	maxRetries := p.MaxRetries
 	p.OnRetry = func(err error, attempt int, delay time.Duration) {
 		msg := fmt.Sprintf("llm retry (node=%s provider=%s model=%s attempt=%d/%d delay=%s): %v", nodeID, provider, modelID, attempt, maxRetries+1, delay, err)

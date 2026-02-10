@@ -399,3 +399,67 @@ modeldb:
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+func TestLoadRunConfigFile_InvalidPromptProbeTransport(t *testing.T) {
+	dir := t.TempDir()
+	yml := filepath.Join(dir, "run.yaml")
+	if err := os.WriteFile(yml, []byte(`
+version: 1
+repo:
+  path: /tmp/repo
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+llm:
+  providers:
+    openai:
+      backend: api
+modeldb:
+  openrouter_model_info_path: /tmp/catalog.json
+preflight:
+  prompt_probes:
+    transports: ["strem"]
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadRunConfigFile(yml)
+	if err == nil {
+		t.Fatal("expected invalid prompt probe transport validation error")
+	}
+	if !strings.Contains(err.Error(), "preflight.prompt_probes.transports") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadRunConfigFile_InvalidPromptProbeNumericPolicy(t *testing.T) {
+	dir := t.TempDir()
+	yml := filepath.Join(dir, "run.yaml")
+	if err := os.WriteFile(yml, []byte(`
+version: 1
+repo:
+  path: /tmp/repo
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+llm:
+  providers:
+    openai:
+      backend: api
+modeldb:
+  openrouter_model_info_path: /tmp/catalog.json
+preflight:
+  prompt_probes:
+    timeout_ms: -1
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadRunConfigFile(yml)
+	if err == nil {
+		t.Fatal("expected invalid prompt probe numeric policy validation error")
+	}
+	if !strings.Contains(err.Error(), "preflight.prompt_probes.timeout_ms") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

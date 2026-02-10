@@ -69,6 +69,8 @@ Although bringing your own agentic loop and unified LLM SDK is not required to b
   - Launch long-running jobs with `./kilroy attractor run --detach --graph <graph.dot> --config <run.yaml> --run-id <run_id> --logs-root <logs_root>`.
   - Detached launch writes `<logs_root>/run.pid` and appends launcher/child output to `<logs_root>/run.out`.
 - Monitoring:
+  - Snapshot current run state with `./kilroy attractor status --logs-root <logs_root>` (or `--json`).
+  - Stop a run with graceful termination then optional force kill: `./kilroy attractor stop --logs-root <logs_root> [--grace-ms <ms>] [--force]`.
   - Stream progress with `tail -f <logs_root>/progress.ndjson`.
   - Inspect terminal status with `cat <logs_root>/final.json`.
   - For detached runs, check launcher output fields: `detached=true`, `logs_root=...`, `pid_file=...`.

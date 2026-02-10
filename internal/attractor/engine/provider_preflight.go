@@ -82,7 +82,7 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 		_ = writePreflightReport(opts.LogsRoot, report)
 	}()
 
-	if err := runProviderAPIPreflight(ctx, g, runtimes, opts, report); err != nil {
+	if err := runProviderAPIPreflight(ctx, g, runtimes, cfg, opts, report); err != nil {
 		return report, err
 	}
 
@@ -93,7 +93,7 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 	return report, nil
 }
 
-func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[string]ProviderRuntime, opts RunOptions, report *providerPreflightReport) error {
+func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[string]ProviderRuntime, cfg *RunConfigFile, opts RunOptions, report *providerPreflightReport) error {
 	providers := usedAPIProviders(g, runtimes)
 	if len(providers) == 0 {
 		report.addCheck(providerPreflightCheck{
@@ -151,7 +151,7 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 				Name:     "provider_prompt_probe",
 				Provider: provider,
 				Status:   preflightStatusPass,
-				Message:  "prompt probe disabled by KILROY_PREFLIGHT_PROMPT_PROBES=off (or llm.cli_profile=test_shim default)",
+				Message:  "prompt probe disabled by config/env policy",
 				Details: map[string]any{
 					"backend": "api",
 				},
@@ -174,6 +174,16 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 	for _, provider := range client.ProviderNames() {
 		available[normalizeProviderKey(provider)] = true
 	}
+	transports, explicitTransports, err := configuredAPIPromptProbeTransports(cfg)
+	if err != nil {
+		report.addCheck(providerPreflightCheck{
+			Name:    "provider_prompt_probe_transports",
+			Status:  preflightStatusFail,
+			Message: err.Error(),
+		})
+		return fmt.Errorf("preflight: %w", err)
+	}
+	policy := preflightAPIPromptProbePolicyFromConfig(cfg)
 
 	for _, provider := range providers {
 		if !available[provider] {
@@ -186,7 +196,7 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 			return fmt.Errorf("preflight: provider %s api adapter is not available", provider)
 		}
 
-		targets, targetErr := usedAPIPromptProbeTargetsForProvider(g, runtimes, provider, opts)
+		targets, targetErr := usedAPIPromptProbeTargetsForProvider(g, runtimes, provider, opts, transports)
 		if targetErr != nil {
 			report.addCheck(providerPreflightCheck{
 				Name:     "provider_prompt_probe",
@@ -212,12 +222,18 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 			continue
 		}
 		for _, target := range targets {
-			responseText, probeErr := runProviderAPIPromptProbeTarget(ctx, client, target)
+			responseText, probeErr := runProviderAPIPromptProbeTargetWithPolicy(ctx, client, target, policy)
 			if probeErr != nil {
+				status := preflightStatusFail
+				if target.Transport == preflightAPIPromptProbeTransportStream && !explicitTransports {
+					// Default transport coverage should not block startup when a
+					// provider lacks a reliable stream preflight path.
+					status = preflightStatusWarn
+				}
 				report.addCheck(providerPreflightCheck{
 					Name:     "provider_prompt_probe",
 					Provider: provider,
-					Status:   preflightStatusFail,
+					Status:   status,
 					Message:  fmt.Sprintf("prompt probe failed for model %s (mode=%s transport=%s): %v", target.Model, target.Mode, target.Transport, probeErr),
 					Details: map[string]any{
 						"backend":   "api",
@@ -226,7 +242,10 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 						"transport": target.Transport,
 					},
 				})
-				return fmt.Errorf("preflight: provider %s api prompt probe failed for model %s (mode=%s transport=%s): %w", provider, target.Model, target.Mode, target.Transport, probeErr)
+				if status == preflightStatusFail {
+					return fmt.Errorf("preflight: provider %s api prompt probe failed for model %s (mode=%s transport=%s): %w", provider, target.Model, target.Mode, target.Transport, probeErr)
+				}
+				continue
 			}
 			report.addCheck(providerPreflightCheck{
 				Name:     "provider_prompt_probe",
@@ -277,6 +296,40 @@ type preflightAPIPromptProbePolicy struct {
 	MaxDelay  time.Duration
 }
 
+func configuredAPIPromptProbeTransports(cfg *RunConfigFile) ([]string, bool, error) {
+	if cfg != nil && len(cfg.Preflight.PromptProbes.Transports) > 0 {
+		out, err := normalizePromptProbeTransports(cfg.Preflight.PromptProbes.Transports)
+		if err != nil {
+			return nil, false, err
+		}
+		return out, true, nil
+	}
+	raw := strings.TrimSpace(os.Getenv("KILROY_PREFLIGHT_API_PROMPT_PROBE_TRANSPORTS"))
+	if raw != "" {
+		seen := map[string]bool{}
+		parsed := []string{}
+		for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
+			return r == ',' || r == ';' || r == '|' || r == ' ' || r == '\t' || r == '\n'
+		}) {
+			v := strings.ToLower(strings.TrimSpace(part))
+			switch v {
+			case "nonstream", "non-stream":
+				v = "complete"
+			}
+			transport := normalizePromptProbeTransport(v)
+			if transport == "" || seen[transport] {
+				continue
+			}
+			seen[transport] = true
+			parsed = append(parsed, transport)
+		}
+		if len(parsed) > 0 {
+			return parsed, true, nil
+		}
+	}
+	return []string{preflightAPIPromptProbeTransportComplete, preflightAPIPromptProbeTransportStream}, false, nil
+}
+
 func preflightAPIPromptProbePolicyFromEnv() preflightAPIPromptProbePolicy {
 	p := preflightAPIPromptProbePolicy{
 		Timeout:   defaultPreflightAPIPromptProbeTimeout,
@@ -295,6 +348,29 @@ func preflightAPIPromptProbePolicyFromEnv() preflightAPIPromptProbePolicy {
 	}
 	if ms := parseInt(strings.TrimSpace(os.Getenv("KILROY_PREFLIGHT_API_PROMPT_PROBE_MAX_DELAY_MS")), 0); ms > 0 {
 		p.MaxDelay = time.Duration(ms) * time.Millisecond
+	}
+	if p.MaxDelay < p.BaseDelay {
+		p.MaxDelay = p.BaseDelay
+	}
+	return p
+}
+
+func preflightAPIPromptProbePolicyFromConfig(cfg *RunConfigFile) preflightAPIPromptProbePolicy {
+	p := preflightAPIPromptProbePolicyFromEnv()
+	if cfg == nil {
+		return p
+	}
+	if v := cfg.Preflight.PromptProbes.TimeoutMS; v != nil && *v > 0 {
+		p.Timeout = time.Duration(*v) * time.Millisecond
+	}
+	if v := cfg.Preflight.PromptProbes.Retries; v != nil && *v >= 0 {
+		p.Retries = *v
+	}
+	if v := cfg.Preflight.PromptProbes.BaseDelayMS; v != nil && *v > 0 {
+		p.BaseDelay = time.Duration(*v) * time.Millisecond
+	}
+	if v := cfg.Preflight.PromptProbes.MaxDelayMS; v != nil && *v > 0 {
+		p.MaxDelay = time.Duration(*v) * time.Millisecond
 	}
 	if p.MaxDelay < p.BaseDelay {
 		p.MaxDelay = p.BaseDelay
@@ -804,6 +880,12 @@ func modelProbeMode() string {
 }
 
 func promptProbeMode(cfg *RunConfigFile) string {
+	if cfg != nil && cfg.Preflight.PromptProbes.Enabled != nil {
+		if *cfg.Preflight.PromptProbes.Enabled {
+			return "on"
+		}
+		return "off"
+	}
 	raw := strings.ToLower(strings.TrimSpace(os.Getenv("KILROY_PREFLIGHT_PROMPT_PROBES")))
 	switch raw {
 	case "off", "false", "0", "no", "n":
@@ -860,12 +942,11 @@ func usedAPIModelsForProvider(g *model.Graph, runtimes map[string]ProviderRuntim
 	return usedModelsForProviderBackend(g, runtimes, provider, BackendAPI, opts)
 }
 
-func usedAPIPromptProbeTargetsForProvider(g *model.Graph, runtimes map[string]ProviderRuntime, provider string, opts RunOptions) ([]preflightAPIPromptProbeTarget, error) {
+func usedAPIPromptProbeTargetsForProvider(g *model.Graph, runtimes map[string]ProviderRuntime, provider string, opts RunOptions, transports []string) ([]preflightAPIPromptProbeTarget, error) {
 	provider = normalizeProviderKey(provider)
 	if provider == "" || g == nil {
 		return nil, nil
 	}
-	transports := configuredAPIPromptProbeTransports()
 	if len(transports) == 0 {
 		transports = []string{preflightAPIPromptProbeTransportComplete}
 	}
@@ -984,39 +1065,6 @@ func preflightAPIPromptProbeToolDefinitions(provider string, modelID string, run
 		return nil, err
 	}
 	return profile.ToolDefinitions(), nil
-}
-
-func configuredAPIPromptProbeTransports() []string {
-	raw := strings.ToLower(strings.TrimSpace(os.Getenv("KILROY_PREFLIGHT_API_PROMPT_PROBE_TRANSPORTS")))
-	if raw == "" {
-		return []string{preflightAPIPromptProbeTransportComplete}
-	}
-	seen := map[string]bool{}
-	order := []string{}
-	appendTransport := func(v string) {
-		v = strings.ToLower(strings.TrimSpace(v))
-		switch v {
-		case "complete", "nonstream", "non-stream":
-			if !seen[preflightAPIPromptProbeTransportComplete] {
-				seen[preflightAPIPromptProbeTransportComplete] = true
-				order = append(order, preflightAPIPromptProbeTransportComplete)
-			}
-		case "stream":
-			if !seen[preflightAPIPromptProbeTransportStream] {
-				seen[preflightAPIPromptProbeTransportStream] = true
-				order = append(order, preflightAPIPromptProbeTransportStream)
-			}
-		}
-	}
-	for _, part := range strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == ';' || r == '|' || r == ' ' || r == '\t' || r == '\n'
-	}) {
-		appendTransport(part)
-	}
-	if len(order) == 0 {
-		return []string{preflightAPIPromptProbeTransportComplete}
-	}
-	return order
 }
 
 func usedModelsForProviderBackend(g *model.Graph, runtimes map[string]ProviderRuntime, provider string, backend BackendKind, opts RunOptions) []string {

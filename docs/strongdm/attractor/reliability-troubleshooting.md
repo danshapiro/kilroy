@@ -91,6 +91,13 @@ done
 cat "$RUN_ROOT/logs/final.json"
 ```
 
+Live control commands during investigation:
+
+```bash
+./kilroy attractor status --logs-root "$RUN_ROOT/logs"
+./kilroy attractor stop --logs-root "$RUN_ROOT/logs" --grace-ms 30000 --force
+```
+
 ## Fan-In Failure Routing Checks
 
 Inspect all `join_tracer` outcomes and selected next hops:
