@@ -25,6 +25,7 @@ func runAttractorStatus(args []string, stdout io.Writer, stderr io.Writer) int {
 	var raw bool
 	var watch bool
 	var latest bool
+	var useCXDB bool
 	intervalSec := 2
 
 	for i := 0; i < len(args); i++ {
@@ -46,6 +47,8 @@ func runAttractorStatus(args []string, stdout io.Writer, stderr io.Writer) int {
 			watch = true
 		case "--latest":
 			latest = true
+		case "--cxdb":
+			useCXDB = true
 		case "--interval":
 			i++
 			if i >= len(args) {
@@ -91,6 +94,13 @@ func runAttractorStatus(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	if follow {
+		if useCXDB {
+			return runFollowCXDB(logsRoot, stdout, raw)
+		}
+		// Auto-detect: if manifest.json has CXDB config, try CXDB first.
+		if m, err := loadCXDBManifest(logsRoot); err == nil && m.CXDB.HTTPBaseURL != "" {
+			return runFollowCXDB(logsRoot, stdout, raw)
+		}
 		return runFollowProgress(logsRoot, stdout, raw)
 	}
 
