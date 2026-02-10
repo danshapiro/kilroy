@@ -2070,6 +2070,16 @@ Each non-terminal node writes a `status.json` file in its stage directory. This 
 
 When `auto_status=true` on a node and no `status.json` was written by the handler, the engine synthesizes: `{"outcome": "success", "notes": "auto-status: handler completed without writing status"}`.
 
+### Appendix C.1: Reliability Contracts (Normative)
+
+- `status.json` in the stage directory is authoritative. A **legacy status fallback** (for example, worktree-level `status.json`) may be copied into the stage directory only when canonical stage output is missing and the fallback payload is valid outcome JSON.
+- Parallel branch activity must update parent watchdog timing through **fanout liveness** events so parent runs do not false-timeout while branch work is active.
+- Run-level cancellation takes precedence over branch-local retry policy. No additional stage attempts may start after cancellation is observed.
+- Deterministic cycle breaking uses `loop_restart_signature_limit` and applies only to deterministic failures. The **canceled failure class** must not trip deterministic cycle breakers.
+- Runtime provider policy semantics:
+  - Omitted `failover` means provider defaults may apply.
+  - `failover: []` means explicit hard pin and no provider fallback.
+
 ---
 
 ## Appendix D: Error Categories

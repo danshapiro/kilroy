@@ -397,6 +397,11 @@ The loop exits when any of these conditions is met:
 4. **Abort signal.** The host application signals cancellation. The current LLM stream is closed, running processes are killed, and the session transitions to CLOSED.
 5. **Unrecoverable error.** An authentication error, context overflow, or other non-retryable error. The session transitions to CLOSED.
 
+Cancellation contract (normative):
+- Run-level cancellation takes precedence over local retry/error policy.
+- Once cancellation is observed, no new stage/tool attempt may start.
+- Agent runtimes that orchestrate branch/subagent work should emit fanout liveness-style progress so parent watchdogs can distinguish active work from stalls.
+
 ### 2.9 Event System
 
 Every agent action emits a typed event. Events are delivered via an async iterator (or language-appropriate equivalent) to the host application.

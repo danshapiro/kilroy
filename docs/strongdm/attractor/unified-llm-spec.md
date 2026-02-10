@@ -1306,6 +1306,10 @@ SDKError
  +-- ConfigurationError                 -- SDK misconfiguration (missing provider, etc.)
 ```
 
+Attractor integration contract (normative):
+- `AbortError` MUST be classified as the **canceled failure class** by orchestrators.
+- `AbortError` is cancellation semantics, not deterministic product/configuration failure.
+
 Note: Error class names are chosen to avoid shadowing common language built-in names (e.g., `AccessDeniedError` instead of `PermissionError`, `NetworkError` instead of `ConnectionError`, `RequestTimeoutError` instead of `TimeoutError`).
 
 ### 6.2 ProviderError Fields
