@@ -15,10 +15,10 @@ Source analyses:
 ## Spec Coverage Map
 
 - **Spec-backed now**
-- Canonical stage status file path/contract: `{logs_root}/{node_id}/status.json` (artifact contract; routing remains in-memory by handler outcome).
-- DOT routing/conditions/retry semantics.
-- Parallel branch isolation + join/error policy model.
-- Provider/model explicitness principles from unified-llm and attractor model selection.
+- Canonical stage status file path/contract: `{logs_root}/{node_id}/status.json` (artifact contract; routing remains in-memory by handler outcome). Reference: attractor spec Section 5.6 + Appendix C.
+- DOT routing/conditions/retry semantics. Reference: attractor spec Sections 3.3, 3.5, 3.7, 10.
+- Parallel branch isolation + join/error policy model. Reference: attractor spec Section 4.8.
+- Provider/model explicitness principles from unified-llm and attractor model selection. Reference: unified-llm Section 2.2; attractor Sections 2.6 and 8.
 - **Runtime-contract in code but under-specified**
 - Stall watchdog liveness aggregation.
 - Attempt lifecycle identifiers and heartbeat validity windows.
@@ -32,7 +32,7 @@ Source analyses:
 - Canonical outcome casing rule across attractor docs.
 - Runtime event taxonomy contract for progress/liveness.
 
-## Core Invariants (Formal)
+## Proposed Runtime Invariants (Implementation Contract)
 
 - Parent liveness invariant: if any active branch emits accepted liveness events, parent watchdog idle timer resets.
 - Attempt ownership invariant: an attempt may consume status only from the same `(run_id, node_id, attempt_id)` scope.
@@ -45,24 +45,25 @@ Source analyses:
 
 - These are runtime-contract definitions (not currently specified in attractor/coding-agent-loop/unified-llm specs).
 - `run_generation`: monotonic integer incremented on each loop-restart generation of a run; included on liveness events to avoid stale-branch attribution.
-- `attempt_id`: deterministic identifier for a stage attempt, format `branch_id:node_id:attempt_ordinal`, where `attempt_ordinal` is 1-indexed to match attractor retry semantics.
+- `attempt_id`: deterministic identifier for a stage attempt, format `branch_id:node_id:attempt_ordinal`, where `attempt_ordinal` is 1-indexed and `1` means the initial execution (retries are `2+`).
 - `terminal_artifact`: top-level `final.json` at run logs root, schema aligned with `internal/attractor/runtime/final.go`:
   - `timestamp`
   - `status` (`success|fail`)
   - `run_id`
   - `final_git_commit_sha`
   - `failure_reason` (optional)
-  - `cxdb_context_id`
-  - `cxdb_head_turn_id`
+  - `cxdb_context_id` (optional extension field)
+  - `cxdb_head_turn_id` (optional extension field)
 - Terminal status mapping (run-level, intentionally binary):
-  - run `success` only when pipeline reaches terminal success state with goal-gate constraints satisfied (including goal-gate acceptance of `success` or `partial_success`)
+  - run `success` only when pipeline reaches terminal success state with goal-gate constraints satisfied (stage-level acceptance includes `SUCCESS` and `PARTIAL_SUCCESS`)
   - run `fail` for terminal failures (including exhausted retries, watchdog/cancel/internal fatal paths, or unsatisfied goal-gate completion)
 - `cycle_break_threshold`: sourced from runtime graph attribute `loop_restart_signature_limit` (implemented in engine today, not in attractor-spec); default value inherits code constant (`defaultLoopRestartSignatureLimit`) rather than a hardcoded doc value.
   - This graph attribute is runtime-contract behavior today and must be documented as a spec delta.
+  - This mechanism is distinct from coding-agent-loop per-session loop detection (`loop_detection_window`) in coding-agent-loop Section 2.10.
 
-## Runtime Event Proposal (Spec Delta Required)
+## Runtime Event Contract (Used By This Plan, Then Codified)
 
-No normative cross-spec mapping is asserted yet. The events below are proposed runtime telemetry signals and must be codified before being treated as spec contracts.
+The events below are treated as runtime implementation contracts for this fix plan and must later be codified in spec deltas.
 
 Proposed liveness event set for watchdog:
 - `stage_attempt_start`
@@ -117,6 +118,7 @@ Proposed liveness event set for watchdog:
 - Guarantee terminal artifact persistence for all controllable terminal paths.
   - Done when: `final.json` is persisted on success/fail/cancel/watchdog/internal fatal paths (best effort excludes uncatchable `SIGKILL`).
   - Write contract: `final.json` persistence uses temp-file + atomic rename for consistency with status artifact durability expectations.
+  - Current code gap to fix explicitly: `runtime/final.go` currently writes via direct `os.WriteFile`; migrate to atomic temp+rename write path.
 
 ## P1 (Hardening)
 
@@ -136,12 +138,15 @@ Proposed liveness event set for watchdog:
   - `NetworkError`
   - `StreamError`
   - `ConfigurationError`
+  - `InvalidToolCallError` (explicitly mapped or explicitly out-of-scope)
+  - `NoObjectGeneratedError` (explicitly mapped or explicitly out-of-scope)
   - Done when: terminal classing distinguishes cancel/stall/runtime faults from provider deterministic/transient categories using full mapping.
   - Existing behavior baseline to preserve: `ContentFilterError` remains non-retryable/deterministic unless a future spec-delta policy explicitly changes it.
 - Normalize failure signatures only for breaker decisions.
   - Done when: raw reason remains route-visible; normalized key used only by breaker/telemetry.
 - Enforce pinned model/provider no-failover policy from run config.
   - Done when: policy violations fail loudly; engine never silently falls back when config forbids it.
+  - Cross-reference: this behavior remains a spec-delta item until codified.
 - Tighten provider tool adaptation (`apply_patch` and API/CLI contract differences).
   - Done when: contract violations are deterministic and diagnosable.
 - Add parent rollup branch telemetry.
@@ -160,6 +165,7 @@ Proposed liveness event set for watchdog:
   - Unit: cancel gate prevents scheduling next stage.
   - Integration: no new attempts after cancel; traversal exits cleanly.
   - Matrix: includes `error_policy=ignore` to prove cancellation precedence.
+  - Interaction case: watchdog must ignore post-cancel liveness events from canceled branches.
 - Deterministic cycle breaker.
   - Unit: signature counting/limit logic.
   - Integration: subgraph breaker triggers at configured limit.
@@ -167,6 +173,7 @@ Proposed liveness event set for watchdog:
   - Unit: precedence + ownership decision table.
   - Decision table minimum cases:
   - canonical present + valid -> choose canonical
+  - canonical present + corrupt/unparseable -> fail deterministically with explicit ingestion diagnostic
   - canonical missing + worktree status valid/owned -> choose worktree status
   - canonical missing + worktree invalid + .ai valid/owned -> choose .ai status
   - canonical missing + fallback ownership mismatch -> reject fallback
