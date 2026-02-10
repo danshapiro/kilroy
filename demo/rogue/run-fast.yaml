@@ -39,12 +39,12 @@ git:
   commit_per_node: true
 
 setup:
-  timeout_ms: 120000
+  timeout_ms: 900000
   commands:
-    - 'command -v cargo >/dev/null || { echo "missing required tool: cargo" >&2; exit 1; }'
+    - 'command -v cargo >/dev/null || { echo "missing required tool: cargo (install via rustup.rs)" >&2; exit 1; }'
     - 'command -v rustup >/dev/null || { echo "missing required tool: rustup (install via rustup.rs)" >&2; exit 1; }'
-    - 'command -v wasm-pack >/dev/null || { echo "missing required tool: wasm-pack (install with: cargo install wasm-pack)" >&2; exit 1; }'
-    - 'rustup target list --installed | grep -qx wasm32-unknown-unknown || { echo "missing required rust target: wasm32-unknown-unknown (install with: rustup target add wasm32-unknown-unknown)" >&2; exit 1; }'
+    - 'command -v wasm-pack >/dev/null || cargo install wasm-pack'
+    - 'rustup target list --installed | grep -qx wasm32-unknown-unknown || rustup target add wasm32-unknown-unknown'
 
 runtime_policy:
   stage_timeout_ms: 0
