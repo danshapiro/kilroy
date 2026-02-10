@@ -1,7 +1,5 @@
 # Operator Ergonomics and Reliability Guardrails Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use `superpowers:executing-plans` to implement this plan task-by-task.
-
 **Goal:** Make Kilroy choose safer, more operable behavior by default by adding code guardrails, versioned run-config knobs, explicit operator controls, and aligned docs/samples (excluding `AGENTS.md` changes).
 
 **Architecture:** Put operability in code first (CLI + engine). Add first-class run controls (`status`, `stop`) and bounded runtime policy controls (`stage timeout`, `stall watchdog`, `LLM retry cap`) wired from run config. Keep preflight behavior config-driven and runtime-shape-aware, then update skills/docs/samples to match.
@@ -29,11 +27,13 @@ This revision explicitly addresses each fresh-eyes finding:
 - Split `runstate` type definitions from loader implementation (`types.go` + `snapshot.go`).
 - Define strict artifact precedence: terminal `final.json` state wins and live/progress is not allowed to override terminal fields.
 - Replace Linux-only `/proc/<pid>` checks with PID aliveness checks using `syscall.Kill(pid, 0)` (with `EPERM` treated as alive) to avoid `/proc` dependency.
+- Clarify `run.pid` parsing to trim whitespace so both newline-free and newline-terminated PID files are handled.
 - Remove `fmt.Sprint(nil)` behavior from event extraction (`nil` maps to empty string).
 - Fix `attractor status` test design: running state requires a live PID, not only `live.json`.
 - Avoid duplicate PID parsing in `attractor stop` by using `runstate.LoadSnapshot`.
 - Make stop polling interval adaptive for short grace windows.
 - Resolve zero-value ambiguity for runtime-policy knobs by using pointer fields in config.
+- Preserve explicit-vs-unset retry semantics through `RunOptions` by representing `MaxLLMRetries` as a pointer and defaulting it in `applyDefaults`.
 - Make runtime defaults explicit and consistent across config parsing, engine behavior, and docs.
 - Add `RunOptions` runtime fields in the same task where config mapping is introduced.
 - Define global-stage-timeout vs node-timeout semantics explicitly (effective timeout is the minimum positive timeout).
@@ -42,6 +42,7 @@ This revision explicitly addresses each fresh-eyes finding:
 - Remove undefined `boolPtr` dependency from tests.
 - Make shell check scripts portable (`rg` when present, otherwise `grep`).
 - Remove ambiguous “if exists” doc edit instructions by explicitly checking file existence in the plan before edits.
+- Ensure sample config keys are first-class schema fields (not unknown-field side effects) before documenting them in demos.
 
 ---
 
@@ -77,7 +78,7 @@ func TestLoadSnapshot_FinalStateWinsAndIgnoresLiveForStateAndNode(t *testing.T) 
 
 func TestLoadSnapshot_InfersRunningFromAlivePID(t *testing.T) {
 	root := t.TempDir()
-	_ = os.WriteFile(filepath.Join(root, "run.pid"), []byte(strconv.Itoa(os.Getpid())+"\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(root, "run.pid"), []byte(strconv.Itoa(os.Getpid())), 0o644)
 
 	s, err := LoadSnapshot(root)
 	if err != nil {
@@ -141,6 +142,7 @@ type Snapshot struct {
 - Load `final.json` first.
 - If final status is terminal (`success`/`fail`), do not use `live.json`/`progress.ndjson` to set `LastEvent` or `CurrentNodeID`.
 - Always decode `run.pid` if present for observability fields (`PID`, `PIDAlive`) but do not override terminal state.
+- Parse PID with `strings.TrimSpace` so both production format (no newline) and newline-terminated files are accepted.
 - Infer `running` only when state is still unknown and PID is alive.
 - Use `pidAlive(pid)` helper with `syscall.Kill(pid, 0)` + `EPERM` handling.
 - In event decoding, treat `nil` as empty string.
@@ -170,8 +172,8 @@ git commit -m "feat(runstate): add artifact-backed run snapshot model with termi
 
 ```go
 func TestAttractorStatus_PrintsRunningState_WhenPIDAlive(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("requires sleep process")
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("requires sleep binary")
 	}
 	bin := buildKilroyBinary(t)
 	logs := t.TempDir()
@@ -182,7 +184,7 @@ func TestAttractorStatus_PrintsRunningState_WhenPIDAlive(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = proc.Process.Kill() })
 
-	_ = os.WriteFile(filepath.Join(logs, "run.pid"), []byte(strconv.Itoa(proc.Process.Pid)+"\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(logs, "run.pid"), []byte(strconv.Itoa(proc.Process.Pid)), 0o644)
 	_ = os.WriteFile(filepath.Join(logs, "live.json"), []byte(`{"event":"stage_attempt_start","node_id":"impl"}`), 0o644)
 
 	out, err := exec.Command(bin, "attractor", "status", "--logs-root", logs).CombinedOutput()
@@ -251,8 +253,8 @@ git commit -m "feat(cli): add attractor status command backed by runstate snapsh
 
 ```go
 func TestAttractorStop_KillsProcessFromRunPID(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("linux-only process control test")
+	if _, err := exec.LookPath("sleep"); err != nil {
+		t.Skip("requires sleep binary")
 	}
 	bin := buildKilroyBinary(t)
 	logs := t.TempDir()
@@ -262,7 +264,7 @@ func TestAttractorStop_KillsProcessFromRunPID(t *testing.T) {
 		t.Fatalf("start sleep: %v", err)
 	}
 	pid := proc.Process.Pid
-	_ = os.WriteFile(filepath.Join(logs, "run.pid"), []byte(strconv.Itoa(pid)+"\n"), 0o644)
+	_ = os.WriteFile(filepath.Join(logs, "run.pid"), []byte(strconv.Itoa(pid)), 0o644)
 
 	out, err := exec.Command(bin, "attractor", "stop", "--logs-root", logs, "--grace-ms", "100", "--force").CombinedOutput()
 	if err != nil {
@@ -323,6 +325,7 @@ git commit -m "feat(cli): add attractor stop command using runstate snapshot and
 - Modify: `internal/attractor/engine/config.go`
 - Modify: `internal/attractor/engine/engine.go`
 - Modify: `internal/attractor/engine/run_with_config.go`
+- Modify: `internal/attractor/engine/run_options_test.go`
 - Create: `internal/attractor/engine/config_runtime_policy_test.go`
 
 **Step 1: Write failing tests**
@@ -388,19 +391,20 @@ Add these concrete fields to `RunOptions` in this task (not deferred):
 - `StageTimeout time.Duration`
 - `StallTimeout time.Duration`
 - `StallCheckInterval time.Duration`
-- `MaxLLMRetries int`
+- `MaxLLMRetries *int`
 
 Map config into `RunOptions` in `run_with_config.go` with explicit pointer handling so `0` remains a valid explicit value.
+Update `run_options_test.go` to assert `applyDefaults` sets `MaxLLMRetries` when unset and preserves an explicit pointer to `0`.
 
 **Step 4: Run test to verify pass**
 
-Run: `go test ./internal/attractor/engine -run TestRuntimePolicy_DefaultsAndValidation -v`
+Run: `go test ./internal/attractor/engine -run 'TestRuntimePolicy_DefaultsAndValidation|TestRunOptionsApplyDefaults' -v`
 Expected: PASS.
 
 **Step 5: Commit**
 
 ```bash
-git add internal/attractor/engine/config.go internal/attractor/engine/engine.go internal/attractor/engine/run_with_config.go internal/attractor/engine/config_runtime_policy_test.go
+git add internal/attractor/engine/config.go internal/attractor/engine/engine.go internal/attractor/engine/run_with_config.go internal/attractor/engine/run_options_test.go internal/attractor/engine/config_runtime_policy_test.go
 git commit -m "feat(config): add pointer-based runtime_policy knobs with explicit defaults and RunOptions mapping"
 ```
 
@@ -427,7 +431,7 @@ func TestRun_GlobalStageTimeoutCapsToolNode(t *testing.T) {
   exit [shape=Msquare]
   start -> wait -> exit
 }`)
-	repo := initRepoForEngineTest(t)
+	repo := initTestRepo(t)
 	opts := RunOptions{RepoPath: repo, StageTimeout: 100 * time.Millisecond}
 	_, err := Run(context.Background(), dot, opts)
 	if err == nil {
@@ -442,7 +446,7 @@ func TestRun_GlobalAndNodeTimeout_UsesSmallerTimeout(t *testing.T) {
   exit [shape=Msquare]
   start -> wait -> exit
 }`)
-	repo := initRepoForEngineTest(t)
+	repo := initTestRepo(t)
 	opts := RunOptions{RepoPath: repo, StageTimeout: 5 * time.Second}
 	_, err := Run(context.Background(), dot, opts)
 	if err == nil {
@@ -470,12 +474,13 @@ Implementation details:
   - Watchdog checks at `StallCheckInterval`; if no progress for `StallTimeout`, append `stall_watchdog_timeout` progress event and cancel run with cause.
 - LLM retry cap:
   - `attractorLLMRetryPolicy` uses `RunOptions.MaxLLMRetries` (including explicit `0`), with default resolved in Task 4.
+  - In non-config call paths, `applyDefaults` must populate `RunOptions.MaxLLMRetries` when nil before policy wiring reads it.
 
 Example retry-cap wiring:
 
 ```go
-if execCtx != nil && execCtx.Engine != nil {
-	p.MaxRetries = execCtx.Engine.Options.MaxLLMRetries
+if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.Options.MaxLLMRetries != nil {
+	p.MaxRetries = *execCtx.Engine.Options.MaxLLMRetries
 }
 ```
 
@@ -690,6 +695,9 @@ preflight:
     base_delay_ms: 500
     max_delay_ms: 5000
 ```
+
+Schema note:
+- `runtime_policy` and `preflight` are explicit `RunConfigFile` fields added in Tasks 4 and 6, so these sample keys are validated as first-class config, not unknown-key pass-through.
 
 If `demo/dttf/run.yaml` is absent, do not reference it in changed docs as an edited file.
 
