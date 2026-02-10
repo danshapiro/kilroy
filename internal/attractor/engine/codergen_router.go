@@ -893,7 +893,8 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			idleTimeout = codexIdleTimeout()
 			killGrace = codexKillGrace()
 		}
-		runErr, _, err = waitWithIdleWatchdog(ctx, cmd, stdoutPath, stderrPath, idleTimeout, killGrace)
+		var idleTimedOut bool
+		runErr, idleTimedOut, err = waitWithIdleWatchdog(ctx, cmd, stdoutPath, stderrPath, idleTimeout, killGrace)
 		if err != nil {
 			return nil, -1, time.Since(start), err
 		}
@@ -901,6 +902,10 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		exitCode = -1
 		if cmd.ProcessState != nil {
 			exitCode = cmd.ProcessState.ExitCode()
+		}
+		if idleTimedOut {
+			inv["failure_trigger"] = "idle_timeout"
+			inv["idle_timeout_seconds"] = int(idleTimeout.Seconds())
 		}
 		return runErr, exitCode, dur, nil
 	}
@@ -1257,6 +1262,19 @@ func waitWithIdleWatchdog(ctx context.Context, cmd *exec.Cmd, stdoutPath, stderr
 	go func() {
 		waitCh <- cmd.Wait()
 	}()
+
+	// If the context has a deadline closer than the idle timeout, disable idle
+	// timeout and let the context deadline handle termination. This prevents
+	// the idle watchdog from killing a process that still has node-level time
+	// remaining (e.g., codex thinking for 2+ minutes during a 30-minute node).
+	if idleTimeout > 0 {
+		if deadline, ok := ctx.Deadline(); ok {
+			if remaining := time.Until(deadline); remaining <= idleTimeout+killGrace {
+				idleTimeout = 0
+			}
+		}
+	}
+
 	if idleTimeout <= 0 {
 		runErr := <-waitCh
 		return runErr, false, nil

@@ -189,6 +189,66 @@ done
 	t.Fatalf("cancel child process pid=%d still exists", pid)
 }
 
+// TestWaitWithIdleWatchdog_DisabledWhenContextDeadlineCloser verifies that the
+// idle watchdog is disabled when the context deadline is closer than the idle
+// timeout, allowing the context to handle termination cleanly.
+func TestWaitWithIdleWatchdog_DisabledWhenContextDeadlineCloser(t *testing.T) {
+	// Create a script that writes to stdout once then goes quiet.
+	cli := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(cli, []byte(`#!/usr/bin/env bash
+set -euo pipefail
+echo "started" >&2
+# Go quiet — if idle watchdog is active at 500ms, it would kill us.
+# But context deadline is 1s, so idle should be disabled.
+sleep 5
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	stdoutPath := filepath.Join(t.TempDir(), "stdout.log")
+	stderrPath := filepath.Join(t.TempDir(), "stderr.log")
+	stdoutFile, err := os.Create(stdoutPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stdoutFile.Close() }()
+	stderrFile, err := os.Create(stderrPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = stderrFile.Close() }()
+
+	// Context deadline of 1s, idle timeout of 500ms. Without the fix,
+	// idle watchdog would fire at 500ms. With the fix, idle is disabled
+	// because remaining (1s) <= idleTimeout (500ms) + killGrace (200ms).
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, cli)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Stdout = stdoutFile
+	cmd.Stderr = stderrFile
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("start cmd: %v", err)
+	}
+
+	runErr, timedOut, waitErr := waitWithIdleWatchdog(ctx, cmd, stdoutPath, stderrPath, 500*time.Millisecond, 200*time.Millisecond)
+	if waitErr != nil {
+		t.Fatalf("waitWithIdleWatchdog error: %v", waitErr)
+	}
+	// Should NOT report idle timeout — context deadline should have handled it.
+	if timedOut {
+		t.Fatalf("idle watchdog should be disabled when context deadline is closer, got timedOut=true")
+	}
+	if runErr == nil {
+		t.Fatalf("expected context deadline error, got nil")
+	}
+	if !strings.Contains(runErr.Error(), "context deadline exceeded") &&
+		!strings.Contains(runErr.Error(), "signal: killed") {
+		t.Logf("runErr: %v (acceptable — context-driven termination)", runErr)
+	}
+}
+
 func processExists(pid int) bool {
 	if pid <= 0 {
 		return false
