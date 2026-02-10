@@ -887,6 +887,38 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		if err := cmd.Start(); err != nil {
 			return nil, -1, 0, err
 		}
+
+		// Emit periodic heartbeat events so operators monitoring detached runs
+		// have visibility into long-running codergen nodes.
+		heartbeatDone := make(chan struct{})
+		go func() {
+			defer close(heartbeatDone)
+			interval := codergenHeartbeatInterval()
+			if interval <= 0 {
+				return
+			}
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					stdoutSz, _ := fileSize(stdoutPath)
+					stderrSz, _ := fileSize(stderrPath)
+					if execCtx != nil && execCtx.Engine != nil {
+						execCtx.Engine.appendProgress(map[string]any{
+							"event":        "stage_heartbeat",
+							"node_id":      node.ID,
+							"elapsed_s":    int(time.Since(start).Seconds()),
+							"stdout_bytes": stdoutSz,
+							"stderr_bytes": stderrSz,
+						})
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
 		idleTimeout := time.Duration(0)
 		killGrace := time.Duration(0)
 		if codexSemantics {
@@ -1232,6 +1264,18 @@ func scrubConflictingProviderEnvKeys(base []string, providerKey string) []string
 		out = append(out, entry)
 	}
 	return out
+}
+
+func codergenHeartbeatInterval() time.Duration {
+	v := strings.TrimSpace(os.Getenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL"))
+	if v == "" {
+		return 60 * time.Second
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 60 * time.Second
+	}
+	return d
 }
 
 func codexIdleTimeout() time.Duration {
