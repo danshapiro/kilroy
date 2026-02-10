@@ -5,6 +5,8 @@ digraph rogue_wasm_port {
         default_max_retry=3,
         retry_target="impl_integration",
         fallback_retry_target="impl_scaffold",
+        default_command_timeout_ms=300000,
+        max_command_timeout_ms=1800000,
         model_stylesheet="
             * { llm_model: gpt-5.3-codex; llm_provider: openai; }
             .hard { llm_model: gpt-5.3-codex; llm_provider: openai; }

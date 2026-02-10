@@ -54,7 +54,7 @@ setup:
 
 runtime_policy:
   stage_timeout_ms: 0
-  stall_timeout_ms: 600000
+  stall_timeout_ms: 1800000
   stall_check_interval_ms: 5000
   max_llm_retries: 6
 
