@@ -393,10 +393,13 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 			res.Outcome = runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}
 		}
 	}
-	emitBranchProgress("branch_subgraph_done", map[string]any{
-		"branch_status":         strings.TrimSpace(string(res.Outcome.Status)),
-		"branch_failure_reason": strings.TrimSpace(res.Outcome.FailureReason),
-	})
+	doneExtra := map[string]any{
+		"branch_status": strings.TrimSpace(string(res.Outcome.Status)),
+	}
+	if reason := strings.TrimSpace(res.Outcome.FailureReason); reason != "" {
+		doneExtra["branch_failure_reason"] = reason
+	}
+	emitBranchProgress("branch_subgraph_done", doneExtra)
 	res.BranchKey = key
 	res.BranchName = branchName
 	res.StartNodeID = edge.To

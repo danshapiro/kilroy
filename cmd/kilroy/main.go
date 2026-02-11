@@ -14,6 +14,29 @@ import (
 	"github.com/strongdm/kilroy/internal/providerspec"
 )
 
+func signalCancelContext() (context.Context, func()) {
+	ctx, cancel := context.WithCancelCause(context.Background())
+	sigCh := make(chan os.Signal, 1)
+	stopCh := make(chan struct{})
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		for {
+			select {
+			case sig := <-sigCh:
+				cancel(fmt.Errorf("stopped by signal %s", sig.String()))
+			case <-stopCh:
+				return
+			}
+		}
+	}()
+	cleanup := func() {
+		signal.Stop(sigCh)
+		close(stopCh)
+		cancel(nil)
+	}
+	return ctx, cleanup
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		usage()
@@ -193,14 +216,7 @@ func attractorRun(args []string) {
 	}
 
 	// Default: no deadline. CLI runs (especially with provider CLIs) can take hours.
-	ctx, cancel := context.WithCancelCause(context.Background())
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		for sig := range sigCh {
-			cancel(fmt.Errorf("stopped by signal %s", sig.String()))
-		}
-	}()
+	ctx, cleanupSignalCtx := signalCancelContext()
 
 	res, err := engine.RunWithConfig(ctx, dotSource, cfg, engine.RunOptions{
 		RunID:         runID,
@@ -221,6 +237,7 @@ func attractorRun(args []string) {
 			fmt.Fprintf(os.Stderr, "CXDB UI available at %s\n", info.UIURL)
 		},
 	})
+	cleanupSignalCtx()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -391,14 +408,7 @@ func attractorResume(args []string) {
 		os.Exit(1)
 	}
 	// Default: no deadline. Resume may replay long stages or rehydrate large artifacts.
-	ctx, cancel := context.WithCancelCause(context.Background())
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		for sig := range sigCh {
-			cancel(fmt.Errorf("stopped by signal %s", sig.String()))
-		}
-	}()
+	ctx, cleanupSignalCtx := signalCancelContext()
 	var (
 		res *engine.Result
 		err error
@@ -414,6 +424,7 @@ func attractorResume(args []string) {
 		usage()
 		os.Exit(1)
 	}
+	cleanupSignalCtx()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
