@@ -215,6 +215,14 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			if reasoning != "" {
 				sessCfg.ReasoningEffort = reasoning
 			}
+			// Cerebras GLM 4.7: preserve reasoning across agent-loop turns.
+			// clear_thinking defaults to true on the API, which strips prior
+			// reasoning context — counterproductive for multi-step agentic work.
+			if normalizeProviderKey(prov) == "cerebras" {
+				sessCfg.ProviderOptions = map[string]any{
+					"cerebras": map[string]any{"clear_thinking": false},
+				}
+			}
 			if v := parseInt(node.Attr("max_agent_turns", ""), 0); v > 0 {
 				sessCfg.MaxTurns = v
 			}

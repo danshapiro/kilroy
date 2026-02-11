@@ -33,6 +33,10 @@ type SessionConfig struct {
 	// Valid values are provider-dependent but typically include: low|medium|high.
 	ReasoningEffort string
 
+	// ProviderOptions is merged into every LLM request as provider_options.
+	// Use this for provider-specific parameters (e.g., Cerebras clear_thinking).
+	ProviderOptions map[string]any
+
 	EnableLoopDetection *bool
 	LoopDetectionWindow int
 
@@ -440,6 +444,9 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 		if strings.TrimSpace(s.cfg.ReasoningEffort) != "" {
 			v := strings.TrimSpace(s.cfg.ReasoningEffort)
 			req.ReasoningEffort = &v
+		}
+		if len(s.cfg.ProviderOptions) > 0 {
+			req.ProviderOptions = s.cfg.ProviderOptions
 		}
 
 		policy := llm.DefaultRetryPolicy()

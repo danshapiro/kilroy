@@ -119,12 +119,13 @@ This file contains:
 
 If the file is missing or unreadable, proceed with no defaults (same as all fields blank).
 
-#### Step 0.2: Detect Provider Access (API and CLI for All Three)
+#### Step 0.2: Detect Provider Access (API and CLI for All Providers)
 
 Determine, for each provider, whether **API** and/or **CLI** execution is feasible in this environment:
 - OpenAI: API key present? CLI executable present?
 - Anthropic: API key present? CLI executable present?
 - Gemini/Google: API key present? CLI executable present?
+- Cerebras: API key present? (API-only, no CLI agent)
 
 If a provider has neither API nor CLI available, you MUST NOT propose models from that provider.
 
@@ -725,6 +726,14 @@ Use Phase 0B to decide concrete model IDs, providers, executor plan, parallelism
 - Assign `class` attributes based on Phase 2 complexity and node role: default, `hard`, `verify`, `review`.
 - Encode the chosen plan in the graph `model_stylesheet` so nodes inherit `llm_provider`, `llm_model`, and (optionally) `reasoning_effort`.
 
+#### Provider-specific reasoning behavior
+
+**Cerebras GLM 4.7 (`zai-glm-4.7`):**
+- Reasoning is **always on** — there is no `reasoning_effort` control for this model (that parameter only applies to `gpt-oss-120b` on Cerebras). Setting `reasoning_effort` on a GLM 4.7 node is harmless but has no effect.
+- The relevant knob is `clear_thinking` (Cerebras-specific). When `true` (the default), prior turns' reasoning is stripped from context. When `false`, prior reasoning is preserved across turns — essential for agent-loop mode where the model should build on its prior chain-of-thought.
+- The engine automatically sets `clear_thinking: false` for Cerebras when running in agent-loop mode, so no manual configuration is needed in the dotfile or run config.
+- If you need to override this default, pass it via `provider_options` on the request (the openaicompat adapter merges `provider_options[cerebras]` into the request body).
+
 ### Phase 6: Self-Validate and Auto-Repair the DOT (Iterate Until It Passes, Cap 10)
 
 Before emitting the final output, you MUST validate the candidate DOT locally and repair any issues, iterating until it passes or you hit the attempt cap (10).
@@ -852,6 +861,7 @@ Custom outcome values work: `outcome=port`, `outcome=skip`, `outcome=needs_fix`.
 25. **Non-canonical fail payloads.** Do NOT emit `outcome=fail` or `outcome=retry` without both `failure_reason` and `details`.
 26. **Artifact pollution in feature diffs.** Do NOT allow build/cache/temp/backup artifacts in changed-file diffs unless explicitly required by the spec.
 27. **Overlapping fan-out write scopes.** Do NOT let parallel branches modify shared/core files; reserve shared edits for a dedicated post-fan-in integration node.
+28. **`reasoning_effort` on Cerebras GLM 4.7.** Do NOT set `reasoning_effort` on GLM 4.7 nodes expecting it to control reasoning depth — that parameter only works on Cerebras `gpt-oss-120b`. GLM 4.7 reasoning is always on. The engine automatically sets `clear_thinking: false` for Cerebras agent-loop nodes to preserve reasoning context across turns.
 
 ## Notes on Reference Dotfile Conventions
 
