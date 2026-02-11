@@ -66,6 +66,13 @@ func TestDefaultCLIInvocation_AnthropicIncludesVerboseForStreamJSON(t *testing.T
 	}
 }
 
+func TestDefaultCLIInvocation_AnthropicSkipsPermissions(t *testing.T) {
+	_, args := defaultCLIInvocation("anthropic", "claude-sonnet-4-5", "/tmp/worktree")
+	if !hasArg(args, "--dangerously-skip-permissions") {
+		t.Fatalf("expected --dangerously-skip-permissions for headless CLI mode; args=%v", args)
+	}
+}
+
 func TestDefaultCLIInvocation_OpenAI_DoesNotUseDeprecatedAskForApproval(t *testing.T) {
 	exe, args := defaultCLIInvocation("openai", "gpt-5.3-codex", "/tmp/worktree")
 	if exe == "" {
