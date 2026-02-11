@@ -218,6 +218,208 @@ digraph G {
 	}
 }
 
+func TestRunWithConfig_CLIBackend_OpenAITimeoutRetryOnceThenSuccess(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+
+	pinned := writePinnedCatalog(t)
+	cxdbSrv := newCXDBTestServer(t)
+
+	cli := filepath.Join(t.TempDir(), "codex")
+	attemptFile := filepath.Join(t.TempDir(), "timeout-attempts")
+	t.Setenv("KILROY_TEST_TIMEOUT_ATTEMPTS_FILE", attemptFile)
+	t.Setenv("KILROY_CODEX_TOTAL_TIMEOUT", "1s")
+	t.Setenv("KILROY_CODEX_TIMEOUT_MAX_RETRIES", "1")
+	t.Setenv("KILROY_CODEX_KILL_GRACE", "100ms")
+	if err := os.WriteFile(cli, []byte(`#!/usr/bin/env bash
+set -euo pipefail
+
+out=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o|--output)
+      out="$2"
+      shift 2
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+
+attempt_file="${KILROY_TEST_TIMEOUT_ATTEMPTS_FILE:?missing attempt file}"
+attempt=0
+if [[ -f "$attempt_file" ]]; then
+  attempt="$(cat "$attempt_file")"
+fi
+attempt=$((attempt + 1))
+echo "$attempt" > "$attempt_file"
+
+if [[ "$attempt" -eq 1 ]]; then
+  sleep 5
+  exit 0
+fi
+
+if [[ -n "$out" ]]; then
+  echo '{"final":"ok","summary":"ok"}' > "$out"
+fi
+cat > status.json <<'JSON'
+{"status":"success","notes":"timeout retry success"}
+JSON
+echo '{"type":"done","text":"ok"}'
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &RunConfigFile{Version: 1}
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
+	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
+	cfg.LLM.CLIProfile = "test_shim"
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendCLI, Executable: cli},
+	}
+	cfg.ModelDB.OpenRouterModelInfoPath = pinned
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+	cfg.Git.RunBranchPrefix = "attractor/run"
+
+	dot := []byte(`
+digraph G {
+  graph [goal="test codex timeout retry success"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  start -> a -> exit
+}
+`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "timeout-retry-success", LogsRoot: logsRoot, AllowTestShim: true})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("final status: got %s want %s", res.FinalStatus, runtime.FinalSuccess)
+	}
+
+	attemptBytes, err := os.ReadFile(attemptFile)
+	if err != nil {
+		t.Fatalf("read attempt file: %v", err)
+	}
+	if got := strings.TrimSpace(string(attemptBytes)); got != "2" {
+		t.Fatalf("attempt count: got %q want %q", got, "2")
+	}
+
+	assertExists(t, filepath.Join(res.LogsRoot, "a", "stdout.timeout_failure_1.log"))
+	assertExists(t, filepath.Join(res.LogsRoot, "a", "stderr.timeout_failure_1.log"))
+	assertExists(t, filepath.Join(res.LogsRoot, "a", "status.json"))
+
+	var inv map[string]any
+	b, err := os.ReadFile(filepath.Join(res.LogsRoot, "a", "cli_invocation.json"))
+	if err != nil {
+		t.Fatalf("read cli_invocation.json: %v", err)
+	}
+	if err := json.Unmarshal(b, &inv); err != nil {
+		t.Fatalf("unmarshal cli_invocation.json: %v", err)
+	}
+	retried, _ := inv["timeout_fallback_retry"].(bool)
+	if !retried {
+		t.Fatalf("expected timeout_fallback_retry=true in invocation: %#v", inv)
+	}
+	if got := strings.TrimSpace(anyToString(inv["timeout_retry_attempt"])); got != "1" {
+		t.Fatalf("timeout_retry_attempt: got %q want %q", got, "1")
+	}
+}
+
+func TestRunWithConfig_CLIBackend_OpenAITimeoutRetryStopsAfterOneRetry(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+
+	pinned := writePinnedCatalog(t)
+	cxdbSrv := newCXDBTestServer(t)
+
+	cli := filepath.Join(t.TempDir(), "codex")
+	attemptFile := filepath.Join(t.TempDir(), "timeout-attempts")
+	t.Setenv("KILROY_TEST_TIMEOUT_ATTEMPTS_FILE", attemptFile)
+	t.Setenv("KILROY_CODEX_TOTAL_TIMEOUT", "1s")
+	t.Setenv("KILROY_CODEX_TIMEOUT_MAX_RETRIES", "1")
+	t.Setenv("KILROY_CODEX_KILL_GRACE", "100ms")
+	if err := os.WriteFile(cli, []byte(`#!/usr/bin/env bash
+set -euo pipefail
+
+attempt_file="${KILROY_TEST_TIMEOUT_ATTEMPTS_FILE:?missing attempt file}"
+attempt=0
+if [[ -f "$attempt_file" ]]; then
+  attempt="$(cat "$attempt_file")"
+fi
+attempt=$((attempt + 1))
+echo "$attempt" > "$attempt_file"
+
+sleep 5
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := &RunConfigFile{Version: 1}
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
+	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
+	cfg.LLM.CLIProfile = "test_shim"
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendCLI, Executable: cli},
+	}
+	cfg.ModelDB.OpenRouterModelInfoPath = pinned
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+	cfg.Git.RunBranchPrefix = "attractor/run"
+
+	dot := []byte(`
+digraph G {
+  graph [goal="test codex timeout retry cap"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
+  start -> a -> exit
+}
+`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "timeout-retry-cap", LogsRoot: logsRoot, AllowTestShim: true})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	// This graph has an unconditional a->exit edge, so final run status remains success
+	// even when stage "a" itself fails. This test is about the timeout retry cap.
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("final status: got %s want %s", res.FinalStatus, runtime.FinalSuccess)
+	}
+
+	attemptBytes, err := os.ReadFile(attemptFile)
+	if err != nil {
+		t.Fatalf("read attempt file: %v", err)
+	}
+	if got := strings.TrimSpace(string(attemptBytes)); got != "2" {
+		t.Fatalf("attempt count: got %q want %q", got, "2")
+	}
+
+	statusBytes, err := os.ReadFile(filepath.Join(res.LogsRoot, "a", "status.json"))
+	if err != nil {
+		t.Fatalf("read a/status.json: %v", err)
+	}
+	outcome, err := runtime.DecodeOutcomeJSON(statusBytes)
+	if err != nil {
+		t.Fatalf("decode a/status.json: %v", err)
+	}
+	if outcome.Status != runtime.StatusFail {
+		t.Fatalf("a status: got %q want %q (out=%+v)", outcome.Status, runtime.StatusFail, outcome)
+	}
+	reason := strings.ToLower(strings.TrimSpace(outcome.FailureReason))
+	if !strings.Contains(reason, "deadline exceeded") && !strings.Contains(reason, "idle timeout") {
+		t.Fatalf("a failure_reason: got %q want timeout/deadline marker", outcome.FailureReason)
+	}
+}
+
 func TestRunWithConfig_CLIBackend_OpenAIStructuredOutput_UnknownKeysTriggersLoudFallback(t *testing.T) {
 	res, inv, unknown, err := runOpenAIUnknownKeysFallback(t)
 	if err != nil {

@@ -917,6 +917,9 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		for k, v := range isolatedMeta {
 			inv[k] = v
 		}
+		inv["codex_idle_timeout_seconds"] = int(codexIdleTimeout().Seconds())
+		inv["codex_total_timeout_seconds"] = int(codexTotalTimeout().Seconds())
+		inv["codex_timeout_retry_max"] = codexTimeoutMaxRetries()
 	} else {
 		inv["env_mode"] = "inherit"
 		inv["env_allowlist"] = []string{"*"}
@@ -940,7 +943,16 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	stdoutPath := filepath.Join(stageDir, "stdout.log")
 
 	runOnce := func(args []string) (runErr error, exitCode int, dur time.Duration, err error) {
-		cmd := exec.CommandContext(ctx, exe, args...)
+		runCtx := ctx
+		if codexSemantics {
+			totalTimeout := codexTotalTimeout()
+			if totalTimeout > 0 {
+				var cancel context.CancelFunc
+				runCtx, cancel = context.WithTimeout(ctx, totalTimeout)
+				defer cancel()
+			}
+		}
+		cmd := exec.CommandContext(runCtx, exe, args...)
 		cmd.Dir = execCtx.WorktreeDir
 		if codexSemantics {
 			cmd.Env = mergeEnvWithOverrides(isolatedEnv, contract.EnvVars)
@@ -1001,7 +1013,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 					}
 				case <-heartbeatStop:
 					return
-				case <-ctx.Done():
+				case <-runCtx.Done():
 					return
 				}
 			}
@@ -1014,11 +1026,14 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			killGrace = codexKillGrace()
 		}
 		var idleTimedOut bool
-		runErr, idleTimedOut, err = waitWithIdleWatchdog(ctx, cmd, stdoutPath, stderrPath, idleTimeout, killGrace)
+		runErr, idleTimedOut, err = waitWithIdleWatchdog(runCtx, cmd, stdoutPath, stderrPath, idleTimeout, killGrace)
 		close(heartbeatStop)
 		<-heartbeatDone
 		if err != nil {
 			return nil, -1, time.Since(start), err
+		}
+		if runErr != nil && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+			runErr = runCtx.Err()
 		}
 		dur = time.Since(start)
 		exitCode = -1
@@ -1124,6 +1139,40 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			}
 			if err := writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv); err != nil {
 				warnEngine(execCtx, fmt.Sprintf("write cli_invocation.json state-db metadata: %v", err))
+			}
+
+			retryErr, retryExitCode, retryDur, retryRunErr := runOnce(runArgs)
+			if retryRunErr != nil {
+				return "", classifiedFailure(retryRunErr, readStderr()), nil
+			}
+			runErr = retryErr
+			exitCode = retryExitCode
+			dur += retryDur
+		}
+	}
+	if runErr != nil && codexSemantics {
+		maxTimeoutRetries := codexTimeoutMaxRetries()
+		for timeoutAttempt := 1; timeoutAttempt <= maxTimeoutRetries; timeoutAttempt++ {
+			if !isCodexTimeoutFailure(runErr) {
+				break
+			}
+			warnEngine(execCtx, fmt.Sprintf("codex timeout/stuck detected; retrying with fresh state root (%d/%d)", timeoutAttempt, maxTimeoutRetries))
+			_ = copyFileContents(stdoutPath, filepath.Join(stageDir, fmt.Sprintf("stdout.timeout_failure_%d.log", timeoutAttempt)))
+			_ = copyFileContents(stderrPath, filepath.Join(stageDir, fmt.Sprintf("stderr.timeout_failure_%d.log", timeoutAttempt)))
+
+			retryEnv, retryMeta, buildErr := buildCodexIsolatedEnvWithName(stageDir, fmt.Sprintf("codex-home-timeout-retry%d", timeoutAttempt))
+			if buildErr != nil {
+				return "", classifiedFailure(buildErr, readStderr()), nil
+			}
+			isolatedEnv = retryEnv
+			inv["timeout_fallback_retry"] = true
+			inv["timeout_fallback_reason"] = "stuck_or_total_timeout"
+			inv["timeout_retry_attempt"] = timeoutAttempt
+			if retryRoot, ok := retryMeta["state_root"]; ok {
+				inv["timeout_retry_state_root"] = retryRoot
+			}
+			if err := writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv); err != nil {
+				warnEngine(execCtx, fmt.Sprintf("write cli_invocation.json timeout metadata: %v", err))
 			}
 
 			retryErr, retryExitCode, retryDur, retryRunErr := runOnce(runArgs)
@@ -1406,11 +1455,23 @@ func codexStateDBMaxRetries() int {
 func codexIdleTimeout() time.Duration {
 	v := strings.TrimSpace(os.Getenv("KILROY_CODEX_IDLE_TIMEOUT"))
 	if v == "" {
-		return 2 * time.Minute
+		return 5 * time.Minute
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil {
-		return 2 * time.Minute
+		return 5 * time.Minute
+	}
+	return d
+}
+
+func codexTotalTimeout() time.Duration {
+	v := strings.TrimSpace(os.Getenv("KILROY_CODEX_TOTAL_TIMEOUT"))
+	if v == "" {
+		return 20 * time.Minute
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 20 * time.Minute
 	}
 	return d
 }
@@ -1681,6 +1742,30 @@ func isStateDBDiscrepancy(stderr string) bool {
 	return strings.Contains(s, "state db missing rollout path") ||
 		strings.Contains(s, "state db record_discrepancy") ||
 		strings.Contains(s, "record_discrepancy")
+}
+
+func codexTimeoutMaxRetries() int {
+	v := strings.TrimSpace(os.Getenv("KILROY_CODEX_TIMEOUT_MAX_RETRIES"))
+	if v == "" {
+		return 1
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return 1
+	}
+	return n
+}
+
+func isCodexTimeoutFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	s := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(s, "codex idle timeout") ||
+		strings.Contains(s, "idle timeout")
 }
 
 func removeArgWithValue(args []string, key string) []string {

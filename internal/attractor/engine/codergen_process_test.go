@@ -256,3 +256,19 @@ func processExists(pid int) bool {
 	err := syscall.Kill(pid, 0)
 	return err == nil || err == syscall.EPERM
 }
+
+func TestCodexTimeoutPolicyDefaults(t *testing.T) {
+	t.Setenv("KILROY_CODEX_IDLE_TIMEOUT", "")
+	t.Setenv("KILROY_CODEX_TOTAL_TIMEOUT", "")
+	t.Setenv("KILROY_CODEX_TIMEOUT_MAX_RETRIES", "")
+
+	if got := codexIdleTimeout(); got != 5*time.Minute {
+		t.Fatalf("codexIdleTimeout default: got %s want %s", got, 5*time.Minute)
+	}
+	if got := codexTotalTimeout(); got != 20*time.Minute {
+		t.Fatalf("codexTotalTimeout default: got %s want %s", got, 20*time.Minute)
+	}
+	if got := codexTimeoutMaxRetries(); got != 1 {
+		t.Fatalf("codexTimeoutMaxRetries default: got %d want %d", got, 1)
+	}
+}

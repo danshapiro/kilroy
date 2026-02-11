@@ -86,7 +86,9 @@ Reply with: A|B|...
 ```
 
 Downstream requirement (after ambiguity is resolved interactively or via evidence):
-- Ensure `.ai/spec.md` includes a brief "Disambiguation / Assumptions" section documenting what was chosen/inferred and why.
+- Document disambiguation choices in a shared artifact for downstream nodes:
+  - If the pipeline includes `expand_spec`, include a brief "Disambiguation / Assumptions" section in `.ai/spec.md`.
+  - If the pipeline uses an existing repo spec file (no `expand_spec`), write `.ai/disambiguation_assumptions.md` and instruct downstream nodes to read both the spec and this assumptions file.
 
 ### Phase 0B: Pick Models + Executors + Parallelism + Thinking (Before Writing Any DOT)
 
@@ -200,12 +202,13 @@ If the input is short/vague, expand into a structured spec covering: what the so
 **Detailed spec already exists** (e.g., a file path like `demo/dttf/dttf-v1.md`): The spec file is already in the repo and will be present in the worktree. No `expand_spec` node needed. All prompts reference the spec by its existing path.
 
 **The spec file is the source of truth.** Prompts reference it by path. Never inline hundreds of lines of spec into a prompt attribute (except in `expand_spec` which creates it).
+When assumptions are recorded separately (existing-spec mode), treat `.ai/disambiguation_assumptions.md` as a required companion input for downstream prompts.
 
 ### Phase 2: Decompose into Implementation Units
 
 Break the spec into units. Each unit must be:
 
-- **Achievable in one agent session** (right-size turn budget: ~6-12 for simple checks, ~40-80 for broad implementation/analysis)
+- **Achievable in one agent session** (one primary objective, one narrow acceptance contract)
 - **Testable** with a concrete command (build, test, lint, etc.)
 - **Clearly bounded** by files created/modified
 
@@ -226,6 +229,43 @@ Language-specific examples:
 For each unit, record: ID (becomes node ID), description, dependencies (other unit IDs), acceptance criteria (commands + expected results), complexity (simple/moderate/hard).
 
 **Identify parallelizable units.** If two units have no dependency on each other (e.g., independent packages, separate CLI commands), note them — they can run in parallel branches.
+
+#### Decomposition Strategy
+
+Think in terms of **information flow**: each node should reduce one kind of uncertainty and leave a clearer artifact for the next node.
+
+- Start with a shared frame so later work is comparable (example: map schema/glossary).
+- Decompose along natural repo boundaries, not arbitrary chunks (example: package or domain slices).
+- Use parallelism for independent discovery, then converge with one reconciliation step.
+- Verify at two levels: local correctness of each slice, then global consistency of the merged result.
+
+Example pattern for “map the codebase”: shared frame -> boundary slices -> merge -> consistency check.
+
+#### Sizing Calibration (Required)
+
+Right-sized node characteristics:
+- One primary deliverable (one concrete thing to finish), not a bundle of loosely-related outcomes.
+- One dominant scope boundary (typically one subsystem/module/package).
+- One dominant failure mode; verification answers one narrow question about that contract.
+- Downstream nodes can consume its output without re-reading the entire project.
+
+Too-big signals (split when any of these are true):
+- Prompt asks for multiple independent subsystems in one node.
+- Prompt requires editing more than one major module/package.
+- Prompt combines large implementation work **and** broad audit/comparison work.
+- Verify node checks many unrelated concerns instead of one narrow contract.
+
+How to split oversized nodes:
+- Extract shared contracts/types first.
+- Split each subsystem into its own impl+verify+check chain.
+- Move cross-subsystem wiring into a dedicated integration node.
+- Keep verification nodes focused on one contract each (build/test + targeted checks).
+
+#### Checkpoint Ergonomics (Information)
+
+- Resume uses the parent run checkpoint at `{logs_root}/checkpoint.json`.
+- In parallel fan-out, branch-local progress is not a parent resume point.
+- If a run is stopped mid-node or mid-fan-out, in-flight work since the last parent checkpoint may be replayed.
 
 ### Phase 3: Build the Graph
 
@@ -252,6 +292,24 @@ digraph project_name {
 
     // ... implementation, verification, and routing nodes ...
 }
+```
+
+#### Provenance header
+
+To improve operator ergonomics and traceability, include a provenance header at the top of the graph attribute block when possible.
+
+Guideline:
+- If the source is text, embed it in graph attributes (escaped/chunked if needed).
+- If the source is one or more files, link them by repo-relative path and include the commit SHA used to generate the graph.
+- Keep provenance inside `graph [ ... ]` so programmatic output still starts with `digraph`.
+
+Suggested attribute pattern:
+```
+graph [
+    provenance_version="1",
+    provenance_text_1="...escaped source text..."
+    provenance_file_1="path=docs/spec.md;git_sha=<sha>"
+]
 ```
 
 #### Expand spec node (when input is vague)
@@ -361,13 +419,13 @@ impl_X [
     shape=box,
     class="hard",
     max_retries=2,
-    prompt="..."
+    prompt="Implement [UNIT]. Read [SPEC_PATH] and required dependency files. Write implementation outputs to the declared files.\n\nRun required build/test checks for this unit.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if checks pass, outcome=fail with failure_reason and details otherwise."
 ]
 
 verify_X [
     shape=box,
     class="verify",
-    prompt="Verify [UNIT]. Run: [BUILD_CMD] && [TEST_CMD]\nWrite results to .ai/verify_X.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if all pass, outcome=fail with failure details otherwise."
+    prompt="Verify [UNIT]. Run: [BUILD_CMD] && [TEST_CMD]\nWrite results to .ai/verify_X.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if all pass, outcome=fail with failure_reason and details otherwise."
 ]
 
 check_X [shape=diamond, label="X OK?"]
@@ -378,7 +436,7 @@ check_X -> impl_Y  [condition="outcome=success"]
 check_X -> impl_X  [condition="outcome=fail", label="retry"]
 ```
 
-No exceptions. `expand_spec` is the only node that may skip verification (use `auto_status=true` instead).
+For build pipelines, no exceptions: every implementation node (including `impl_setup`) must be followed by verify/check. `expand_spec` is the only build-pipeline node that may skip verification (use `auto_status=true` instead). Non-build workflows may use the relaxed 2-node pattern documented below.
 
 #### Goal gates
 
@@ -457,7 +515,7 @@ plan_c -> synthesize
 
 synthesize [
     shape=box,
-    prompt="Read .ai/plan_a.md, .ai/plan_b.md, .ai/plan_c.md. Synthesize the best elements into .ai/plan_final.md."
+    prompt="Read .ai/plan_a.md, .ai/plan_b.md, .ai/plan_c.md. Synthesize the best elements into .ai/plan_final.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success when synthesis is complete, outcome=fail with failure_reason and details otherwise."
 ]
 ```
 
@@ -465,6 +523,26 @@ Each parallel worker writes its output to a uniquely-named `.ai/` file. The synt
 - Definition of Done proposals (3 models propose, 1 consolidates)
 - Implementation planning (3 plans, 1 debate/consolidate)
 - Code review (3 reviewers, 1 consensus)
+
+#### Parallel write-scope discipline (Guideline + Requirement)
+
+Guideline:
+- Partition fan-out branches by natural ownership boundaries (for example one package/subsystem per branch) so each branch can be validated independently.
+
+Requirement:
+- Every fan-out branch prompt MUST declare explicit write-scope paths.
+- Branch write scopes MUST be disjoint.
+- Shared/core files (for example registry/index/type hubs) are read-only during fan-out.
+- Shared/core edits happen in a dedicated post-fan-in integration node.
+- Each branch verify node MUST compare changed files vs `$base_sha` and fail with `failure_reason=write_scope_violation` if any changed path is outside the declared scope.
+
+#### Checkpoint Ergonomics (Requirements)
+
+- Prefer nodes that each produce one checkpoint-worthy artifact or decision.
+- Avoid long internal dependency chains inside a single node.
+- Avoid one giant fan-out wave for large systems; use staged fan-out waves.
+- After each fan-in, add a parent checkpoint barrier node (for example `verify_batch_N` or `consolidate_batch_N`) before launching the next fan-out.
+- Split broad implementation into multiple fan-out/fan-in phases so operators can stop/resume with minimal replay.
 
 ##### Relaxed node patterns (2-node vs 3-node)
 
@@ -488,17 +566,17 @@ Nodes communicate through the filesystem, not through context variables. Each no
 ```
 plan [
     shape=box,
-    prompt="Create an implementation plan. Write to .ai/plan.md."
+    prompt="Create an implementation plan. Write to .ai/plan.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success when the plan is complete, outcome=fail with failure_reason and details otherwise."
 ]
 
 implement [
     shape=box,
-    prompt="Follow the plan in .ai/plan.md. Implement all items. Log changes to .ai/impl_log.md."
+    prompt="Follow the plan in .ai/plan.md. Implement all items. Log changes to .ai/impl_log.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success when implementation is complete, outcome=fail with failure_reason and details otherwise."
 ]
 
 review [
     shape=box,
-    prompt="Read .ai/plan.md and .ai/impl_log.md. Review implementation against the plan. Write review to .ai/review.md."
+    prompt="Read .ai/plan.md and .ai/impl_log.md. Review implementation against the plan. Write review to .ai/review.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success when review passes, outcome=fail with failure_reason and details otherwise."
 ]
 ```
 
@@ -512,7 +590,7 @@ Every prompt must be **self-contained**. The agent executing it has no memory of
 2. **What to read**: "Read demo/dttf/dttf-v1.md section 1.4 and pkg/dttf/types.go"
 3. **What to write**: "Create pkg/dttf/loader.go with the LoadGlyphs function"
 4. **Acceptance criteria**: "Run `go build ./cmd/dttf ./pkg/dttf/...` and `go test ./cmd/dttf/... ./pkg/dttf/...` — both must pass"
-5. **Outcome instructions**: "Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path), fallback to `$KILROY_STAGE_STATUS_FALLBACK_PATH`, avoid nested status.json files, and set outcome=success/fail with failure_reason as appropriate"
+5. **Outcome instructions**: "Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path), fallback to `$KILROY_STAGE_STATUS_FALLBACK_PATH`, avoid nested status.json files, and set outcome=success/fail with failure_reason + details as appropriate"
 
 Validation scope policy:
 - Required checks must be scoped to the project/module paths created by the pipeline (for Go, prefer `./cmd/<app>` + `./pkg/<app>/...`).
@@ -526,6 +604,21 @@ Validation scope policy:
 - If no files match the lint filter, skip lint and report success.
 - Repo-wide network-dependent checks are advisory. If attempted and blocked by DNS/proxy/network policy, record them as skipped in `.ai/` output and continue based on scoped required checks.
 
+File integrity and formatting policy:
+- Guideline: Include a lightweight structural integrity check before broad tests so malformed files fail fast.
+- Requirement: Verify prompts MUST include syntax/parse/compile sanity and formatter checks scoped to changed files or the module under test.
+  - Rust example: `cargo fmt --all -- --check` then scoped `cargo check`
+  - Go example: `gofmt` check on changed `.go` files then scoped `go build`
+  - TypeScript example: formatter check on changed files then scoped typecheck/build
+  - Python example: formatter/lint check on changed files then scoped import/test sanity
+- On these failures, use stable classes like `failure_reason=format_invalid` or `failure_reason=parse_invalid` with concrete file/line details.
+
+Workspace artifact hygiene:
+- Guideline: Build/test artifacts are expected locally but should not be treated as feature output.
+- Requirement: Verify prompts MUST fail when feature diffs include artifact/output paths unless explicitly required by spec.
+- Check changed files vs `$base_sha` and block paths such as `target/`, `dist/`, `build/`, `.pytest_cache/`, `node_modules/`, coverage outputs, temp files, or backup files.
+- Use `failure_reason=artifact_pollution` and list offending paths in `details`.
+
 #### Mandatory status-file contract
 
 Every codergen prompt MUST explicitly instruct the agent to write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path).
@@ -534,6 +627,22 @@ Required wording (or equivalent):
 - "Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path)."
 - "If that path is unavailable, use `$KILROY_STAGE_STATUS_FALLBACK_PATH`."
 - "Do not write status.json inside nested module directories after `cd`."
+
+#### Canonical failure-status contract (Guideline + Requirement)
+
+Guideline:
+- Keep failure payloads machine-stable and human-readable so retries/routing/diagnostics remain deterministic.
+
+Requirement:
+- For `outcome=fail` or `outcome=retry`, status JSON MUST include both:
+  - `failure_reason` (short stable reason code)
+  - `details` (human-readable explanation)
+- Do not emit non-canonical fail payloads like `{"outcome":"fail","gaps":[...]}` without `failure_reason`.
+- If structured diagnostics are needed, place them inside `details` (text or serialized JSON) while still including `failure_reason`.
+
+Allowed examples:
+- `{"outcome":"fail","failure_reason":"compile_failed","details":"cargo check failed in src/types.rs:42"}`
+- `{"outcome":"retry","failure_reason":"transient_infra","details":"provider timeout while generating verify report"}`
 
 Implementation prompt template:
 ```
@@ -552,7 +661,7 @@ Acceptance:
 - `[TEST_COMMAND]` must pass
 
 Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path). If unavailable, use `$KILROY_STAGE_STATUS_FALLBACK_PATH`. Do not write status.json in nested module directories after `cd`.
-Write status JSON: outcome=success if all criteria pass, outcome=fail with failure_reason otherwise.
+Write status JSON: outcome=success if all criteria pass, outcome=fail with failure_reason and details otherwise.
 ```
 
 Verification prompt template:
@@ -564,14 +673,16 @@ Run:
 2. Lint ONLY files changed by this feature (do NOT lint the entire project):
    `git diff --name-only $base_sha -- [FILE_EXTENSIONS] | xargs -r [LINT_COMMAND]`
    If no files match, skip lint and note "no changed files to lint" in results.
-3. `[TEST_COMMAND]`
-4. [DOMAIN_SPECIFIC_CHECKS]
+3. Structural integrity + formatting checks scoped to changed files/module under test (language-appropriate; fail fast on parse/format issues).
+4. `[TEST_COMMAND]`
+5. [DOMAIN_SPECIFIC_CHECKS]
+6. Artifact hygiene check: fail if diff vs `$base_sha` includes artifact/output/temp/backup paths unless explicitly required by spec.
 
 IMPORTANT: Pre-existing lint errors in unrelated files must not block this feature.
 
 Write results to .ai/verify_[NODE_ID].md.
 Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path). If unavailable, use `$KILROY_STAGE_STATUS_FALLBACK_PATH`. Do not write status.json in nested module directories after `cd`.
-Write status JSON: outcome=success if ALL pass, outcome=fail with details.
+Write status JSON: outcome=success if ALL pass, outcome=fail with failure_reason and details.
 ```
 
 Use language-appropriate commands: `go build`/`go test` for Go, `cargo build`/`cargo test` for Rust, `npm run build`/`npm test` for TypeScript, `pytest`/`mypy` for Python, etc.
@@ -594,7 +705,7 @@ Evaluate against these criteria:
 
 Write your analysis to .ai/[ANALYSIS_FILE].md.
 Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path). If unavailable, use `$KILROY_STAGE_STATUS_FALLBACK_PATH`. Do not write status.json in nested module directories after `cd`.
-Write status JSON with the appropriate outcome value.
+Write status JSON with the appropriate outcome value. If the chosen outcome is `fail` or `retry`, include both `failure_reason` and `details`.
 ```
 
 #### Prompt complexity scaling
@@ -677,7 +788,7 @@ Common repairs (use validator output; do not guess blindly):
 | `retry_target` | Node ID to jump to if this goal_gate fails |
 | `fallback_retry_target` | Secondary retry target |
 | `allow_partial` | `true` = accept PARTIAL_SUCCESS when retries exhausted instead of FAIL. Use on long-running nodes where partial progress is valuable. |
-| `max_agent_turns` | Max LLM turn count for this node's agent session. Use to right-size effort per task (e.g., 6-12 for simple checks, 40-80 for broad implementation/analysis). Avoid budgets so tight that they force provider failover before the task is complete. |
+| `max_agent_turns` | Session budget for this node. Set high enough for the scoped task to complete without premature provider failover. |
 | `timeout` | Duration (e.g., `"300"`, `"900s"`, `"15m"`). Applies to any node type. Bare integers are seconds. |
 | `auto_status` | `true` = auto-generate SUCCESS outcome if handler writes no status.json. Only use on `expand_spec`. |
 | `llm_model` | Override model for this node (overrides stylesheet) |
@@ -738,6 +849,9 @@ Custom outcome values work: `outcome=port`, `outcome=skip`, `outcome=needs_fix`.
 22. **Toolchain checks with no bootstrap path (when auto-install is intended).** If the run is expected to self-prepare the environment, companion run config must include idempotent `setup.commands` install/bootstrap steps. A check-only gate without setup bootstrap causes immediate hard failure.
 23. **Unguarded failure restarts.** Do NOT set `loop_restart=true` on generic `outcome=fail` edges. Guard restart edges with `context.failure_class=transient_infra` and add a companion deterministic edge without restart (`context.failure_class!=transient_infra`).
 24. **Local CXDB configs without launcher autostart.** In this repo, do not emit companion `run.yaml` that points at local CXDB endpoints but omits `cxdb.autostart` launcher wiring. That creates fragile manual setup and can silently attach to the wrong daemon.
+25. **Non-canonical fail payloads.** Do NOT emit `outcome=fail` or `outcome=retry` without both `failure_reason` and `details`.
+26. **Artifact pollution in feature diffs.** Do NOT allow build/cache/temp/backup artifacts in changed-file diffs unless explicitly required by the spec.
+27. **Overlapping fan-out write scopes.** Do NOT let parallel branches modify shared/core files; reserve shared edits for a dedicated post-fan-in integration node.
 
 ## Notes on Reference Dotfile Conventions
 
@@ -778,12 +892,12 @@ digraph linkcheck {
 	    // Project setup
 	    impl_setup [
 	        shape=box,
-	        prompt="Goal: $goal\n\nRead .ai/spec.md. Create Go project: go.mod, cmd/linkcheck/main.go stub, pkg/linkcheck/ directories.\n\nRun: go build ./cmd/linkcheck ./pkg/linkcheck/...\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if builds, outcome=fail otherwise."
+	        prompt="Goal: $goal\n\nRead .ai/spec.md. Create Go project: go.mod, cmd/linkcheck/main.go stub, pkg/linkcheck/ directories.\n\nRun: go build ./cmd/linkcheck ./pkg/linkcheck/...\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if builds, outcome=fail with failure_reason and details otherwise."
 	    ]
 
 	    verify_setup [
 	        shape=box, class="verify",
-	        prompt="Verify project setup.\n\nRun:\n1. go build ./cmd/linkcheck ./pkg/linkcheck/...\n2. Lint only changed files: git diff --name-only $base_sha -- '*.go' | xargs -r go vet (skip if no files match)\n3. Check go.mod and cmd/linkcheck exist\n4. Guardrail: `find . -name go.mod` should include only `./go.mod`\n\nIMPORTANT: Do NOT run project-wide lint. Only lint files changed by this feature.\n\nWrite results to .ai/verify_setup.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if all pass, outcome=fail with details."
+	        prompt="Verify project setup.\n\nRun:\n1. go build ./cmd/linkcheck ./pkg/linkcheck/...\n2. Lint only changed files: git diff --name-only $base_sha -- '*.go' | xargs -r go vet (skip if no files match)\n3. Structural integrity + formatting check for changed Go files:\n   - `changed=$(git diff --name-only $base_sha -- '*.go')`\n   - if changed files exist, run `gofmt -l` on them and fail if output is non-empty\n4. Check go.mod and cmd/linkcheck exist\n5. Guardrail: `find . -name go.mod` should include only `./go.mod`\n6. Artifact hygiene check: fail if `git diff --name-only $base_sha --` contains paths under `target/`, `dist/`, `build/`, `.pytest_cache/`, `node_modules/`, coverage outputs, or backup/temp patterns.\n\nIMPORTANT: Do NOT run project-wide lint. Only lint files changed by this feature.\n\nWrite results to .ai/verify_setup.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if all pass, outcome=fail with failure_reason and details."
 	    ]
 
     check_setup [shape=diamond, label="Setup OK?"]
@@ -791,12 +905,12 @@ digraph linkcheck {
 	    // Core implementation
 	    impl_core [
 	        shape=box, class="hard", max_retries=2,
-	        prompt="Goal: $goal\n\nRead .ai/spec.md. Implement: URL crawling, link extraction, HTTP checking, robots.txt parser, output formatters (text + JSON). Create tests.\n\nRun: go test ./cmd/linkcheck/... ./pkg/linkcheck/...\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if tests pass, outcome=fail otherwise."
+	        prompt="Goal: $goal\n\nRead .ai/spec.md. Implement: URL crawling, link extraction, HTTP checking, robots.txt parser, output formatters (text + JSON). Create tests.\n\nRun: go test ./cmd/linkcheck/... ./pkg/linkcheck/...\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if tests pass, outcome=fail with failure_reason and details otherwise."
 	    ]
 
 	    verify_core [
 	        shape=box, class="verify",
-	        prompt="Verify core implementation.\n\nRun:\n1. go build ./cmd/linkcheck ./pkg/linkcheck/...\n2. Lint only changed files: git diff --name-only $base_sha -- '*.go' | xargs -r go vet (skip if no files match)\n3. go test ./cmd/linkcheck/... ./pkg/linkcheck/... -v\n\nIMPORTANT: Do NOT run project-wide lint. Only lint files changed by this feature.\n\nWrite results to .ai/verify_core.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if all pass, outcome=fail with details."
+	        prompt="Verify core implementation.\n\nRun:\n1. go build ./cmd/linkcheck ./pkg/linkcheck/...\n2. Lint only changed files: git diff --name-only $base_sha -- '*.go' | xargs -r go vet (skip if no files match)\n3. Structural integrity + formatting check for changed Go files:\n   - `changed=$(git diff --name-only $base_sha -- '*.go')`\n   - if changed files exist, run `gofmt -l` on them and fail if output is non-empty\n4. go test ./cmd/linkcheck/... ./pkg/linkcheck/... -v\n5. Artifact hygiene check: fail if `git diff --name-only $base_sha --` contains paths under `target/`, `dist/`, `build/`, `.pytest_cache/`, `node_modules/`, coverage outputs, or backup/temp patterns.\n\nIMPORTANT: Do NOT run project-wide lint. Only lint files changed by this feature.\n\nWrite results to .ai/verify_core.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if all pass, outcome=fail with failure_reason and details."
 	    ]
 
     check_core [shape=diamond, label="Core OK?"]
@@ -804,7 +918,7 @@ digraph linkcheck {
 	    // Review
 	    review [
 	        shape=box, class="review", goal_gate=true,
-	        prompt="Goal: $goal\n\nRead .ai/spec.md. Review the full implementation against the spec. Check: all features implemented, tests pass, CLI works, error handling correct.\n\nSandboxed validation policy:\n- Required checks are scoped to `cmd/linkcheck` and `pkg/linkcheck`.\n- Repo-wide network-dependent checks are advisory only.\n\nRun: go build ./cmd/linkcheck ./pkg/linkcheck/... && go test ./cmd/linkcheck/... ./pkg/linkcheck/...\n\nWrite review to .ai/final_review.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if complete, outcome=fail with what's missing."
+	        prompt="Goal: $goal\n\nRead .ai/spec.md. Review the full implementation against the spec. Check: all features implemented, tests pass, CLI works, error handling correct.\n\nSandboxed validation policy:\n- Required checks are scoped to `cmd/linkcheck` and `pkg/linkcheck`.\n- Repo-wide network-dependent checks are advisory only.\n\nRun: go build ./cmd/linkcheck ./pkg/linkcheck/... && go test ./cmd/linkcheck/... ./pkg/linkcheck/...\n\nWrite review to .ai/final_review.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if complete, outcome=fail with failure_reason and details about what's missing."
 	    ]
 
     check_review [shape=diamond, label="Review OK?"]
@@ -830,5 +944,5 @@ Note how this example follows every rule:
 - `verify_setup` and `verify_core` both have `class="verify"`
 - `check_review` failure loops to `impl_core` (late node), NOT to `impl_setup`
 - Graph has `retry_target` and `fallback_retry_target`
-- All prompts include `Goal: $goal`
+- Implementation and review prompts include `Goal: $goal`
 - Model stylesheet covers all four classes
