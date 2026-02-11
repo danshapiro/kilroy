@@ -1696,6 +1696,12 @@ func defaultCLIInvocation(provider string, modelID string, worktreeDir string) (
 	if spec == nil {
 		return "", nil
 	}
+	// Strip the "provider/" prefix from OpenRouter-format model IDs
+	// (e.g. "anthropic/claude-sonnet-4.5" → "claude-sonnet-4.5").
+	// CLI binaries expect bare model names.
+	if prefix := normalizeProviderKey(provider) + "/"; strings.HasPrefix(modelID, prefix) {
+		modelID = strings.TrimPrefix(modelID, prefix)
+	}
 	// Anthropic CLI expects dashes in version numbers (claude-sonnet-4-5),
 	// but the OpenRouter catalog uses dots (claude-sonnet-4.5).
 	if normalizeProviderKey(provider) == "anthropic" {
