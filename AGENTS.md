@@ -53,6 +53,7 @@ For PRs we want to accept: check out the PR branch into a worktree, review, add 
 ## Production Authorization Rule (Strict)
 
 NEVER start a production run except precisely as the user requested, and only after an explicit user request for that production run. Production runs are expensive.
+Any routing decision (provider, model, reasoning depth, or API vs CLI) has cost implications and must be explicitly approved by the user.
 
 ## Production Runs: Exact Command Only
 
