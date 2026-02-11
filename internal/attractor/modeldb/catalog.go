@@ -75,6 +75,25 @@ func CatalogHasProviderModel(c *Catalog, provider, modelID string) bool {
 			return true
 		}
 	}
+	// Anthropic OpenRouter catalog uses dots in version numbers (claude-sonnet-4.5)
+	// but the native API uses dashes (claude-sonnet-4-5). Normalize dots to dashes
+	// on both sides so either format matches.
+	if provider == "anthropic" {
+		normQuery := strings.ReplaceAll(inRelative, ".", "-")
+		for id, entry := range c.Models {
+			ep := modelmeta.NormalizeProvider(entry.Provider)
+			if ep == "" {
+				ep = inferProviderFromModelID(id)
+			}
+			if ep != provider {
+				continue
+			}
+			normEntry := strings.ReplaceAll(providerRelativeModelID(provider, id), ".", "-")
+			if strings.EqualFold(normEntry, normQuery) {
+				return true
+			}
+		}
+	}
 	return false
 }
 
