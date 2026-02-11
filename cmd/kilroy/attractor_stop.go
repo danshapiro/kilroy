@@ -15,6 +15,7 @@ import (
 
 	"github.com/strongdm/kilroy/internal/attractor/procutil"
 	"github.com/strongdm/kilroy/internal/attractor/runstate"
+	"github.com/strongdm/kilroy/internal/attractor/runtime"
 )
 
 type verifiedProcess struct {
@@ -88,6 +89,10 @@ func runAttractorStop(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	runID := resolveExpectedRunID(snapshot.RunID, logsRoot)
+	if err := writeStopRequest(logsRoot, runID, verified.PID, grace, force); err != nil {
+		fmt.Fprintf(stderr, "warning: write stop_request.json: %v\n", err)
+	}
 
 	proc, err := os.FindProcess(verified.PID)
 	if err != nil {
@@ -107,6 +112,10 @@ func runAttractorStop(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	if waitForPIDExit(verified, grace) {
+		if err := ensureTerminalOutcomeAfterStop(logsRoot, runID, "stopped_by_operator"); err != nil {
+			fmt.Fprintf(stderr, "stopped pid %d but could not persist final outcome: %v\n", verified.PID, err)
+			return 1
+		}
 		fmt.Fprintf(stdout, "pid=%d\nstopped=graceful\n", verified.PID)
 		return 0
 	}
@@ -138,8 +147,56 @@ func runAttractorStop(args []string, stdout io.Writer, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "pid %d did not exit after SIGKILL\n", verified.PID)
 		return 1
 	}
+	if err := ensureTerminalOutcomeAfterStop(logsRoot, runID, "stopped_by_operator_forced"); err != nil {
+		fmt.Fprintf(stderr, "stopped pid %d but could not persist final outcome: %v\n", verified.PID, err)
+		return 1
+	}
 	fmt.Fprintf(stdout, "pid=%d\nstopped=forced\n", verified.PID)
 	return 0
+}
+
+type stopRequest struct {
+	Timestamp string `json:"timestamp"`
+	RunID     string `json:"run_id,omitempty"`
+	PID       int    `json:"pid"`
+	GraceMS   int64  `json:"grace_ms"`
+	Force     bool   `json:"force"`
+}
+
+func writeStopRequest(logsRoot, runID string, pid int, grace time.Duration, force bool) error {
+	req := stopRequest{
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		RunID:     strings.TrimSpace(runID),
+		PID:       pid,
+		GraceMS:   grace.Milliseconds(),
+		Force:     force,
+	}
+	return runtime.WriteJSONAtomicFile(filepath.Join(logsRoot, "stop_request.json"), req)
+}
+
+func ensureTerminalOutcomeAfterStop(logsRoot, runID, failureReason string) error {
+	finalPath := filepath.Join(logsRoot, "final.json")
+	if _, err := os.Stat(finalPath); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+
+	out := runtime.FinalOutcome{
+		Timestamp:     time.Now().UTC(),
+		Status:        runtime.FinalFail,
+		RunID:         strings.TrimSpace(runID),
+		FailureReason: strings.TrimSpace(failureReason),
+	}
+	if cp, err := runtime.LoadCheckpoint(filepath.Join(logsRoot, "checkpoint.json")); err == nil {
+		out.FinalGitCommitSHA = strings.TrimSpace(cp.GitCommitSHA)
+	}
+	if out.RunID == "" {
+		if manifestRunID, err := readManifestRunID(logsRoot); err == nil {
+			out.RunID = strings.TrimSpace(manifestRunID)
+		}
+	}
+	return out.Save(finalPath)
 }
 
 func waitForPIDExit(proc verifiedProcess, grace time.Duration) bool {

@@ -126,7 +126,11 @@ func printEvent(w io.Writer, line string, raw bool) {
 		fmt.Fprintln(w, line)
 		return
 	}
-	fmt.Fprintln(w, formatProgressEvent(ev))
+	formatted := formatProgressEvent(ev)
+	if strings.TrimSpace(formatted) == "" {
+		return
+	}
+	fmt.Fprintln(w, formatted)
 }
 
 func formatProgressEvent(ev map[string]any) string {
@@ -163,6 +167,34 @@ func formatProgressEvent(ev map[string]any) string {
 		return fmt.Sprintf("%s | %-24s | %s | elapsed=%ss",
 			ts, event, nodeID,
 			evVal(ev, "elapsed_s"))
+
+	case "branch_progress":
+		branchKey := evStr(ev, "branch_key")
+		branchEvent := evStr(ev, "branch_event")
+		branchNode := evStr(ev, "branch_node_id")
+		line := fmt.Sprintf("%s | %-24s | %s | %s", ts, event, branchKey, branchEvent)
+		if branchNode != "" {
+			line += " | node=" + branchNode
+		}
+		if status := evStr(ev, "branch_status"); status != "" {
+			line += " | status=" + status
+		}
+		if reason := evStr(ev, "branch_failure_reason"); reason != "" {
+			line += " | " + reason
+		}
+		return line
+
+	case "branch_heartbeat":
+		// Keep default follow output focused on meaningful progress; heartbeats
+		// are still available with --raw.
+		return ""
+
+	case "branch_stale_warning":
+		return fmt.Sprintf("%s | %-24s | %s | idle=%sms | last=%s",
+			ts, event,
+			evStr(ev, "branch_key"),
+			evVal(ev, "branch_idle_ms"),
+			evStr(ev, "branch_last_event"))
 
 	case "loop_restart":
 		return fmt.Sprintf("%s | %-24s | restarting pipeline",

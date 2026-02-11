@@ -1,6 +1,8 @@
 package main
 
 import (
+	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -58,6 +60,38 @@ func TestAttractorStop_KillsVerifiedAttractorProcessFromRunPID(t *testing.T) {
 		t.Fatalf("unexpected output: %s", out)
 	}
 	waitForProcessExit(t, pid, 10*time.Second)
+	waitForFile(t, filepath.Join(logs, "stop_request.json"), 5*time.Second)
+	waitForFile(t, filepath.Join(logs, "final.json"), 5*time.Second)
+
+	finalBytes, err := os.ReadFile(filepath.Join(logs, "final.json"))
+	if err != nil {
+		t.Fatalf("read final.json: %v", err)
+	}
+	var final map[string]any
+	if err := json.Unmarshal(finalBytes, &final); err != nil {
+		t.Fatalf("decode final.json: %v", err)
+	}
+	if strings.TrimSpace(anyToStringStop(final["status"])) != "fail" {
+		t.Fatalf("expected final status fail after stop, got: %v", final["status"])
+	}
+	if strings.TrimSpace(anyToStringStop(final["failure_reason"])) == "" {
+		t.Fatalf("expected failure_reason in final.json after stop: %v", final)
+	}
+
+	reqBytes, err := os.ReadFile(filepath.Join(logs, "stop_request.json"))
+	if err != nil {
+		t.Fatalf("read stop_request.json: %v", err)
+	}
+	var req map[string]any
+	if err := json.Unmarshal(reqBytes, &req); err != nil {
+		t.Fatalf("decode stop_request.json: %v", err)
+	}
+	if !toBoolStop(req["force"]) {
+		t.Fatalf("expected stop_request.force=true, got: %v", req["force"])
+	}
+	if pidVal := int(toFloatStop(req["pid"])); pidVal != pid {
+		t.Fatalf("expected stop_request.pid=%d, got: %v", pid, req["pid"])
+	}
 }
 
 func TestAttractorStop_PrefersRunIDOverRelativeLogsRootMismatch(t *testing.T) {
@@ -212,6 +246,35 @@ func TestAttractorStop_ErrorsWhenNoPID(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected non-zero exit; output=%s", out)
 	}
+}
+
+func anyToStringStop(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return strings.TrimSpace(s)
+	}
+	return strings.TrimSpace(fmt.Sprint(v))
+}
+
+func toBoolStop(v any) bool {
+	b, ok := v.(bool)
+	return ok && b
+}
+
+func toFloatStop(v any) float64 {
+	switch t := v.(type) {
+	case float64:
+		return t
+	case float32:
+		return float64(t)
+	case int:
+		return float64(t)
+	case int64:
+		return float64(t)
+	}
+	return 0
 }
 
 func TestVerifyProcessIdentity_DetectsChangedStartTime(t *testing.T) {

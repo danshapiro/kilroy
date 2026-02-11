@@ -39,6 +39,11 @@ type parallelBranchResult struct {
 	Artifacts      map[string][]string `json:"artifacts,omitempty"`
 }
 
+const (
+	branchStaleWarningThreshold = 5 * time.Minute
+	branchStaleWarningInterval  = 1 * time.Minute
+)
+
 func branchLivenessKeepaliveInterval(stallTimeout time.Duration) time.Duration {
 	const (
 		defaultInterval = 200 * time.Millisecond
@@ -180,22 +185,84 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 	branchName := buildParallelBranch(prefix, exec.Engine.Options.RunID, parallelNode.ID, key)
 	branchRoot := filepath.Join(exec.LogsRoot, "parallel", parallelNode.ID, fmt.Sprintf("%02d-%s", idx+1, key))
 	worktreeDir := filepath.Join(branchRoot, "worktree")
-	emitBranchLiveness := func(stage string) {
-		exec.Engine.appendProgress(map[string]any{
-			"event":            "branch_liveness",
+	var activityMu sync.Mutex
+	lastProgressEvent := "branch_initialized"
+	lastProgressAt := time.Now().UTC()
+	lastStaleWarningAt := time.Time{}
+	recordProgress := func(stage string, at time.Time) {
+		activityMu.Lock()
+		lastProgressEvent = stage
+		lastProgressAt = at
+		lastStaleWarningAt = time.Time{}
+		activityMu.Unlock()
+	}
+	readActivity := func(now time.Time) (event string, at time.Time, idle time.Duration, warnedAt time.Time) {
+		activityMu.Lock()
+		event = lastProgressEvent
+		at = lastProgressAt
+		warnedAt = lastStaleWarningAt
+		activityMu.Unlock()
+		if at.IsZero() {
+			at = now
+		}
+		idle = now.Sub(at)
+		return event, at, idle, warnedAt
+	}
+	markStaleWarning := func(at time.Time) {
+		activityMu.Lock()
+		lastStaleWarningAt = at
+		activityMu.Unlock()
+	}
+	emitBranchProgress := func(stage string, extra map[string]any) {
+		now := time.Now().UTC()
+		recordProgress(stage, now)
+		ev := map[string]any{
+			"event":            "branch_progress",
 			"branch_key":       key,
 			"branch_logs_root": branchRoot,
 			"branch_event":     stage,
+		}
+		for k, v := range extra {
+			ev[k] = v
+		}
+		exec.Engine.appendProgress(ev)
+	}
+	emitBranchHeartbeat := func() {
+		now := time.Now().UTC()
+		lastEvent, lastEventAt, idle, warnedAt := readActivity(now)
+		exec.Engine.appendProgress(map[string]any{
+			"event":                "branch_heartbeat",
+			"branch_key":           key,
+			"branch_logs_root":     branchRoot,
+			"branch_last_event":    lastEvent,
+			"branch_last_event_at": lastEventAt.Format(time.RFC3339Nano),
+			"branch_idle_ms":       idle.Milliseconds(),
+		})
+		if idle < branchStaleWarningThreshold {
+			return
+		}
+		if !warnedAt.IsZero() && now.Sub(warnedAt) < branchStaleWarningInterval {
+			return
+		}
+		markStaleWarning(now)
+		exec.Engine.appendProgress(map[string]any{
+			"event":                "branch_stale_warning",
+			"branch_key":           key,
+			"branch_logs_root":     branchRoot,
+			"branch_last_event":    lastEvent,
+			"branch_last_event_at": lastEventAt.Format(time.RFC3339Nano),
+			"branch_idle_ms":       idle.Milliseconds(),
+			"stale_threshold_ms":   int64(branchStaleWarningThreshold / time.Millisecond),
 		})
 	}
 
 	// Prepare branch git worktree rooted at the parallel node checkpoint commit.
-	emitBranchLiveness("branch_setup_start")
+	emitBranchProgress("branch_setup_start", nil)
 	_ = os.MkdirAll(branchRoot, 0o755)
 	if gitMu != nil {
 		gitMu.Lock()
 	}
-	emitBranchLiveness("branch_setup_locked")
+	emitBranchProgress("branch_setup_locked", nil)
 	_ = gitutil.RemoveWorktree(exec.Engine.Options.RepoPath, worktreeDir)
 	if err := gitutil.CreateBranchAt(exec.Engine.Options.RepoPath, branchName, baseSHA); err != nil {
 		if gitMu != nil {
@@ -231,7 +298,7 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 	if gitMu != nil {
 		gitMu.Unlock()
 	}
-	emitBranchLiveness("branch_setup_ready")
+	emitBranchProgress("branch_setup_ready", nil)
 
 	branchEng := &Engine{
 		Graph:              exec.Graph,
@@ -258,14 +325,31 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 		if eventName == "" {
 			return
 		}
-		exec.Engine.appendProgress(map[string]any{
-			"event":            "branch_liveness",
-			"branch_key":       key,
-			"branch_logs_root": branchRoot,
-			"branch_event":     eventName,
-		})
+		extra := map[string]any{}
+		if nodeID := strings.TrimSpace(fmt.Sprint(ev["node_id"])); nodeID != "" {
+			extra["branch_node_id"] = nodeID
+		}
+		if status := strings.TrimSpace(fmt.Sprint(ev["status"])); status != "" {
+			extra["branch_status"] = status
+		}
+		if reason := strings.TrimSpace(fmt.Sprint(ev["failure_reason"])); reason != "" {
+			extra["branch_failure_reason"] = reason
+		}
+		if attempt, ok := ev["attempt"]; ok {
+			extra["branch_attempt"] = attempt
+		}
+		if maxAttempts, ok := ev["max"]; ok {
+			extra["branch_max"] = maxAttempts
+		}
+		if fromNode := strings.TrimSpace(fmt.Sprint(ev["from_node"])); fromNode != "" {
+			extra["branch_from_node"] = fromNode
+		}
+		if toNode := strings.TrimSpace(fmt.Sprint(ev["to_node"])); toNode != "" {
+			extra["branch_to_node"] = toNode
+		}
+		emitBranchProgress(eventName, extra)
 	}
-	emitBranchLiveness("branch_subgraph_start")
+	emitBranchProgress("branch_subgraph_start", nil)
 	keepaliveStop := make(chan struct{})
 	keepaliveDone := make(chan struct{})
 	keepaliveInterval := branchLivenessKeepaliveInterval(exec.Engine.Options.StallTimeout)
@@ -276,7 +360,7 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 		for {
 			select {
 			case <-ticker.C:
-				emitBranchLiveness("branch_active")
+				emitBranchHeartbeat()
 			case <-keepaliveStop:
 				return
 			case <-ctx.Done():
@@ -288,13 +372,16 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 	res, err := runSubgraphUntil(ctx, branchEng, edge.To, joinID)
 	close(keepaliveStop)
 	<-keepaliveDone
-	emitBranchLiveness("branch_subgraph_done")
 	if err != nil {
 		res.Error = err.Error()
 		if res.Outcome.Status == "" {
 			res.Outcome = runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}
 		}
 	}
+	emitBranchProgress("branch_subgraph_done", map[string]any{
+		"branch_status":         strings.TrimSpace(string(res.Outcome.Status)),
+		"branch_failure_reason": strings.TrimSpace(res.Outcome.FailureReason),
+	})
 	res.BranchKey = key
 	res.BranchName = branchName
 	res.StartNodeID = edge.To

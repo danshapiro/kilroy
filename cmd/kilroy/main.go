@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/strongdm/kilroy/internal/attractor/engine"
 	"github.com/strongdm/kilroy/internal/providerspec"
@@ -191,7 +193,13 @@ func attractorRun(args []string) {
 	}
 
 	// Default: no deadline. CLI runs (especially with provider CLIs) can take hours.
-	ctx := context.Background()
+	ctx, cancel := context.WithCancelCause(context.Background())
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		cancel(fmt.Errorf("stopped by signal %s", sig.String()))
+	}()
 
 	res, err := engine.RunWithConfig(ctx, dotSource, cfg, engine.RunOptions{
 		RunID:         runID,

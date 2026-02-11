@@ -18,7 +18,9 @@ func TestFollowProgress_EmitsFormattedEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, _ = f.WriteString(`{"ts":"2026-02-10T04:00:25Z","event":"stage_attempt_start","node_id":"pick_feature","attempt":1,"max":4}` + "\n")
+	_, _ = f.WriteString(`{"ts":"2026-02-10T04:00:30Z","event":"branch_heartbeat","branch_key":"impl_a","branch_event":"branch_active","branch_idle_ms":250}` + "\n")
 	_, _ = f.WriteString(`{"ts":"2026-02-10T04:00:40Z","event":"stage_attempt_end","node_id":"pick_feature","status":"success","attempt":1,"max":4}` + "\n")
+	_, _ = f.WriteString(`{"ts":"2026-02-10T04:00:41Z","event":"branch_progress","branch_key":"impl_a","branch_event":"stage_attempt_start","branch_node_id":"impl_a","branch_status":"success"}` + "\n")
 	_, _ = f.WriteString(`{"ts":"2026-02-10T04:00:40Z","event":"edge_selected","from_node":"pick_feature","to_node":"check_pick"}` + "\n")
 	_ = f.Close()
 
@@ -42,6 +44,12 @@ func TestFollowProgress_EmitsFormattedEvents(t *testing.T) {
 	}
 	if !strings.Contains(out, "edge_selected") {
 		t.Fatalf("expected edge_selected in output: %s", out)
+	}
+	if !strings.Contains(out, "branch_progress") {
+		t.Fatalf("expected branch_progress in output: %s", out)
+	}
+	if strings.Contains(out, "branch_heartbeat") {
+		t.Fatalf("did not expect branch_heartbeat in default output: %s", out)
 	}
 	if !strings.Contains(out, "pick_feature -> check_pick") {
 		t.Fatalf("expected edge routing in output: %s", out)
@@ -169,6 +177,23 @@ func TestFormatProgressEvent_AllEventTypes(t *testing.T) {
 			contains: []string{"stage_heartbeat", "implement_feature", "elapsed=60s"},
 		},
 		{
+			name: "branch_progress",
+			event: map[string]any{
+				"ts": "2026-02-10T04:02:30Z", "event": "branch_progress",
+				"branch_key": "impl_a", "branch_event": "stage_attempt_start",
+				"branch_node_id": "impl_a", "branch_status": "success",
+			},
+			contains: []string{"branch_progress", "impl_a", "stage_attempt_start", "status=success"},
+		},
+		{
+			name: "branch_stale_warning",
+			event: map[string]any{
+				"ts": "2026-02-10T04:02:45Z", "event": "branch_stale_warning",
+				"branch_key": "impl_a", "branch_idle_ms": float64(301000), "branch_last_event": "stage_attempt_start",
+			},
+			contains: []string{"branch_stale_warning", "impl_a", "idle=301000ms", "last=stage_attempt_start"},
+		},
+		{
 			name: "loop_restart",
 			event: map[string]any{
 				"ts": "2026-02-10T05:00:00Z", "event": "loop_restart",
@@ -186,6 +211,18 @@ func TestFormatProgressEvent_AllEventTypes(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFormatProgressEvent_BranchHeartbeatSuppressed(t *testing.T) {
+	got := formatProgressEvent(map[string]any{
+		"ts":             "2026-02-10T04:02:00Z",
+		"event":          "branch_heartbeat",
+		"branch_key":     "impl_a",
+		"branch_idle_ms": float64(200),
+	})
+	if strings.TrimSpace(got) != "" {
+		t.Fatalf("expected suppressed output for branch_heartbeat, got: %q", got)
 	}
 }
 
