@@ -1696,6 +1696,11 @@ func defaultCLIInvocation(provider string, modelID string, worktreeDir string) (
 	if spec == nil {
 		return "", nil
 	}
+	// Anthropic CLI expects dashes in version numbers (claude-sonnet-4-5),
+	// but the OpenRouter catalog uses dots (claude-sonnet-4.5).
+	if normalizeProviderKey(provider) == "anthropic" {
+		modelID = strings.ReplaceAll(modelID, ".", "-")
+	}
 	exe, args = materializeCLIInvocation(*spec, modelID, worktreeDir, "")
 	return exe, args
 }

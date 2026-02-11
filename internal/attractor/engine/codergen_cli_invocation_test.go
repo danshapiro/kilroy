@@ -32,6 +32,24 @@ func TestDefaultCLIInvocation_GoogleGeminiNonInteractive(t *testing.T) {
 	}
 }
 
+func TestDefaultCLIInvocation_AnthropicNormalizesDotsToHyphens(t *testing.T) {
+	exe, args := defaultCLIInvocation("anthropic", "claude-sonnet-4.5", "/tmp/worktree")
+	if exe == "" {
+		t.Fatalf("expected non-empty executable for anthropic")
+	}
+	// The Claude CLI expects dashes in version numbers (claude-sonnet-4-5),
+	// but the OpenRouter catalog uses dots (claude-sonnet-4.5).
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--model" {
+			if args[i+1] != "claude-sonnet-4-5" {
+				t.Fatalf("expected --model claude-sonnet-4-5 but got %s", args[i+1])
+			}
+			return
+		}
+	}
+	t.Fatalf("--model flag not found in args: %v", args)
+}
+
 func TestDefaultCLIInvocation_AnthropicIncludesVerboseForStreamJSON(t *testing.T) {
 	exe, args := defaultCLIInvocation("anthropic", "claude-sonnet-4", "/tmp/worktree")
 	if exe == "" {
