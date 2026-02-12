@@ -5,6 +5,17 @@ Kilroy is a local-first Go CLI for running software-factory pipelines in a Git r
 
 Use Kilroy in this order: build the binary, generate or write a graph, validate it, then run it with a config file. Typical flow: `go build -o ./kilroy ./cmd/kilroy`, `./kilroy attractor ingest -o pipeline.dot "<requirements>"`, `./kilroy attractor validate --graph pipeline.dot`, then `./kilroy attractor run --graph pipeline.dot --config run.yaml`.
 
+## What you're doing here
+If you can see this message, then you are not here to use Kilroy - you're here to improve Kilroy. If Kilroy fails to build a project:
+- Don't fix the project
+- Don't fix the dotfile
+- Don't fix the system so it works for *this* project
+Use the knowledge you've gained from the failure to make the system more robust for *every* project. 
+Of course, user instructions may override this, or any other section.
+
+# Think like a user
+Think about a blank slate agent that is trying to properly create a dotfile using the dotfile skill and then run it with the attractor. What mistakes would it make? What ergonomics would steer it away? How can you make that robust for every possible project the attractor could work on, not just this one? How can you do that without asking it to know the impossible, like how hard a problem is or how long something might take? 
+
 ## Project Structure & Module Organization
 - `cmd/kilroy/`: CLI entrypoint and subcommands for `attractor` commands (`run`, `resume`, `status`, `stop`, `validate`, `ingest`).
 - `internal/attractor/`: core engine/runtime, graph validation, config loading, and model metadata handling.
