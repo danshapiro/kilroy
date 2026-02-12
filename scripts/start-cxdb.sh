@@ -3,6 +3,7 @@ set -euo pipefail
 
 HTTP_BASE_URL="${KILROY_CXDB_HTTP_BASE_URL:-${CXDB_HTTP_BASE_URL:-http://127.0.0.1:9010}}"
 BINARY_ADDR="${KILROY_CXDB_BINARY_ADDR:-${CXDB_BINARY_ADDR:-127.0.0.1:9009}}"
+UI_ADDR="${KILROY_CXDB_UI_ADDR:-127.0.0.1:9020}"
 CXDB_IMAGE="${KILROY_CXDB_IMAGE:-cxdb/cxdb:local}"
 CONTAINER_NAME="${KILROY_CXDB_CONTAINER_NAME:-kilroy-cxdb}"
 DATA_DIR="${KILROY_CXDB_DATA_DIR:-$HOME/.local/state/kilroy/cxdb}"
@@ -73,6 +74,7 @@ fi
 
 read -r BIN_HOST BIN_PORT < <(split_host_port "$BINARY_ADDR")
 read -r HTTP_HOST HTTP_PORT < <(split_http_base "$HTTP_BASE_URL")
+read -r UI_HOST UI_PORT < <(split_host_port "$UI_ADDR")
 
 if health_ok; then
   if container_running; then
@@ -116,6 +118,7 @@ case "$container_state" in
       --restart unless-stopped \
       -p "${BIN_HOST}:${BIN_PORT}:${BIN_PORT}" \
       -p "${HTTP_HOST}:${HTTP_PORT}:${HTTP_PORT}" \
+      -p "${UI_HOST}:${UI_PORT}:80" \
       -e "CXDB_BIND=0.0.0.0:${BIN_PORT}" \
       -e "CXDB_HTTP_BIND=0.0.0.0:${HTTP_PORT}" \
       -e "CXDB_DATA_DIR=/data" \
@@ -147,7 +150,7 @@ now_ms() {
 deadline_ms=$(( $(now_ms) + START_TIMEOUT_MS ))
 while (( $(now_ms) < deadline_ms )); do
   if health_ok; then
-    echo "cxdb ready: http=$HTTP_BASE_URL binary=$BINARY_ADDR container=$CONTAINER_NAME image=$CXDB_IMAGE"
+    echo "cxdb ready: http=$HTTP_BASE_URL binary=$BINARY_ADDR ui=http://$UI_ADDR container=$CONTAINER_NAME image=$CXDB_IMAGE"
     # When launched via attractor autostart, keep the process around until Kilroy exits.
     if [[ -n "${KILROY_RUN_ID:-}" ]]; then
       trap 'exit 0' TERM INT
