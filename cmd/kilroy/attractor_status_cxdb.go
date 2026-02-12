@@ -236,6 +236,13 @@ func formatCXDBTurn(turn cxdb.Turn) string {
 		}
 		return line
 
+	case "com.kilroy.attractor.Prompt":
+		text := payloadStr(p, "text")
+		if len(text) > 120 {
+			text = text[:117] + "..."
+		}
+		return fmt.Sprintf("%s | PROMPT                 | %s\n%s%s", ts, nodeID, strings.Repeat(" ", 11), text)
+
 	case "com.kilroy.attractor.RunFailed":
 		reason := payloadStr(p, "reason")
 		return fmt.Sprintf("%s | RUN_FAILED             | %s | %s", ts, nodeID, reason)

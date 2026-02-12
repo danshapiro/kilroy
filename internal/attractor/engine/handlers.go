@@ -263,6 +263,9 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 	if err := os.WriteFile(filepath.Join(stageDir, "prompt.md"), []byte(promptText), 0o644); err != nil {
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, err
 	}
+	if exec.Engine != nil {
+		exec.Engine.cxdbPrompt(ctx, node.ID, promptText)
+	}
 
 	backend := exec.Engine.CodergenBackend
 	if backend == nil {

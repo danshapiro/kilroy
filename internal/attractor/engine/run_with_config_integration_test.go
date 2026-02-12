@@ -404,6 +404,9 @@ digraph G {
 	}
 	hasRunStarted := false
 	hasRunStartedLogsRoot := false
+	hasRunStartedGraphDot := false
+	hasPrompt := false
+	var promptText string
 	for _, tr := range turns {
 		if tr["type_id"] == "com.kilroy.attractor.RunStarted" {
 			hasRunStarted = true
@@ -411,6 +414,15 @@ digraph G {
 				if strings.TrimSpace(anyToString(p["logs_root"])) == strings.TrimSpace(res.LogsRoot) {
 					hasRunStartedLogsRoot = true
 				}
+				if strings.TrimSpace(anyToString(p["graph_dot"])) != "" {
+					hasRunStartedGraphDot = true
+				}
+			}
+		}
+		if tr["type_id"] == "com.kilroy.attractor.Prompt" {
+			hasPrompt = true
+			if p, ok := tr["payload"].(map[string]any); ok {
+				promptText = anyToString(p["text"])
 			}
 		}
 		// Plumbing turns must not appear in CXDB (files still on disk).
@@ -429,6 +441,15 @@ digraph G {
 	}
 	if !hasRunStartedLogsRoot {
 		t.Fatalf("expected RunStarted.logs_root to equal logs_root=%q", res.LogsRoot)
+	}
+	if !hasRunStartedGraphDot {
+		t.Fatalf("expected RunStarted.graph_dot to contain .dot file content")
+	}
+	if !hasPrompt {
+		t.Fatalf("expected Prompt turn for orchestrator-to-agent prompt")
+	}
+	if strings.TrimSpace(promptText) == "" {
+		t.Fatalf("expected Prompt turn text to be non-empty")
 	}
 
 	// final.json includes CXDB context + head turn id (metaspec).
