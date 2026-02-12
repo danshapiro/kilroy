@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -99,7 +100,7 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 	}
 
 	body := map[string]any{
-		"model":      req.Model,
+		"model":      nativeModelID(req.Model),
 		"max_tokens": maxTokens,
 		"messages":   messages,
 	}
@@ -272,7 +273,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 	}
 
 	body := map[string]any{
-		"model":      req.Model,
+		"model":      nativeModelID(req.Model),
 		"max_tokens": maxTokens,
 		"messages":   messages,
 		"stream":     true,
@@ -1221,4 +1222,15 @@ func parseUsage(u map[string]any) llm.Usage {
 		usage.CacheWriteTokens = &v
 	}
 	return usage
+}
+
+// versionDotRe matches dots between digits in model version numbers
+// (e.g. "4.5", "3.7") without touching other dots.
+var versionDotRe = regexp.MustCompile(`(\d)\.(\d)`)
+
+// nativeModelID translates OpenRouter-format Anthropic model IDs (dots in version
+// numbers, e.g. "claude-sonnet-4.5") to the native API format (dashes, e.g.
+// "claude-sonnet-4-5"). IDs already in native format pass through unchanged.
+func nativeModelID(id string) string {
+	return versionDotRe.ReplaceAllString(id, "${1}-${2}")
 }

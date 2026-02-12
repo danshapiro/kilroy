@@ -116,6 +116,100 @@ func TestAdapter_Complete_MapsToMessagesAPI_AndSetsBetaHeaders(t *testing.T) {
 	}
 }
 
+func TestAdapter_Complete_NormalizesDotsTodashesInModelID(t *testing.T) {
+	var gotModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		var body map[string]any
+		_ = json.Unmarshal(b, &body)
+		gotModel, _ = body["model"].(string)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "id": "msg_1",
+  "model": "claude-sonnet-4-5",
+  "content": [{"type":"text","text":"ok"}],
+  "stop_reason": "end_turn",
+  "usage": {"input_tokens": 1, "output_tokens": 2}
+}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{"claude-sonnet-4.5", "claude-sonnet-4-5"},
+		{"claude-opus-4.6", "claude-opus-4-6"},
+		{"claude-3.7-sonnet", "claude-3-7-sonnet"},
+		{"claude-sonnet-4-5", "claude-sonnet-4-5"},             // already dashes
+		{"claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929"}, // already native format
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			gotModel = ""
+			_, err := a.Complete(ctx, llm.Request{
+				Model:    tc.input,
+				Messages: []llm.Message{llm.User("hi")},
+			})
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+			if gotModel != tc.want {
+				t.Fatalf("model sent to API: got %q, want %q", gotModel, tc.want)
+			}
+		})
+	}
+}
+
+func TestAdapter_Stream_NormalizesDotsTodashesinModelID(t *testing.T) {
+	var gotModel string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		var body map[string]any
+		_ = json.Unmarshal(b, &body)
+		gotModel, _ = body["model"].(string)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		f, _ := w.(http.Flusher)
+		write := func(event, data string) {
+			_, _ = io.WriteString(w, "event: "+event+"\ndata: "+data+"\n\n")
+			if f != nil {
+				f.Flush()
+			}
+		}
+		write("content_block_start", `{"content_block":{"type":"text"}}`)
+		write("content_block_delta", `{"delta":{"type":"text_delta","text":"ok"}}`)
+		write("content_block_stop", `{}`)
+		write("message_delta", `{"stop_reason":"end_turn","usage":{"input_tokens":1,"output_tokens":1}}`)
+		write("message_stop", `{}`)
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	stream, err := a.Stream(ctx, llm.Request{
+		Model:    "claude-opus-4.6",
+		Messages: []llm.Message{llm.User("hi")},
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	for range stream.Events() {
+	}
+	_ = stream.Close()
+	if gotModel != "claude-opus-4-6" {
+		t.Fatalf("stream model sent to API: got %q, want %q", gotModel, "claude-opus-4-6")
+	}
+}
+
 func TestAdapter_Complete_HTTPErrorMapping_AuthenticationError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

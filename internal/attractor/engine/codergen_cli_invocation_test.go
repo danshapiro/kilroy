@@ -32,6 +32,55 @@ func TestDefaultCLIInvocation_GoogleGeminiNonInteractive(t *testing.T) {
 	}
 }
 
+func TestDefaultCLIInvocation_AnthropicNormalizesDotsToHyphens(t *testing.T) {
+	exe, args := defaultCLIInvocation("anthropic", "claude-sonnet-4.5", "/tmp/worktree")
+	if exe == "" {
+		t.Fatalf("expected non-empty executable for anthropic")
+	}
+	// The Claude CLI expects dashes in version numbers (claude-sonnet-4-5),
+	// but the OpenRouter catalog uses dots (claude-sonnet-4.5).
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--model" {
+			if args[i+1] != "claude-sonnet-4-5" {
+				t.Fatalf("expected --model claude-sonnet-4-5 but got %s", args[i+1])
+			}
+			return
+		}
+	}
+	t.Fatalf("--model flag not found in args: %v", args)
+}
+
+func TestDefaultCLIInvocation_StripsProviderPrefixFromModelID(t *testing.T) {
+	// Model IDs from .dot stylesheets use OpenRouter format (provider/model).
+	// CLI binaries expect the bare model name without the provider prefix.
+	tests := []struct {
+		name      string
+		provider  string
+		modelID   string
+		wantModel string
+	}{
+		{"anthropic with prefix and dots", "anthropic", "anthropic/claude-sonnet-4.5", "claude-sonnet-4-5"},
+		{"anthropic with prefix no dots", "anthropic", "anthropic/claude-sonnet-4", "claude-sonnet-4"},
+		{"anthropic without prefix", "anthropic", "claude-sonnet-4.5", "claude-sonnet-4-5"},
+		{"google with prefix", "google", "google/gemini-3-flash-preview", "gemini-3-flash-preview"},
+		{"google without prefix", "google", "gemini-3-flash-preview", "gemini-3-flash-preview"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, args := defaultCLIInvocation(tt.provider, tt.modelID, "/tmp/worktree")
+			for i := 0; i < len(args)-1; i++ {
+				if args[i] == "--model" {
+					if args[i+1] != tt.wantModel {
+						t.Fatalf("expected --model %s but got %s", tt.wantModel, args[i+1])
+					}
+					return
+				}
+			}
+			t.Fatalf("--model flag not found in args: %v", args)
+		})
+	}
+}
+
 func TestDefaultCLIInvocation_AnthropicIncludesVerboseForStreamJSON(t *testing.T) {
 	exe, args := defaultCLIInvocation("anthropic", "claude-sonnet-4", "/tmp/worktree")
 	if exe == "" {
@@ -45,6 +94,13 @@ func TestDefaultCLIInvocation_AnthropicIncludesVerboseForStreamJSON(t *testing.T
 	}
 	if !hasArg(args, "--verbose") {
 		t.Fatalf("expected --verbose for stream-json contract compatibility; args=%v", args)
+	}
+}
+
+func TestDefaultCLIInvocation_AnthropicSkipsPermissions(t *testing.T) {
+	_, args := defaultCLIInvocation("anthropic", "claude-sonnet-4-5", "/tmp/worktree")
+	if !hasArg(args, "--dangerously-skip-permissions") {
+		t.Fatalf("expected --dangerously-skip-permissions for headless CLI mode; args=%v", args)
 	}
 }
 

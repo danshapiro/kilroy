@@ -1,10 +1,15 @@
 package modeldb
 
 import (
+	"regexp"
 	"strings"
 
 	"github.com/strongdm/kilroy/internal/modelmeta"
 )
+
+// versionDotRe matches dots between digits in model version numbers
+// (e.g. "4.5", "3.7") without touching other dots.
+var versionDotRe = regexp.MustCompile(`(\d)\.(\d)`)
 
 // Catalog is the normalized, provider-agnostic model metadata snapshot used by
 // attractor runtime preflight and routing metadata checks.
@@ -73,6 +78,25 @@ func CatalogHasProviderModel(c *Catalog, provider, modelID string) bool {
 		}
 		if strings.EqualFold(providerRelativeModelID(provider, id), inRelative) {
 			return true
+		}
+	}
+	// Anthropic OpenRouter catalog uses dots in version numbers (claude-sonnet-4.5)
+	// but the native API uses dashes (claude-sonnet-4-5). Normalize dots to dashes
+	// on both sides so either format matches.
+	if provider == "anthropic" {
+		normQuery := versionDotRe.ReplaceAllString(inRelative, "${1}-${2}")
+		for id, entry := range c.Models {
+			ep := modelmeta.NormalizeProvider(entry.Provider)
+			if ep == "" {
+				ep = inferProviderFromModelID(id)
+			}
+			if ep != provider {
+				continue
+			}
+			normEntry := versionDotRe.ReplaceAllString(providerRelativeModelID(provider, id), "${1}-${2}")
+			if strings.EqualFold(normEntry, normQuery) {
+				return true
+			}
 		}
 	}
 	return false
