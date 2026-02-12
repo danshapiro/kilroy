@@ -5,6 +5,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 // emitCXDBCLIStreamEvent converts a parsed CLI stream event into CXDB turns.
@@ -23,6 +24,15 @@ func emitCXDBCLIStreamEvent(ctx context.Context, eng *Engine, nodeID string, ev 
 		}
 		text := extractAssistantText(ev.Message)
 		calls := extractToolCalls(ev.Message)
+
+		// For tool-only messages (no text), synthesize a descriptive label.
+		if strings.TrimSpace(text) == "" && len(calls) > 0 {
+			names := make([]string, len(calls))
+			for i, c := range calls {
+				names[i] = c.Name
+			}
+			text = "[tool_use: " + strings.Join(names, ", ") + "]"
+		}
 
 		var inputTokens, outputTokens uint64
 		if ev.Message.Usage != nil {

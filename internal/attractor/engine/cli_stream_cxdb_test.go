@@ -112,6 +112,70 @@ func TestEmitCXDBCLIStreamEvent_AssistantWithToolUse(t *testing.T) {
 	}
 }
 
+func TestEmitCXDBCLIStreamEvent_ToolOnlyAssistantMessageGetsDescriptiveText(t *testing.T) {
+	srv := newCXDBTestServer(t)
+	eng := newTestEngineWithCXDB(t, srv)
+	ctx := context.Background()
+
+	ev := &cliStreamEvent{
+		Type: "assistant",
+		Message: &cliMessage{
+			Model: "claude-sonnet-4-5-20250929",
+			Role:  "assistant",
+			Content: []cliContentBlock{
+				{Type: "tool_use", ID: "toolu_xyz", Name: "Write", Input: map[string]any{"file_path": "/tmp/out.txt"}},
+			},
+			Usage: &cliUsage{InputTokens: 500, OutputTokens: 30},
+		},
+	}
+
+	emitCXDBCLIStreamEvent(ctx, eng, "node_e", ev, nil)
+
+	turns := srv.Turns(eng.CXDB.ContextID)
+	if len(turns) < 1 {
+		t.Fatalf("expected at least 1 turn, got %d", len(turns))
+	}
+	p := turns[0]["payload"].(map[string]any)
+	text, _ := p["text"].(string)
+	if text == "" {
+		t.Fatalf("expected non-empty text for tool-only assistant message, got empty")
+	}
+	if text != "[tool_use: Write]" {
+		t.Fatalf("expected text '[tool_use: Write]', got %q", text)
+	}
+}
+
+func TestEmitCXDBCLIStreamEvent_MultiToolOnlyAssistantMessageListsAll(t *testing.T) {
+	srv := newCXDBTestServer(t)
+	eng := newTestEngineWithCXDB(t, srv)
+	ctx := context.Background()
+
+	ev := &cliStreamEvent{
+		Type: "assistant",
+		Message: &cliMessage{
+			Model: "claude-sonnet-4-5-20250929",
+			Role:  "assistant",
+			Content: []cliContentBlock{
+				{Type: "tool_use", ID: "toolu_1", Name: "Read", Input: map[string]any{}},
+				{Type: "tool_use", ID: "toolu_2", Name: "Bash", Input: map[string]any{}},
+			},
+			Usage: &cliUsage{InputTokens: 500, OutputTokens: 30},
+		},
+	}
+
+	emitCXDBCLIStreamEvent(ctx, eng, "node_f", ev, nil)
+
+	turns := srv.Turns(eng.CXDB.ContextID)
+	if len(turns) < 1 {
+		t.Fatalf("expected at least 1 turn, got %d", len(turns))
+	}
+	p := turns[0]["payload"].(map[string]any)
+	text, _ := p["text"].(string)
+	if text != "[tool_use: Read, Bash]" {
+		t.Fatalf("expected text '[tool_use: Read, Bash]', got %q", text)
+	}
+}
+
 func TestEmitCXDBCLIStreamEvent_UserToolResult(t *testing.T) {
 	srv := newCXDBTestServer(t)
 	eng := newTestEngineWithCXDB(t, srv)
