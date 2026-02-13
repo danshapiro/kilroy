@@ -311,3 +311,34 @@ digraph G {
 		t.Fatal("fallback branch should NOT have been dispatched (condition=outcome=fail)")
 	}
 }
+
+func TestRun_SingleEdge_NoImplicitFanOut(t *testing.T) {
+	repo := initImplicitFanOutTestRepo(t)
+
+	dotSrc := []byte(`
+digraph G {
+  graph [goal="test no fan-out"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="a"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="b"]
+  start -> a
+  a -> b
+  b -> exit
+}
+`)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	res, err := Run(ctx, dotSrc, RunOptions{RepoPath: repo})
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("final status: got %q want %q", res.FinalStatus, runtime.FinalSuccess)
+	}
+	// No parallel_results.json should exist — single edge, no fan-out.
+	resultsPath := filepath.Join(res.LogsRoot, "a", "parallel_results.json")
+	if _, err := os.Stat(resultsPath); err == nil {
+		t.Fatalf("parallel_results.json should NOT exist for single-edge traversal")
+	}
+}
