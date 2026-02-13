@@ -108,7 +108,26 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 		failureClass := classifyFailureClass(out)
 		eng.Context.Set("failure_class", failureClass)
 
-		if isFailureLoopRestartOutcome(out) && normalizedFailureClassOrDefault(failureClass) == failureClassDeterministic {
+		// Structural failures in parallel branches are irresolvable — the
+		// branch write scope is fixed by the pipeline definition and cannot
+		// change on retry. Abort immediately per attractor-spec Appendix D:
+		// "Terminal errors are permanent failures where re-execution will not help."
+		if isFailureLoopRestartOutcome(out) && normalizedFailureClassOrDefault(failureClass) == failureClassStructural {
+			eng.appendProgress(map[string]any{
+				"event":          "subgraph_structural_failure_abort",
+				"node_id":        node.ID,
+				"failure_class":  failureClass,
+				"failure_reason": out.FailureReason,
+			})
+			return parallelBranchResult{
+				HeadSHA:    headSHA,
+				LastNodeID: lastNode,
+				Outcome:    out,
+				Completed:  completed,
+			}, fmt.Errorf("structural failure in branch: %s", out.FailureReason)
+		}
+
+		if isFailureLoopRestartOutcome(out) && isSignatureTrackedFailureClass(failureClass) {
 			sig := restartFailureSignature(node.ID, out, failureClass)
 			if sig != "" {
 				if eng.loopFailureSignatures == nil {
@@ -142,8 +161,6 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 					}, fmt.Errorf("deterministic failure cycle detected in subgraph: %s", sig)
 				}
 			}
-		} else if out.Status == runtime.StatusSuccess {
-			eng.loopFailureSignatures = nil
 		}
 
 		sha, err := eng.checkpoint(node.ID, out, completed, nodeRetries)

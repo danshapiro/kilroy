@@ -15,6 +15,7 @@ const (
 	failureClassCanceled             = "canceled"
 	failureClassBudgetExhausted      = "budget_exhausted"
 	failureClassCompilationLoop      = "compilation_loop"
+	failureClassStructural           = "structural"
 	defaultLoopRestartSignatureLimit = 3
 	defaultMaxNodeVisits             = 20
 )
@@ -23,7 +24,7 @@ var (
 	failureSignatureWhitespaceRE = regexp.MustCompile(`\s+`)
 	failureSignatureHexRE        = regexp.MustCompile(`\b[0-9a-f]{7,64}\b`)
 	failureSignatureDigitsRE     = regexp.MustCompile(`\b\d+\b`)
-	transientInfraReasonHints = []string{
+	transientInfraReasonHints    = []string{
 		"timeout",
 		"timed out",
 		"context deadline exceeded",
@@ -62,6 +63,11 @@ var (
 		"context window exceeded",
 		"budget exhausted",
 	}
+	structuralReasonHints = []string{
+		"write_scope_violation",
+		"write scope violation",
+		"scope violation",
+	}
 )
 
 func isFailureLoopRestartOutcome(out runtime.Outcome) bool {
@@ -91,6 +97,11 @@ func classifyFailureClass(out runtime.Outcome) string {
 	for _, hint := range budgetExhaustedReasonHints {
 		if strings.Contains(reason, hint) {
 			return failureClassBudgetExhausted
+		}
+	}
+	for _, hint := range structuralReasonHints {
+		if strings.Contains(reason, hint) {
+			return failureClassStructural
 		}
 	}
 	return failureClassDeterministic
@@ -128,6 +139,8 @@ func normalizedFailureClass(raw string) string {
 		return failureClassBudgetExhausted
 	case "compilation_loop", "compilation-loop", "compilation loop", "compile_loop", "compile-loop":
 		return failureClassCompilationLoop
+	case "structural", "structure", "scope_violation", "write_scope_violation":
+		return failureClassStructural
 	default:
 		return failureClassDeterministic
 	}
@@ -138,6 +151,15 @@ func normalizedFailureClassOrDefault(raw string) string {
 		return cls
 	}
 	return failureClassDeterministic
+}
+
+// isSignatureTrackedFailureClass returns true if the failure class should be
+// tracked by the deterministic failure cycle breaker. Structural failures are
+// included so they accumulate signatures in the main loop (in subgraphs they
+// are caught earlier by the immediate structural abort).
+func isSignatureTrackedFailureClass(failureClass string) bool {
+	cls := normalizedFailureClassOrDefault(failureClass)
+	return cls == failureClassDeterministic || cls == failureClassStructural
 }
 
 func loopRestartSignatureLimit(g *model.Graph) int {
