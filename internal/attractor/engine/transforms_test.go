@@ -79,10 +79,9 @@ digraph G {
 func TestExpandPromptFiles_LoadsFileContent(t *testing.T) {
 	dir := t.TempDir()
 	promptContent := "Build all models from spec section 5.\n$goal\n"
-	if err := os.WriteFile(filepath.Join(dir, "prompts", "impl.md"), nil, 0o755); err != nil {
-		// Create dir first.
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatalf("create prompts dir: %v", err)
 	}
-	_ = os.MkdirAll(filepath.Join(dir, "prompts"), 0o755)
 	if err := os.WriteFile(filepath.Join(dir, "prompts", "impl.md"), []byte(promptContent), 0o644); err != nil {
 		t.Fatalf("write prompt file: %v", err)
 	}
@@ -154,6 +153,33 @@ func TestExpandPromptFiles_NoOpWithoutRepoPath(t *testing.T) {
 	// prompt_file should still be present (not resolved).
 	if _, ok := g.Nodes["build"].Attrs["prompt_file"]; !ok {
 		t.Fatal("prompt_file should remain when repoPath is empty")
+	}
+}
+
+func TestExpandPromptFiles_AbsolutePathBypassesRepoRoot(t *testing.T) {
+	repoDir := t.TempDir()
+	otherDir := t.TempDir()
+	absPath := filepath.Join(otherDir, "external.md")
+	content := "Prompt from an absolute path.\n"
+	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
+		t.Fatalf("write external prompt: %v", err)
+	}
+
+	g := model.NewGraph("test")
+	n := model.NewNode("build")
+	n.Attrs["prompt_file"] = absPath
+	_ = g.AddNode(n)
+
+	if err := expandPromptFiles(g, repoDir); err != nil {
+		t.Fatalf("expandPromptFiles with absolute path: %v", err)
+	}
+
+	got := g.Nodes["build"].Attrs["prompt"]
+	if got != content {
+		t.Fatalf("prompt = %q, want %q", got, content)
+	}
+	if _, ok := g.Nodes["build"].Attrs["prompt_file"]; ok {
+		t.Fatal("prompt_file attribute should be removed after expansion")
 	}
 }
 
