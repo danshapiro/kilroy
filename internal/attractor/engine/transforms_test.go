@@ -156,30 +156,44 @@ func TestExpandPromptFiles_NoOpWithoutRepoPath(t *testing.T) {
 	}
 }
 
-func TestExpandPromptFiles_AbsolutePathBypassesRepoRoot(t *testing.T) {
+func TestExpandPromptFiles_AbsolutePathRejected(t *testing.T) {
 	repoDir := t.TempDir()
 	otherDir := t.TempDir()
 	absPath := filepath.Join(otherDir, "external.md")
-	content := "Prompt from an absolute path.\n"
-	if err := os.WriteFile(absPath, []byte(content), 0o644); err != nil {
-		t.Fatalf("write external prompt: %v", err)
-	}
+	_ = os.WriteFile(absPath, []byte("secret"), 0o644)
 
 	g := model.NewGraph("test")
 	n := model.NewNode("build")
 	n.Attrs["prompt_file"] = absPath
 	_ = g.AddNode(n)
 
-	if err := expandPromptFiles(g, repoDir); err != nil {
-		t.Fatalf("expandPromptFiles with absolute path: %v", err)
+	err := expandPromptFiles(g, repoDir)
+	if err == nil {
+		t.Fatal("expected error for absolute path outside repo root")
 	}
+	if !strings.Contains(err.Error(), "must be a relative path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
 
-	got := g.Nodes["build"].Attrs["prompt"]
-	if got != content {
-		t.Fatalf("prompt = %q, want %q", got, content)
+func TestExpandPromptFiles_TraversalRejected(t *testing.T) {
+	repoDir := t.TempDir()
+	// Create a file outside repoDir via ../
+	parentFile := filepath.Join(filepath.Dir(repoDir), "secret.md")
+	_ = os.WriteFile(parentFile, []byte("secret"), 0o644)
+	defer os.Remove(parentFile)
+
+	g := model.NewGraph("test")
+	n := model.NewNode("build")
+	n.Attrs["prompt_file"] = "../secret.md"
+	_ = g.AddNode(n)
+
+	err := expandPromptFiles(g, repoDir)
+	if err == nil {
+		t.Fatal("expected error for ../ traversal outside repo root")
 	}
-	if _, ok := g.Nodes["build"].Attrs["prompt_file"]; ok {
-		t.Fatal("prompt_file attribute should be removed after expansion")
+	if !strings.Contains(err.Error(), "outside repo root") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

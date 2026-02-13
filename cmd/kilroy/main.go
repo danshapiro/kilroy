@@ -340,7 +340,8 @@ func attractorValidate(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	_, diags, err := engine.Prepare(dotSource)
+	repoPath, _ := filepath.Abs(filepath.Dir(graphPath))
+	_, diags, err := engine.PrepareWithOptions(dotSource, engine.PrepareOptions{RepoPath: repoPath})
 	if err != nil {
 		for _, d := range diags {
 			fmt.Fprintf(os.Stderr, "%s: %s (%s)\n", d.Severity, d.Message, d.Rule)

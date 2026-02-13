@@ -134,7 +134,7 @@ func Run(ctx context.Context, opts Options) (*Result, error) {
 
 	// Optionally validate.
 	if opts.Validate {
-		_, diags, err := engine.Prepare([]byte(dotContent))
+		_, diags, err := engine.PrepareWithOptions([]byte(dotContent), engine.PrepareOptions{RepoPath: opts.RepoPath})
 		if err != nil {
 			return result, fmt.Errorf("generated .dot failed validation: %w", err)
 		}

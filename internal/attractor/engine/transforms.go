@@ -74,10 +74,21 @@ func expandPromptFiles(g *model.Graph, repoPath string) error {
 			return fmt.Errorf("node %q: prompt_file and prompt are mutually exclusive", n.ID)
 		}
 
-		// Resolve path relative to repo root.
-		resolved := pf
-		if !filepath.IsAbs(pf) {
-			resolved = filepath.Join(repoPath, pf)
+		// Reject absolute paths; resolve relative to repo root; reject traversal outside it.
+		if filepath.IsAbs(pf) {
+			return fmt.Errorf("node %q: prompt_file %q must be a relative path", n.ID, pf)
+		}
+		resolved := filepath.Join(repoPath, pf)
+		resolved, err := filepath.Abs(resolved)
+		if err != nil {
+			return fmt.Errorf("node %q: prompt_file %q: %w", n.ID, pf, err)
+		}
+		absRepo, err := filepath.Abs(repoPath)
+		if err != nil {
+			return fmt.Errorf("node %q: prompt_file repo path %q: %w", n.ID, repoPath, err)
+		}
+		if !strings.HasPrefix(resolved, absRepo+string(filepath.Separator)) && resolved != absRepo {
+			return fmt.Errorf("node %q: prompt_file %q resolves outside repo root", n.ID, pf)
 		}
 		data, err := os.ReadFile(resolved)
 		if err != nil {

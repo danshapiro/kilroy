@@ -112,7 +112,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	if err != nil {
 		return nil, err
 	}
-	g, _, err := Prepare(dotSource)
+	g, _, err := PrepareWithOptions(dotSource, PrepareOptions{RepoPath: m.RepoPath})
 	if err != nil {
 		return nil, err
 	}
