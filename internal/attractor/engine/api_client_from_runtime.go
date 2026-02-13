@@ -36,7 +36,7 @@ func newAPIClientFromProviderRuntimes(runtimes map[string]ProviderRuntime) (*llm
 			c.Register(openaicompat.NewAdapter(openaicompat.Config{
 				Provider:     key,
 				APIKey:       apiKey,
-				BaseURL:      rt.API.DefaultBaseURL,
+				BaseURL:      resolveBuiltInBaseURLOverride(key, rt.API.DefaultBaseURL),
 				Path:         rt.API.DefaultPath,
 				OptionsKey:   rt.API.ProviderOptionsKey,
 				ExtraHeaders: rt.APIHeaders(),
@@ -67,6 +67,12 @@ func resolveBuiltInBaseURLOverride(providerKey, defaultBaseURL string) string {
 	case "google":
 		if env := strings.TrimSpace(os.Getenv("GEMINI_BASE_URL")); env != "" {
 			if normalized == "" || normalized == "https://generativelanguage.googleapis.com" {
+				return env
+			}
+		}
+	case "minimax":
+		if env := strings.TrimSpace(os.Getenv("MINIMAX_BASE_URL")); env != "" {
+			if normalized == "" || normalized == "https://api.minimax.io" {
 				return env
 			}
 		}
