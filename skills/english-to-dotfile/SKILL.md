@@ -188,6 +188,16 @@ STOP (interactive mode). Do not emit `.dot` until the user replies.
 #### Step 0.9: After Selection, Generate DOT
 
 Once the choice/overrides are known:
+- TEMPLATE-FIRST:
+  - Default to starting from the validated template dotfile at:
+    - `docs/strongdm/dot specs/consensus_task.dot`
+  - Treat it as the *structural* starting point (stage ordering + loop semantics), then adapt it to the requirements in this skill:
+    - Keep the hill-climbing loop: DoD (if missing) → plan fan-out (3) → debate/consolidate → **single-writer implement** → review fan-out (3) → consensus → postmortem → loop back to planning.
+    - Keep implementation **single-threaded** (one node touching code at a time). Use parallelism for *thinking* stages (DoD/plan/review), not for code edits.
+    - Do **not** copy legacy/non-spec attributes that appear in some reference dotfiles (`node_type`, `is_codergen`, `context_fidelity_default`, etc.). Keep only Attractor-spec-canonical attrs (`shape`, `prompt`, `class`, `llm_model`, `llm_provider`, `model_stylesheet`, etc.).
+    - If you need any implementation fan-out despite the above, only do it with strict isolation + merge:
+      - disjoint write scopes per branch, shared/core files read-only, and a dedicated post-fan-in integration/merge node.
+  - If the template file is missing/unavailable, fall back to generating the graph from scratch using this spec — but preserve the same "single-writer implement + plan/review/postmortem loop" philosophy unless the user overrides it.
 - Encode the chosen models via `model_stylesheet` and/or explicit node attrs.
 - If High (or the user requested parallel), implement 3-way parallel planning/review with a fan-out + fan-in + synthesis pattern.
 - Keep the rest of the pipeline generation process unchanged.
@@ -206,6 +216,13 @@ If the input is short/vague, expand into a structured spec covering: what the so
 When assumptions are recorded separately (existing-spec mode), treat `.ai/disambiguation_assumptions.md` as a required companion input for downstream prompts.
 
 ### Phase 2: Decompose into Implementation Units
+
+Default:
+- For large, well-specified tasks, prefer a hill-climbing loop over heavy up-front decomposition:
+  - Ask for a best-effort "one shot" implementation (expect partial completion),
+  - then use review + postmortem to feed focused context back into the next planning round,
+  - and iterate until the Definition of Done is met or the max loop count is reached.
+- Use explicit pre-decomposition into many implementation units only when it clearly reduces total loops (e.g., well-isolated subsystems, or when the repo/tooling makes parallel discovery safe).
 
 Break the spec into units. Each unit must be:
 
@@ -451,6 +468,12 @@ Near the end, after all implementation, add a review node with `class="review"` 
 
 On review failure, `check_review` must loop back to a LATE-STAGE node — typically the integration/polish node or the last major impl node. Never loop back to `impl_setup` or the beginning. The review failure means something is broken or missing in the final product, not that the entire project needs to be rebuilt from scratch.
 
+For very large tasks where other approaches have failed:
+- Prefer the pattern: review consensus → postmortem → planning restart.
+- The postmortem must produce actionable "what to do next" guidance and feed it into the next planning stage (via `.ai/` artifacts), so the planner is not restarting cold.
+- Do NOT reset the worktree/code between loops; the next plan must assume the existing partially-complete codebase and focus on the remaining gaps.
+- Cap the number of loops explicitly (inner-loop max), and only add "research" stages if non-convergence indicates missing context (not just implementation bugs).
+
 #### Advanced Graph Patterns
 
 ##### Custom multi-outcome steering
@@ -503,6 +526,11 @@ check_X -> impl_X [condition="outcome=fail && context.failure_class!=transient_i
 
 When you need multiple models to independently tackle the same task and then consolidate:
 
+Default:
+- Use fan-out/fan-in for *thinking* stages (Definition of Done proposals, planning variants, review variants).
+- Avoid fanning out *implementation* in the same codebase; keep one code-writing node active at a time.
+- If implementation fan-out is explicitly requested, do it only with strict isolation (disjoint write scopes + shared files read-only) and a dedicated post-fan-in integration/merge node.
+
 ```
 // Fan-out: one node fans to 3 parallel workers
 consolidate_input -> plan_a
@@ -526,6 +554,8 @@ Each parallel worker writes its output to a uniquely-named `.ai/` file. The synt
 - Code review (3 reviewers, 1 consensus)
 
 #### Parallel write-scope discipline (Guideline + Requirement)
+
+- This discipline is primarily for the *exception case* where you intentionally parallelize implementation. The default recommendation is still: one code-writing node at a time, and parallelize planning/review instead.
 
 Guideline:
 - Partition fan-out branches by natural ownership boundaries (for example one package/subsystem per branch) so each branch can be validated independently.
@@ -921,6 +951,8 @@ Each fan-out branch prompt should include:
 - "Read [SHARED_TYPE_FILES] — these are your interface contract. Do NOT modify these shared files."
 - "Implement ONLY your assigned module files."
 28. **`reasoning_effort` on Cerebras GLM 4.7.** Do NOT set `reasoning_effort` on GLM 4.7 nodes expecting it to control reasoning depth — that parameter only works on Cerebras `gpt-oss-120b`. GLM 4.7 reasoning is always on. The engine automatically sets `clear_thinking: false` for Cerebras agent-loop nodes to preserve reasoning context across turns.
+29. **Parallel code-writing in a shared worktree (default disallowed).** Do NOT run multiple programming/implementation nodes in parallel that touch the same codebase state. If implementation fan-out is required, enforce strict isolation (disjoint write scopes, shared files read-only) and converge via an explicit integration/merge node.
+30. **Generating DOTs from scratch when a validated template exists.** For production-quality runs, start from `docs/strongdm/dot specs/consensus_task.dot` (or another proven template) and make minimal, validated edits. New topologies are allowed, but they are higher-risk and must be validated early/cheap to avoid expensive runaway loops.
 
 ## Notes on Reference Dotfile Conventions
 
