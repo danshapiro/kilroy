@@ -1617,7 +1617,7 @@ func expandBaseSHA(g *model.Graph, baseSHA string) {
 }
 
 func isTerminal(n *model.Node) bool {
-	return n != nil && (n.Shape() == "Msquare" || strings.EqualFold(n.ID, "exit") || strings.EqualFold(n.ID, "end"))
+	return n != nil && (n.Shape() == "Msquare" || n.Shape() == "doublecircle" || strings.EqualFold(n.ID, "exit") || strings.EqualFold(n.ID, "end"))
 }
 
 func checkGoalGates(g *model.Graph, outcomes map[string]runtime.Outcome) (bool, string) {
@@ -1638,7 +1638,7 @@ func checkGoalGates(g *model.Graph, outcomes map[string]runtime.Outcome) (bool, 
 
 func findStartNodeID(g *model.Graph) string {
 	for id, n := range g.Nodes {
-		if n != nil && n.Shape() == "Mdiamond" {
+		if n != nil && (n.Shape() == "Mdiamond" || n.Shape() == "circle") {
 			return id
 		}
 	}

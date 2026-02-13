@@ -73,7 +73,7 @@ func lintStartNode(g *model.Graph) []Diagnostic {
 		if n == nil {
 			continue
 		}
-		if n.Shape() == "Mdiamond" || strings.EqualFold(id, "start") {
+		if n.Shape() == "Mdiamond" || n.Shape() == "circle" || strings.EqualFold(id, "start") {
 			ids = append(ids, id)
 		}
 	}
@@ -93,7 +93,7 @@ func lintExitNode(g *model.Graph) []Diagnostic {
 		if n == nil {
 			continue
 		}
-		if n.Shape() == "Msquare" || strings.EqualFold(id, "exit") || strings.EqualFold(id, "end") {
+		if n.Shape() == "Msquare" || n.Shape() == "doublecircle" || strings.EqualFold(id, "exit") || strings.EqualFold(id, "end") {
 			ids = append(ids, id)
 		}
 	}

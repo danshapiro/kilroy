@@ -77,9 +77,9 @@ func (r *HandlerRegistry) Resolve(n *model.Node) Handler {
 
 func shapeToType(shape string) string {
 	switch shape {
-	case "Mdiamond":
+	case "Mdiamond", "circle":
 		return "start"
-	case "Msquare":
+	case "Msquare", "doublecircle":
 		return "exit"
 	case "box":
 		return "codergen"
