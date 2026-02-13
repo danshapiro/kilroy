@@ -700,6 +700,109 @@ func bfsFanInDistances(g *model.Graph, start string) map[string]int {
 	return out
 }
 
+// findJoinNode finds the convergence point for a set of branches.
+// Prefers tripleoctagon (explicit fan-in) nodes. Falls back to any node
+// reachable from ALL branches (topological convergence).
+func findJoinNode(g *model.Graph, branches []*model.Edge) (string, error) {
+	if g == nil {
+		return "", fmt.Errorf("graph is nil")
+	}
+	if len(branches) == 0 {
+		return "", fmt.Errorf("no branches")
+	}
+
+	// First, try the existing fan-in-only search — if a tripleoctagon exists, prefer it.
+	joinID, err := findJoinFanInNode(g, branches)
+	if err == nil && joinID != "" {
+		return joinID, nil
+	}
+
+	// Fallback: find any convergence node reachable from all branches.
+	type cand struct {
+		id      string
+		maxDist int
+		sumDist int
+	}
+
+	reachable := make([]map[string]int, 0, len(branches))
+	for _, e := range branches {
+		if e == nil {
+			continue
+		}
+		dists := bfsAllDistances(g, e.To)
+		reachable = append(reachable, dists)
+	}
+	if len(reachable) == 0 {
+		return "", fmt.Errorf("no valid branches")
+	}
+
+	// Intersection: nodes reachable from all branches.
+	var cands []cand
+	for id, d0 := range reachable[0] {
+		maxD := d0
+		sumD := d0
+		ok := true
+		for i := 1; i < len(reachable); i++ {
+			d, exists := reachable[i][id]
+			if !exists {
+				ok = false
+				break
+			}
+			sumD += d
+			if d > maxD {
+				maxD = d
+			}
+		}
+		if ok {
+			cands = append(cands, cand{id: id, maxDist: maxD, sumDist: sumD})
+		}
+	}
+	if len(cands) == 0 {
+		return "", fmt.Errorf("no convergence node reachable from all branches")
+	}
+
+	sort.SliceStable(cands, func(i, j int) bool {
+		if cands[i].maxDist != cands[j].maxDist {
+			return cands[i].maxDist < cands[j].maxDist
+		}
+		if cands[i].sumDist != cands[j].sumDist {
+			return cands[i].sumDist < cands[j].sumDist
+		}
+		return cands[i].id < cands[j].id
+	})
+	return cands[0].id, nil
+}
+
+// bfsAllDistances returns distances from start to ALL reachable nodes (not just fan-in nodes).
+func bfsAllDistances(g *model.Graph, start string) map[string]int {
+	type item struct {
+		id   string
+		dist int
+	}
+	seen := map[string]bool{start: true}
+	queue := []item{{id: start, dist: 0}}
+	out := map[string]int{}
+
+	for len(queue) > 0 {
+		it := queue[0]
+		queue = queue[1:]
+		// Record first (shortest) distance for every node except start itself.
+		if it.id != start {
+			if _, exists := out[it.id]; !exists {
+				out[it.id] = it.dist
+			}
+		}
+		for _, e := range g.Outgoing(it.id) {
+			if e == nil || seen[e.To] {
+				continue
+			}
+			seen[e.To] = true
+			queue = append(queue, item{id: e.To, dist: it.dist + 1})
+		}
+	}
+	return out
+}
+
 func sanitizeRefComponent(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	if s == "" {
