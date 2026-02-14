@@ -41,8 +41,7 @@ brews:
   - name: kilroy
     repository:
       owner: danshapiro
-      name: homebrew-kilroy
-      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+      name: kilroy
     directory: Formula
     homepage: "https://github.com/danshapiro/kilroy"
     description: "Local-first CLI for running Attractor pipelines in a git repo"

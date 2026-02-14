@@ -162,7 +162,7 @@ git push origin vX.Y.Z
 #   - Runs go test ./...
 #   - Builds cross-platform binaries (linux/darwin/windows x amd64/arm64)
 #   - Creates GitHub release with archives and checksums
-#   - Updates Homebrew tap (danshapiro/homebrew-kilroy)
+#   - Updates Homebrew formula in Formula/kilroy.rb
 ```
 
 ### 8. Verify the release
@@ -172,7 +172,8 @@ git push origin vX.Y.Z
 3. Confirm the release notes appear on the GitHub release page
 4. Test Homebrew install:
    ```bash
-   brew install danshapiro/kilroy/kilroy
+   brew tap danshapiro/kilroy
+   brew install kilroy
    kilroy --version  # should print the new version
    ```
 

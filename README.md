@@ -14,7 +14,8 @@ High-level flow:
 ### Homebrew (macOS and Linux)
 
 ```bash
-brew install danshapiro/kilroy/kilroy
+brew tap danshapiro/kilroy
+brew install kilroy
 ```
 
 ### Go Install
