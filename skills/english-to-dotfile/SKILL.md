@@ -483,7 +483,7 @@ Place `goal_gate=true` on:
 
 #### Review node
 
-Near the end, after all implementation, add a review node with `class="review"` and `goal_gate=true` that reads the spec and validates the full project against it.
+Near the end, after all implementation, add a review stage with `goal_gate=true` that reads the spec and validates the full project against it. In fan-out pipelines, use 3 review branches with `class="branch-a"`, `class="branch-b"`, `class="branch-c"` feeding a `review_consensus` node. In linear pipelines, a single review node is fine (assign any appropriate class).
 
 On review failure, `check_review` must loop back to a LATE-STAGE node — typically the integration/polish node or the last major impl node. Never loop back to `impl_setup` or the beginning. The review failure means something is broken or missing in the final product, not that the entire project needs to be rebuilt from scratch.
 
@@ -792,7 +792,7 @@ This catches type errors and interface mismatches incrementally rather than disc
 
 Use Phase 0B to decide concrete model IDs, providers, executor plan, parallelism, and thinking. Then:
 
-- Assign `class` attributes based on Phase 2 complexity and node role: default, `hard`, `verify`, `review`.
+- Assign `class` attributes based on Phase 2 complexity and node role: default, `hard`, `verify`, `branch-a`/`branch-b`/`branch-c` (for fan-out branches including reviews).
 - Encode the chosen plan in the graph `model_stylesheet` so nodes inherit `llm_provider`, `llm_model`, and (optionally) `reasoning_effort`.
 
 #### Escalation chain generation
@@ -1042,7 +1042,7 @@ digraph linkcheck {
 
 	    // Review
 	    review [
-	        shape=box, class="review", goal_gate=true,
+	        shape=box, goal_gate=true,
 	        prompt="Goal: $goal\n\nRead .ai/spec.md. Review the full implementation against the spec. Check: all features implemented, tests pass, CLI works, error handling correct.\n\nSandboxed validation policy:\n- Required checks are scoped to `cmd/linkcheck` and `pkg/linkcheck`.\n- Repo-wide network-dependent checks are advisory only.\n\nRun: go build ./cmd/linkcheck ./pkg/linkcheck/... && go test ./cmd/linkcheck/... ./pkg/linkcheck/...\n\nWrite review to .ai/final_review.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if complete, outcome=fail with failure_reason and details about what's missing."
 	    ]
 
