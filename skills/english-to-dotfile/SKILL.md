@@ -203,7 +203,6 @@ Once the choice/overrides are known:
   - Invent new loop/control-flow mechanisms when the reference flow already fits.
   - Add visit-count loop breakers by default.
   - Parallelize implementation unless the user explicitly asks for it and the graph includes clear isolation and merge steps.
-- If the template file is unavailable, generate from scratch using the same reference flow unless the user overrides it.
 - Encode the chosen models via `model_stylesheet` and/or explicit node attrs.
 - If High (or the user requested parallel), implement 3-way parallel planning/review with a fan-out + fan-in + synthesis pattern.
 - Keep the rest of the pipeline generation process unchanged.
@@ -483,11 +482,11 @@ For build pipelines, no exceptions: every implementation node (including `impl_s
 
 #### Turn budget (`max_agent_turns`)
 
-**Use `timeout` as the primary safety guard.** `max_agent_turns` is a secondary optimization — apply it once you have production turn-count data showing what "normal" looks like for each node class. A wrong turn limit is catastrophic: it kills productive work and wastes every turn the agent already completed (the agent can't write its status file). A wrong timeout just costs wall-clock time.
+**Keep the reference template's `max_agent_turns` values by default.** They are already tuned per node class. Only adjust with a clear reason (e.g., a node consistently finishing early or hitting the cap mid-work).
 
-If you do set `max_agent_turns`:
 - Omitted or `0` = unlimited (timeout-only guard).
 - `N` = hard cap at N turns (one turn = one LLM API call + tool execution). Resets per retry attempt.
+- `timeout` remains the primary safety guard; `max_agent_turns` is a secondary optimization. A wrong turn limit is catastrophic: it kills productive work and wastes every turn the agent already completed.
 
 #### Goal gates
 
