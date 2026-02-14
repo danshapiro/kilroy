@@ -66,7 +66,6 @@ package engine
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -95,6 +94,27 @@ func TestBuildBaseNodeEnv_PreservesToolchainPaths(t *testing.T) {
 	}
 	if got := envLookup(env, "CARGO_TARGET_DIR"); got != filepath.Join(worktree, ".cargo-target") {
 		t.Fatalf("CARGO_TARGET_DIR: got %q want %q", got, filepath.Join(worktree, ".cargo-target"))
+	}
+}
+
+func TestBuildBaseNodeEnv_InfersGoPathsFromHOME(t *testing.T) {
+	// When GOPATH/GOMODCACHE are not set, Go defaults them to $HOME/go
+	// and $HOME/go/pkg/mod. buildBaseNodeEnv should pin them explicitly
+	// so that later HOME overrides (codex isolation) don't break Go
+	// toolchain resolution.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	os.Unsetenv("GOPATH")
+	os.Unsetenv("GOMODCACHE")
+
+	worktree := t.TempDir()
+	env := buildBaseNodeEnv(worktree)
+
+	if got := envLookup(env, "GOPATH"); got != filepath.Join(home, "go") {
+		t.Fatalf("GOPATH: got %q want %q", got, filepath.Join(home, "go"))
+	}
+	if got := envLookup(env, "GOMODCACHE"); got != filepath.Join(home, "go", "pkg", "mod") {
+		t.Fatalf("GOMODCACHE: got %q want %q", got, filepath.Join(home, "go", "pkg", "mod"))
 	}
 }
 
@@ -182,9 +202,11 @@ var toolchainEnvKeys = []string{
 // toolchainDefaults maps env keys to their default relative-to-HOME paths.
 // If the key is not set in the environment, buildBaseNodeEnv pins it to
 // $HOME/<default> so that later HOME overrides don't break toolchain lookup.
+// Go defaults: GOPATH=$HOME/go, GOMODCACHE=$GOPATH/pkg/mod.
 var toolchainDefaults = map[string]string{
 	"CARGO_HOME":  ".cargo",
 	"RUSTUP_HOME": ".rustup",
+	"GOPATH":      "go",
 }
 
 // buildBaseNodeEnv constructs the base environment for any node execution.
@@ -213,6 +235,18 @@ func buildBaseNodeEnv(worktreeDir string) []string {
 		} else if defaultRel, ok := toolchainDefaults[key]; ok && home != "" {
 			// Not set — pin the default (HOME-relative) path.
 			toolchainOverrides[key] = filepath.Join(home, defaultRel)
+		}
+	}
+
+	// GOMODCACHE defaults to $GOPATH/pkg/mod (not directly to HOME).
+	// Pin it after the loop so we can use the resolved GOPATH value.
+	if strings.TrimSpace(os.Getenv("GOMODCACHE")) == "" {
+		gopath := toolchainOverrides["GOPATH"]
+		if gopath == "" {
+			gopath = strings.TrimSpace(os.Getenv("GOPATH"))
+		}
+		if gopath != "" {
+			toolchainOverrides["GOMODCACHE"] = filepath.Join(gopath, "pkg", "mod")
 		}
 	}
 
@@ -253,13 +287,13 @@ Expected: PASS
 
 ```bash
 git add internal/attractor/engine/node_env.go internal/attractor/engine/node_env_test.go
-git commit -m "feat(engine): add buildBaseNodeEnv for unified toolchain env handling
+git commit -m "feat(engine): add buildBaseNodeEnv helper for shared toolchain env
 
-Extracts a shared function that both ToolHandler and CodergenRouter
-will use as their base environment. Pins CARGO_HOME, RUSTUP_HOME,
-GOPATH to absolute values so codex HOME overrides don't break
-toolchain discovery. Sets CARGO_TARGET_DIR inside worktree for all
-handlers (not just codex). Strips CLAUDECODE universally."
+Adds a new function that constructs a base environment with toolchain
+paths pinned to absolute values (CARGO_HOME, RUSTUP_HOME, GOPATH,
+GOMODCACHE), CARGO_TARGET_DIR set inside the worktree, and CLAUDECODE
+stripped. Not yet wired to any handler — Tasks 2 and 3 will integrate
+it into ToolHandler and CodergenRouter respectively."
 ```
 
 ---
@@ -274,7 +308,7 @@ Currently `ToolHandler.Execute` never sets `cmd.Env`, so it inherits the raw par
 
 **Step 1: Write the failing test**
 
-Add to `internal/attractor/engine/node_env_test.go`:
+Add to `internal/attractor/engine/node_env_test.go` (also add `"context"` and `"strings"` to the import block):
 
 ```go
 func TestToolHandler_UsesBaseNodeEnv(t *testing.T) {
@@ -437,7 +471,56 @@ func TestBuildCodexIsolatedEnv_PreservesToolchainPaths(t *testing.T) {
 		t.Fatal("CARGO_TARGET_DIR should be set")
 	}
 }
+
+func TestBuildCodexIsolatedEnvWithName_RetryPreservesToolchainPaths(t *testing.T) {
+	// Regression test: retry-rebuilt codex envs must preserve toolchain
+	// paths. This is the highest-risk path — state-DB and timeout retries
+	// rebuild the env on each attempt. If they don't receive baseEnv,
+	// CARGO_TARGET_DIR and toolchain paths are silently dropped.
+	home := t.TempDir()
+	cargoHome := filepath.Join(home, ".cargo")
+	rustupHome := filepath.Join(home, ".rustup")
+
+	t.Setenv("HOME", home)
+	t.Setenv("CARGO_HOME", cargoHome)
+	t.Setenv("RUSTUP_HOME", rustupHome)
+
+	stateBase := filepath.Join(t.TempDir(), "codex-state-base")
+	t.Setenv("KILROY_CODEX_STATE_BASE", stateBase)
+
+	stageDir := t.TempDir()
+	worktree := t.TempDir()
+	baseEnv := buildBaseNodeEnv(worktree)
+
+	// Simulate multiple retry attempts like the real retry loops.
+	for attempt := 1; attempt <= 3; attempt++ {
+		name := fmt.Sprintf("codex-home-retry%d", attempt)
+		env, _, err := buildCodexIsolatedEnvWithName(stageDir, name, baseEnv)
+		if err != nil {
+			t.Fatalf("attempt %d: buildCodexIsolatedEnvWithName: %v", attempt, err)
+		}
+
+		// Each retry must have its own isolated HOME.
+		retryHome := envLookup(env, "HOME")
+		if retryHome == home {
+			t.Fatalf("attempt %d: HOME should be isolated, got original: %q", attempt, retryHome)
+		}
+
+		// Toolchain paths must survive every retry rebuild.
+		if got := envLookup(env, "CARGO_HOME"); got != cargoHome {
+			t.Fatalf("attempt %d: CARGO_HOME: got %q want %q", attempt, got, cargoHome)
+		}
+		if got := envLookup(env, "RUSTUP_HOME"); got != rustupHome {
+			t.Fatalf("attempt %d: RUSTUP_HOME: got %q want %q", attempt, got, rustupHome)
+		}
+		if !envHasKey(env, "CARGO_TARGET_DIR") {
+			t.Fatalf("attempt %d: CARGO_TARGET_DIR should be set", attempt)
+		}
+	}
+}
 ```
+
+Note: This test requires an additional `"fmt"` import — add it to the import block when implementing.
 
 **Step 2: Run test to verify it fails**
 
@@ -658,14 +741,27 @@ Only if fixes were needed. Otherwise this task is just verification.
 
 ## Verification Checklist
 
-- [ ] `buildBaseNodeEnv` is called by ToolHandler (handlers.go)
-- [ ] `buildBaseNodeEnv` is called by CodergenRouter for both codex and non-codex paths
-- [ ] `buildBaseNodeEnv` is passed to ALL codex retry paths (state-DB retry line 1186, timeout retry line 1220)
+### Integration (Tasks 2 & 3 wire the helper into all handler paths)
+- [ ] `buildBaseNodeEnv` is called by ToolHandler (`handlers.go` — `cmd.Env = buildBaseNodeEnv(...)`)
+- [ ] `buildBaseNodeEnv` is called by CodergenRouter for codex path (`codergen_router.go` line ~892)
+- [ ] `buildBaseNodeEnv` is called by CodergenRouter for non-codex path (`codergen_router.go` line ~994)
+- [ ] `baseEnv` is hoisted above retry loops and passed to ALL codex retry paths (state-DB retry line ~1186, timeout retry line ~1220)
+- [ ] No remaining calls to `os.Environ()` inside `buildCodexIsolatedEnvWithName` (it accepts `baseEnv` parameter)
+- [ ] Tool nodes log `env_mode: "base"` (not `"inherit"`)
+
+### Env correctness
 - [ ] CARGO_HOME, RUSTUP_HOME pinned to absolute values in all handler types
+- [ ] GOPATH, GOMODCACHE pinned to absolute values (defaults inferred from HOME if unset)
 - [ ] CARGO_TARGET_DIR set for all handler types (not just codex)
 - [ ] CLAUDECODE stripped for all handler types (not just via `conflictingProviderEnvKeys`)
-- [ ] Tool nodes log `env_mode: "base"` (not `"inherit"`)
-- [ ] `reference_template.dot` keeps `check_toolchain` as `shape=parallelogram` (correct — engine ensures env consistency)
-- [ ] Skill keeps `shape=parallelogram` guidance for toolchain gates (correct — deterministic shell handler)
-- [ ] All existing tests pass (including updated test call sites)
-- [ ] New tests cover: toolchain preservation, CARGO_TARGET_DIR, CLAUDECODE stripping, codex HOME override doesn't break toolchain paths
+
+### Test coverage
+- [ ] Unit tests: `TestBuildBaseNodeEnv_*` (toolchain preservation, Go paths, CARGO_TARGET_DIR, CLAUDECODE)
+- [ ] Integration test: `TestToolHandler_UsesBaseNodeEnv` (end-to-end via `Run()`)
+- [ ] Unit test: `TestBuildCodexIsolatedEnv_PreservesToolchainPaths` (codex HOME override doesn't break toolchain)
+- [ ] Regression test: `TestBuildCodexIsolatedEnvWithName_RetryPreservesToolchainPaths` (retry-rebuilt envs preserve toolchain paths across multiple attempts)
+- [ ] All existing tests pass (including 3 updated test call sites)
+
+### Consistency
+- [ ] `reference_template.dot` keeps `check_toolchain` as `shape=parallelogram`
+- [ ] Skill keeps `shape=parallelogram` guidance for toolchain gates
