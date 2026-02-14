@@ -22,6 +22,15 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Verify RELEASE_NOTES.md exists
+        run: |
+          if [ ! -f RELEASE_NOTES.md ]; then
+            echo "::error::RELEASE_NOTES.md not found at the tagged commit."
+            echo "The release skill (skills/release-kilroy/SKILL.md) requires writing"
+            echo "RELEASE_NOTES.md and committing it before tagging. See step 5."
+            exit 1
+          fi
+
       - name: Run tests
         run: go test ./...
 
