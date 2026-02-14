@@ -880,6 +880,7 @@ Common repairs (use validator output; do not guess blindly):
 | `shape` | Handler type: `Mdiamond` (start), `Msquare` (exit), `box` (codergen), `diamond` (conditional), `hexagon` (wait.human), `component` (parallel fan-out), `tripleoctagon` (fan-in), `parallelogram` (tool/shell) |
 | `type` | Explicit handler override (takes precedence over shape) |
 | `prompt` | LLM instruction. Supports `$goal` and `$base_sha` expansion. Also accepted as `llm_prompt` (alias). |
+| `prompt_file` | Path to an external file whose contents replace `prompt` at prepare time. Resolved relative to repo root; mutually exclusive with `prompt`. |
 | `class` | Comma-separated classes for model stylesheet targeting (e.g., `"hard"`, `"verify"`, `"review"`) |
 | `max_retries` | Additional attempts beyond initial execution. `max_retries=3` = 4 total. |
 | `goal_gate` | `true` = node must succeed before pipeline can exit |
