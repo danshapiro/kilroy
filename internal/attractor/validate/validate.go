@@ -2,6 +2,7 @@ package validate
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/danshapiro/kilroy/internal/attractor/cond"
@@ -44,6 +45,8 @@ func Validate(g *model.Graph) []Diagnostic {
 	diags = append(diags, lintStylesheetSyntax(g)...)
 	diags = append(diags, lintRetryTargetsExist(g)...)
 	diags = append(diags, lintGoalGateHasRetry(g)...)
+	diags = append(diags, lintGoalGateExitStatusContract(g)...)
+	diags = append(diags, lintGoalGatePromptStatusHint(g)...)
 	diags = append(diags, lintFidelityValid(g)...)
 	diags = append(diags, lintPromptOnCodergenNodes(g)...)
 	diags = append(diags, lintPromptOnConditionalNodes(g)...)
@@ -396,6 +399,123 @@ func lintGoalGateHasRetry(g *model.Graph) []Diagnostic {
 		}
 	}
 	return diags
+}
+
+func lintGoalGateExitStatusContract(g *model.Graph) []Diagnostic {
+	exitID := findExitNodeID(g)
+	if exitID == "" {
+		return nil
+	}
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil || !strings.EqualFold(n.Attr("goal_gate", "false"), "true") {
+			continue
+		}
+		for _, e := range g.Outgoing(id) {
+			if e == nil || e.To != exitID {
+				continue
+			}
+			statuses := outcomeEqualsStatuses(strings.TrimSpace(e.Condition()))
+			if len(statuses) == 0 {
+				continue
+			}
+			violatesContract := false
+			for _, status := range statuses {
+				if status == runtime.StatusSuccess || status == runtime.StatusPartialSuccess {
+					continue
+				}
+				violatesContract = true
+				break
+			}
+			if !violatesContract {
+				continue
+			}
+			diags = append(diags, Diagnostic{
+				Rule:     "goal_gate_exit_status_contract",
+				Severity: SeverityError,
+				Message:  "goal_gate node routes to terminal on non-success outcome; use outcome=success (or partial_success) to satisfy goal-gate contract",
+				EdgeFrom: e.From,
+				EdgeTo:   e.To,
+				Fix:      "change terminal edge condition to outcome=success or outcome=partial_success",
+			})
+		}
+	}
+	return diags
+}
+
+var outcomeAssignmentPattern = regexp.MustCompile(`(?i)\boutcome\s*=\s*['"]?([a-z0-9_-]+)['"]?`)
+
+func lintGoalGatePromptStatusHint(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil || !strings.EqualFold(n.Attr("goal_gate", "false"), "true") {
+			continue
+		}
+		customOutcome, shouldWarn := firstPromptCustomOutcomeWithoutCanonicalSuccess(n.Prompt())
+		if !shouldWarn {
+			continue
+		}
+		diags = append(diags, Diagnostic{
+			Rule:     "goal_gate_prompt_status_hint",
+			Severity: SeverityWarning,
+			Message:  fmt.Sprintf("goal_gate prompt instructs custom outcome=%s without canonical success outcome; prefer outcome=success (or partial_success) for gate satisfaction", customOutcome),
+			NodeID:   id,
+			Fix:      "update prompt instructions to include outcome=success (or outcome=partial_success) when approved",
+		})
+	}
+	return diags
+}
+
+func outcomeEqualsStatuses(condExpr string) []runtime.StageStatus {
+	var out []runtime.StageStatus
+	for _, clause := range strings.Split(condExpr, "&&") {
+		clause = strings.TrimSpace(clause)
+		if clause == "" || strings.Contains(clause, "!=") || !strings.Contains(clause, "=") {
+			continue
+		}
+		parts := strings.SplitN(clause, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		if strings.TrimSpace(parts[0]) != "outcome" {
+			continue
+		}
+		raw := strings.Trim(strings.TrimSpace(parts[1]), "\"'")
+		status, err := runtime.ParseStageStatus(raw)
+		if err != nil {
+			continue
+		}
+		out = append(out, status)
+	}
+	return out
+}
+
+func firstPromptCustomOutcomeWithoutCanonicalSuccess(prompt string) (string, bool) {
+	matches := outcomeAssignmentPattern.FindAllStringSubmatch(prompt, -1)
+	if len(matches) == 0 {
+		return "", false
+	}
+	var custom []string
+	hasCanonicalSuccess := false
+	for _, m := range matches {
+		if len(m) < 2 {
+			continue
+		}
+		status, err := runtime.ParseStageStatus(m[1])
+		if err != nil {
+			continue
+		}
+		if status == runtime.StatusSuccess || status == runtime.StatusPartialSuccess {
+			hasCanonicalSuccess = true
+		}
+		if !status.IsCanonical() {
+			custom = append(custom, string(status))
+		}
+	}
+	if hasCanonicalSuccess || len(custom) == 0 {
+		return "", false
+	}
+	return custom[0], true
 }
 
 func lintFidelityValid(g *model.Graph) []Diagnostic {
