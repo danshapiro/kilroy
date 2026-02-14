@@ -1,0 +1,85 @@
+version: 1
+
+graph: rogue.dot
+
+task: "Port Rogue 5.4.4 from C to Rust/WebAssembly: faithful 1:1 mechanical translation of all game systems, playable in browser"
+
+repo:
+  path: /home/user/code/kilroy
+
+cxdb:
+  binary_addr: 127.0.0.1:9009
+  http_base_url: http://127.0.0.1:9010
+  autostart:
+    enabled: true
+    command:
+      - /home/user/code/kilroy/scripts/start-cxdb.sh
+    wait_timeout_ms: 60000
+    poll_interval_ms: 250
+    ui:
+      url: http://127.0.0.1:9020
+
+llm:
+  cli_profile: real
+  providers:
+    openai:
+      backend: cli
+      cli:
+        binary: codex
+    anthropic:
+      backend: cli
+      cli:
+        binary: claude
+    google:
+      backend: cli
+      cli:
+        binary: gemini
+    kimi:
+      backend: api
+      failover: [zai]
+      api:
+        protocol: anthropic_messages
+        api_key_env: KIMI_API_KEY
+        base_url: https://api.kimi.com/coding
+        path: /v1/messages
+        profile_family: openai
+    zai:
+      backend: api
+      failover: [kimi]
+      api:
+        protocol: openai_chat_completions
+        api_key_env: ZAI_API_KEY
+        base_url: https://api.z.ai
+        path: /api/coding/paas/v4/chat/completions
+        profile_family: openai
+
+modeldb:
+  openrouter_model_info_path: /home/user/code/kilroy/internal/attractor/modeldb/pinned/openrouter_models.json
+  openrouter_model_info_update_policy: pinned
+
+git:
+  require_clean: false
+  run_branch_prefix: attractor/run
+  commit_per_node: true
+
+setup:
+  timeout_ms: 900000
+  commands:
+    - 'command -v cargo >/dev/null || { echo "missing required tool: cargo" >&2; exit 1; }'
+    - 'command -v wasm-pack >/dev/null || cargo install wasm-pack'
+    - 'rustup target list --installed | grep -qx wasm32-unknown-unknown || rustup target add wasm32-unknown-unknown'
+
+runtime_policy:
+  stage_timeout_ms: 0
+  stall_timeout_ms: 1800000
+  stall_check_interval_ms: 5000
+  max_llm_retries: 6
+
+preflight:
+  prompt_probes:
+    enabled: true
+    transports: [complete, stream]
+    timeout_ms: 60000
+    retries: 1
+    base_delay_ms: 500
+    max_delay_ms: 5000
