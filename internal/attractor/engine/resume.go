@@ -440,6 +440,8 @@ func firstExistingPath(paths ...string) string {
 }
 
 func newResumeCodergenBackend(cfg *RunConfigFile, catalog *modeldb.Catalog) (CodergenBackend, error) {
+	// Resume consumes snapshotted graph+config from a previously validated run,
+	// so we only need runtime materialization here (not full preflight validation).
 	runtimes, err := resolveProviderRuntimes(cfg)
 	if err != nil {
 		return nil, err

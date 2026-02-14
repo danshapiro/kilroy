@@ -272,4 +272,13 @@ func TestNewResumeCodergenBackend_LoadsProviderRuntimes(t *testing.T) {
 	if profile.ID() != "kimi" {
 		t.Fatalf("profile ID: got %q want %q", profile.ID(), "kimi")
 	}
+
+	zai := router.providerRuntimes["zai"]
+	profile, err = profileForRuntimeProvider(zai, "glm-4.7")
+	if err != nil {
+		t.Fatalf("profileForRuntimeProvider(zai): %v", err)
+	}
+	if profile.ID() != "zai" {
+		t.Fatalf("profile ID: got %q want %q", profile.ID(), "zai")
+	}
 }
