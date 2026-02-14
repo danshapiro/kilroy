@@ -189,8 +189,8 @@ STOP (interactive mode). Do not emit `.dot` until the user replies.
 
 Once the choice/overrides are known:
 - TEMPLATE-FIRST:
-  - Default to starting from the validated template dotfile at:
-    - `docs/strongdm/dot specs/consensus_task.dot`
+  - Default to starting from the validated reference template at:
+    - `skills/english-to-dotfile/reference_template.dot`
   - Treat it as the *structural* starting point (stage ordering + loop semantics), then adapt it to the requirements in this skill:
     - Keep the hill-climbing loop: DoD (if missing) → plan fan-out (3) → debate/consolidate → **single-writer implement** → review fan-out (3) → consensus → postmortem → loop back to planning.
     - Keep implementation **single-threaded** (one node touching code at a time). Use parallelism for *thinking* stages (DoD/plan/review), not for code edits.
@@ -301,7 +301,9 @@ digraph project_name {
             * { llm_model: DEFAULT_MODEL_ID; llm_provider: DEFAULT_PROVIDER; }
             .hard { llm_model: HARD_MODEL_ID; llm_provider: HARD_PROVIDER; }
             .verify { llm_model: VERIFY_MODEL_ID; llm_provider: VERIFY_PROVIDER; reasoning_effort: VERIFY_REASONING; }
-            .review { llm_model: REVIEW_MODEL_ID; llm_provider: REVIEW_PROVIDER; reasoning_effort: REVIEW_REASONING; }
+            .branch-a { llm_model: BRANCH_A_MODEL; llm_provider: BRANCH_A_PROVIDER; }
+            .branch-b { llm_model: BRANCH_B_MODEL; llm_provider: BRANCH_B_PROVIDER; }
+            .branch-c { llm_model: BRANCH_C_MODEL; llm_provider: BRANCH_C_PROVIDER; }
         "
     ]
 
@@ -481,7 +483,7 @@ Place `goal_gate=true` on:
 
 #### Review node
 
-Near the end, after all implementation, add a review node with `class="review"` and `goal_gate=true` that reads the spec and validates the full project against it.
+Near the end, after all implementation, add a review stage with `goal_gate=true` that reads the spec and validates the full project against it. In fan-out pipelines, use 3 review branches with `class="branch-a"`, `class="branch-b"`, `class="branch-c"` feeding a `review_consensus` node. In linear pipelines, a single review node is fine (assign any appropriate class).
 
 On review failure, `check_review` must loop back to a LATE-STAGE node — typically the integration/polish node or the last major impl node. Never loop back to `impl_setup` or the beginning. The review failure means something is broken or missing in the final product, not that the entire project needs to be rebuilt from scratch.
 
@@ -790,7 +792,7 @@ This catches type errors and interface mismatches incrementally rather than disc
 
 Use Phase 0B to decide concrete model IDs, providers, executor plan, parallelism, and thinking. Then:
 
-- Assign `class` attributes based on Phase 2 complexity and node role: default, `hard`, `verify`, `review`.
+- Assign `class` attributes based on Phase 2 complexity and node role: default, `hard`, `verify`, `branch-a`/`branch-b`/`branch-c` (for fan-out branches including reviews).
 - Encode the chosen plan in the graph `model_stylesheet` so nodes inherit `llm_provider`, `llm_model`, and (optionally) `reasoning_effort`.
 
 #### Escalation chain generation
@@ -971,7 +973,7 @@ Each fan-out branch prompt should include:
 - "Implement ONLY your assigned module files."
 28. **`reasoning_effort` on Cerebras GLM 4.7.** Do NOT set `reasoning_effort` on GLM 4.7 nodes expecting it to control reasoning depth — that parameter only works on Cerebras `gpt-oss-120b`. GLM 4.7 reasoning is always on. The engine automatically sets `clear_thinking: false` for Cerebras agent-loop nodes to preserve reasoning context across turns.
 29. **Parallel code-writing in a shared worktree (default disallowed).** Do NOT run multiple programming/implementation nodes in parallel that touch the same codebase state. If implementation fan-out is required, enforce strict isolation (disjoint write scopes, shared files read-only) and converge via an explicit integration/merge node.
-30. **Generating DOTs from scratch when a validated template exists.** For production-quality runs, start from `docs/strongdm/dot specs/consensus_task.dot` (or another proven template) and make minimal, validated edits. New topologies are allowed, but they are higher-risk and must be validated early/cheap to avoid expensive runaway loops.
+30. **Generating DOTs from scratch when a validated template exists.** For production-quality runs, start from `skills/english-to-dotfile/reference_template.dot` and make minimal, validated edits. New topologies are allowed, but they are higher-risk and must be validated early/cheap to avoid expensive runaway loops.
 31. **Setting `max_agent_turns` without production data.** Do not guess turn limits. Use `timeout` as the primary safety guard. Add `max_agent_turns` only as a secondary clamp once you have observed turn-count distributions from production runs — a wrong turn limit kills productive work and wastes every turn the agent already completed.
 
 ## Notes on Reference Dotfile Conventions
@@ -997,7 +999,9 @@ digraph linkcheck {
             * { llm_model: DEFAULT_MODEL_ID; llm_provider: DEFAULT_PROVIDER; }
             .hard { llm_model: HARD_MODEL_ID; llm_provider: HARD_PROVIDER; }
             .verify { llm_model: VERIFY_MODEL_ID; llm_provider: VERIFY_PROVIDER; reasoning_effort: VERIFY_REASONING; }
-            .review { llm_model: REVIEW_MODEL_ID; llm_provider: REVIEW_PROVIDER; reasoning_effort: REVIEW_REASONING; }
+            .branch-a { llm_model: BRANCH_A_MODEL; llm_provider: BRANCH_A_PROVIDER; }
+            .branch-b { llm_model: BRANCH_B_MODEL; llm_provider: BRANCH_B_PROVIDER; }
+            .branch-c { llm_model: BRANCH_C_MODEL; llm_provider: BRANCH_C_PROVIDER; }
         "
     ]
 
@@ -1038,7 +1042,7 @@ digraph linkcheck {
 
 	    // Review
 	    review [
-	        shape=box, class="review", goal_gate=true,
+	        shape=box, goal_gate=true,
 	        prompt="Goal: $goal\n\nRead .ai/spec.md. Review the full implementation against the spec. Check: all features implemented, tests pass, CLI works, error handling correct.\n\nSandboxed validation policy:\n- Required checks are scoped to `cmd/linkcheck` and `pkg/linkcheck`.\n- Repo-wide network-dependent checks are advisory only.\n\nRun: go build ./cmd/linkcheck ./pkg/linkcheck/... && go test ./cmd/linkcheck/... ./pkg/linkcheck/...\n\nWrite review to .ai/final_review.md.\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if complete, outcome=fail with failure_reason and details about what's missing."
 	    ]
 

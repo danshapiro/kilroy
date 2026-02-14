@@ -1,0 +1,215 @@
+digraph reference_template {
+    graph [
+        goal="$goal",
+        rankdir=LR,
+        default_max_retry=3,
+        retry_target="implement",
+        fallback_retry_target="debate_consolidate",
+        provenance_version="1",
+        model_stylesheet="
+            * { llm_model: DEFAULT_MODEL; llm_provider: DEFAULT_PROVIDER; }
+            .hard { llm_model: HARD_MODEL; llm_provider: HARD_PROVIDER; }
+            .verify { llm_model: VERIFY_MODEL; llm_provider: VERIFY_PROVIDER; }
+            .branch-a { llm_model: BRANCH_A_MODEL; llm_provider: BRANCH_A_PROVIDER; }
+            .branch-b { llm_model: BRANCH_B_MODEL; llm_provider: BRANCH_B_PROVIDER; }
+            .branch-c { llm_model: BRANCH_C_MODEL; llm_provider: BRANCH_C_PROVIDER; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    // =========================================================================
+    // Toolchain gate — fail fast before LLM stages
+    // =========================================================================
+    check_toolchain [
+        shape=parallelogram,
+        max_retries=0,
+        tool_command="echo 'Replace with project-specific toolchain checks'; exit 0"
+    ]
+
+    // =========================================================================
+    // Spec expansion — bootstraps .ai/spec.md from vague input
+    // Only node allowed to use auto_status=true (skip verify).
+    // =========================================================================
+    expand_spec [
+        shape=box,
+        auto_status=true,
+        prompt="Goal: $goal\n\nExpand the requirements into a detailed spec.\n\nWrite the spec to .ai/spec.md."
+    ]
+
+    // =========================================================================
+    // DoD routing — skip DoD generation on loop iterations
+    // =========================================================================
+    check_dod [
+        shape=diamond,
+        label="DoD exists?",
+        prompt="Check if .ai/definition_of_done.md exists and contains substantive criteria.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=has_dod if yes, outcome=needs_dod if no."
+    ]
+
+    // =========================================================================
+    // DoD fan-out: 3 branches, each a DIFFERENT provider via class
+    // =========================================================================
+    dod_a [
+        shape=box,
+        class="branch-a",
+        prompt="Goal: $goal\n\nPropose a Definition of Done. Read .ai/spec.md.\nWrite to .ai/dod_a.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success"
+    ]
+
+    dod_b [
+        shape=box,
+        class="branch-b",
+        prompt="Goal: $goal\n\nPropose a Definition of Done. Read .ai/spec.md.\nWrite to .ai/dod_b.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success"
+    ]
+
+    dod_c [
+        shape=box,
+        class="branch-c",
+        prompt="Goal: $goal\n\nPropose a Definition of Done. Read .ai/spec.md.\nWrite to .ai/dod_c.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success"
+    ]
+
+    consolidate_dod [
+        shape=box,
+        prompt="Goal: $goal\n\nSynthesize .ai/dod_a.md, .ai/dod_b.md, .ai/dod_c.md into a single consensus DoD.\nWrite to .ai/definition_of_done.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success"
+    ]
+
+    // =========================================================================
+    // Planning fan-out: 3 branches with different providers
+    // Each planner reads postmortem (if exists) to incorporate lessons.
+    // =========================================================================
+    plan_a [
+        shape=box,
+        class="branch-a",
+        prompt="Goal: $goal\n\nCreate an implementation plan.\nRead .ai/spec.md, .ai/definition_of_done.md.\nIf .ai/postmortem_latest.md exists, incorporate its lessons.\nWrite to .ai/plan_a.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success"
+    ]
+
+    plan_b [
+        shape=box,
+        class="branch-b",
+        prompt="Goal: $goal\n\nCreate an implementation plan.\nRead .ai/spec.md, .ai/definition_of_done.md.\nIf .ai/postmortem_latest.md exists, incorporate its lessons.\nWrite to .ai/plan_b.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success"
+    ]
+
+    plan_c [
+        shape=box,
+        class="branch-c",
+        prompt="Goal: $goal\n\nCreate an implementation plan.\nRead .ai/spec.md, .ai/definition_of_done.md.\nIf .ai/postmortem_latest.md exists, incorporate its lessons.\nWrite to .ai/plan_c.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success"
+    ]
+
+    // =========================================================================
+    // Debate & consolidate plans into single final plan
+    // =========================================================================
+    debate_consolidate [
+        shape=box,
+        prompt="Goal: $goal\n\nSynthesize .ai/plan_a.md, .ai/plan_b.md, .ai/plan_c.md into a best-of-breed final plan.\nResolve conflicts. Ensure dependency order.\nIf .ai/postmortem_latest.md exists, verify the plan addresses every issue.\nWrite to .ai/plan_final.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success"
+    ]
+
+    // =========================================================================
+    // Single-writer implementation — the only code-writing node
+    // =========================================================================
+    implement [
+        shape=box,
+        class="hard",
+        allow_partial=true,
+        max_retries=2,
+        prompt="Goal: $goal\n\nExecute .ai/plan_final.md. Read .ai/definition_of_done.md for acceptance criteria.\nIf .ai/postmortem_latest.md exists, prioritize fixing those issues.\n\nUse progressive compilation: get each module compiling before starting the next.\nLog progress to .ai/implementation_log.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if build passes, outcome=fail with failure_reason otherwise."
+    ]
+
+    // =========================================================================
+    // Verify/check inner loop — catches build errors before expensive reviews
+    // =========================================================================
+    verify_impl [
+        shape=box,
+        class="verify",
+        prompt="Verify implementation.\n\nRun build and test commands.\nCheck artifact hygiene: fail if git diff contains build outputs.\nCheck formatting: fail if source files have formatting violations.\n\nWrite results to .ai/verify_impl.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if all pass, outcome=fail with failure_reason and details."
+    ]
+
+    check_impl [shape=diamond, label="Impl OK?"]
+
+    // =========================================================================
+    // Review fan-out: 3 branches with different providers
+    // =========================================================================
+    review_a [
+        shape=box,
+        class="branch-a",
+        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_a.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=pass if meets DoD, outcome=fail with failure_reason and specific gaps."
+    ]
+
+    review_b [
+        shape=box,
+        class="branch-b",
+        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_b.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=pass if meets DoD, outcome=fail with failure_reason and specific gaps."
+    ]
+
+    review_c [
+        shape=box,
+        class="branch-c",
+        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_c.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=pass if meets DoD, outcome=fail with failure_reason and specific gaps."
+    ]
+
+    // =========================================================================
+    // Review consensus — synthesize reviews into pass/fail decision
+    // =========================================================================
+    review_consensus [
+        shape=box,
+        goal_gate=true,
+        prompt="Goal: $goal\n\nSynthesize .ai/review_a.md, .ai/review_b.md, .ai/review_c.md.\nRead .ai/definition_of_done.md for criteria.\n\nIf 2+ reviewers PASS and no critical gaps: outcome=pass.\nOtherwise: outcome=retry with failure_reason listing specific issues.\n\nWrite consensus to .ai/review_consensus.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=pass or outcome=retry with failure_reason."
+    ]
+
+    // =========================================================================
+    // Postmortem — analyze failure, guide next iteration
+    // =========================================================================
+    postmortem [
+        shape=box,
+        prompt="Goal: $goal\n\nAnalyze why the implementation failed.\nRead .ai/review_consensus.md, .ai/review_a.md, .ai/review_b.md, .ai/review_c.md.\nRead .ai/implementation_log.md.\n\nProduce actionable guidance: root causes, what worked, what failed, specific fixes.\nThe next iteration must NOT start from scratch — preserve working code and fix gaps.\n\nWrite to .ai/postmortem_latest.md (overwrite previous).\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success"
+    ]
+
+    // =========================================================================
+    // Flow
+    // =========================================================================
+
+    // Linear start: toolchain -> spec -> DoD check
+    start -> check_toolchain -> expand_spec -> check_dod
+
+    // DoD fan-out (if needed)
+    check_dod -> dod_a [condition="outcome=needs_dod"]
+    check_dod -> dod_b [condition="outcome=needs_dod"]
+    check_dod -> dod_c [condition="outcome=needs_dod"]
+    dod_a -> consolidate_dod
+    dod_b -> consolidate_dod
+    dod_c -> consolidate_dod
+    consolidate_dod -> plan_a
+    consolidate_dod -> plan_b
+    consolidate_dod -> plan_c
+
+    // Skip to planning if DoD exists
+    check_dod -> plan_a [condition="outcome=has_dod"]
+    check_dod -> plan_b [condition="outcome=has_dod"]
+    check_dod -> plan_c [condition="outcome=has_dod"]
+
+    // Planning fan-in -> debate -> implement
+    plan_a -> debate_consolidate
+    plan_b -> debate_consolidate
+    plan_c -> debate_consolidate
+    debate_consolidate -> implement
+
+    // Verify/check inner loop (catches build errors before reviews)
+    implement -> verify_impl -> check_impl
+    check_impl -> review_a   [condition="outcome=success"]
+    check_impl -> review_b   [condition="outcome=success"]
+    check_impl -> review_c   [condition="outcome=success"]
+    check_impl -> implement  [condition="outcome=fail", label="retry"]
+
+    // Review fan-in -> consensus
+    review_a -> review_consensus
+    review_b -> review_consensus
+    review_c -> review_consensus
+
+    // Consensus routing: pass -> exit, anything else -> postmortem
+    review_consensus -> exit [condition="outcome=pass"]
+    review_consensus -> postmortem
+
+    // Hill-climbing loop: postmortem -> re-plan -> re-implement -> re-review
+    postmortem -> plan_a [loop_restart=true]
+    postmortem -> plan_b [loop_restart=true]
+    postmortem -> plan_c [loop_restart=true]
+}
