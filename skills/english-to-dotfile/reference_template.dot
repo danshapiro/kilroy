@@ -135,28 +135,28 @@ digraph reference_template {
     review_a [
         shape=box,
         class="branch-a",
-        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_a.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=pass if meets DoD, outcome=fail with failure_reason and specific gaps."
+        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_a.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
     ]
 
     review_b [
         shape=box,
         class="branch-b",
-        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_b.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=pass if meets DoD, outcome=fail with failure_reason and specific gaps."
+        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_b.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
     ]
 
     review_c [
         shape=box,
         class="branch-c",
-        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_c.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=pass if meets DoD, outcome=fail with failure_reason and specific gaps."
+        prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_c.md with PASS or FAIL verdict.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
     ]
 
     // =========================================================================
-    // Review consensus — synthesize reviews into pass/fail decision
+    // Review consensus — synthesize reviews into success/retry decision
     // =========================================================================
     review_consensus [
         shape=box,
         goal_gate=true,
-        prompt="Goal: $goal\n\nSynthesize .ai/review_a.md, .ai/review_b.md, .ai/review_c.md.\nRead .ai/definition_of_done.md for criteria.\n\nIf 2+ reviewers PASS and no critical gaps: outcome=pass.\nOtherwise: outcome=retry with failure_reason listing specific issues.\n\nWrite consensus to .ai/review_consensus.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=pass or outcome=retry with failure_reason."
+        prompt="Goal: $goal\n\nSynthesize .ai/review_a.md, .ai/review_b.md, .ai/review_c.md.\nRead .ai/definition_of_done.md for criteria.\n\nIf 2+ reviewers PASS and no critical gaps: outcome=success.\nOtherwise: outcome=retry with failure_reason listing specific issues.\n\nWrite consensus to .ai/review_consensus.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success or outcome=retry with failure_reason."
     ]
 
     // =========================================================================
@@ -208,8 +208,8 @@ digraph reference_template {
     review_b -> review_consensus
     review_c -> review_consensus
 
-    // Consensus routing: pass -> exit, anything else -> postmortem
-    review_consensus -> exit [condition="outcome=pass"]
+    // Consensus routing: success -> exit, anything else -> postmortem
+    review_consensus -> exit [condition="outcome=success"]
     review_consensus -> postmortem
 
     // Hill-climbing loop: postmortem -> re-plan -> re-implement -> re-review
