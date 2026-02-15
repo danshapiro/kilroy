@@ -3,7 +3,6 @@ package style
 import (
 	"fmt"
 	"strings"
-	"unicode"
 
 	"github.com/danshapiro/kilroy/internal/attractor/model"
 )
@@ -211,7 +210,7 @@ func (p *ssParser) parseClassName() (string, error) {
 	}
 	for !p.eof() {
 		r := rune(p.s[p.i])
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
 			p.i++
 			continue
 		}
@@ -232,7 +231,7 @@ func (p *ssParser) parseIdentLike() (string, error) {
 	}
 	for !p.eof() {
 		r := rune(p.s[p.i])
-		if unicode.IsLetter(r) || unicode.IsDigit(r) || r == '_' || r == '-' || r == '.' {
+		if (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '_' || r == '-' || r == '.' {
 			p.i++
 			continue
 		}
@@ -325,9 +324,9 @@ func (p *ssParser) errf(format string, args ...any) error {
 }
 
 func isIdentStart(r rune) bool {
-	return r == '_' || unicode.IsLetter(r)
+	return r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')
 }
 
 func isIdentContinue(r rune) bool {
-	return isIdentStart(r) || unicode.IsDigit(r)
+	return isIdentStart(r) || (r >= '0' && r <= '9')
 }

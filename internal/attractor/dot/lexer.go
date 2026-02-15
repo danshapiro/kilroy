@@ -3,7 +3,6 @@ package dot
 import (
 	"fmt"
 	"strings"
-	"unicode"
 )
 
 type tokenType int
@@ -153,11 +152,11 @@ func (l *lexer) lexString() (token, error) {
 }
 
 func isIdentStart(r rune) bool {
-	return r == '_' || unicode.IsLetter(r)
+	return r == '_' || (r >= 'A' && r <= 'Z') || (r >= 'a' && r <= 'z')
 }
 
 func isIdentContinue(r rune) bool {
-	return isIdentStart(r) || unicode.IsDigit(r)
+	return isIdentStart(r) || (r >= '0' && r <= '9')
 }
 
 func isDigit(b byte) bool { return b >= '0' && b <= '9' }

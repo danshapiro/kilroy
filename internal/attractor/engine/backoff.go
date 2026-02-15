@@ -21,13 +21,14 @@ type BackoffConfig struct {
 }
 
 func defaultBackoffConfig() BackoffConfig {
-	// Spec defaults are 200ms / factor 2.0 / cap 60s. Kilroy defaults jitter off for determinism;
-	// jitter can be enabled via `retry.backoff.jitter=true`.
+	// Spec defaults: 200ms / factor 2.0 / cap 60s / jitter on.
+	// Jitter is deterministic (SHA-256 seeded from runID:nodeID:attempt), so
+	// identical inputs always produce identical delays — replay determinism is preserved.
 	return BackoffConfig{
 		InitialDelayMS: 200,
 		BackoffFactor:  2.0,
 		MaxDelayMS:     60_000,
-		Jitter:         false,
+		Jitter:         true,
 	}
 }
 

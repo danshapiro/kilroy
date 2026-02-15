@@ -87,6 +87,10 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 			return parallelBranchResult{}, fmt.Errorf("%s", reason)
 		}
 
+		// Spec §5.1: initialize built-in context key internal.retry_count.<node_id>
+		// for subgraph/branch execution, matching the main loop (engine.go).
+		eng.Context.Set(fmt.Sprintf("internal.retry_count.%s", current), nodeRetries[current])
+
 		eng.cxdbStageStarted(ctx, node)
 		out, err := eng.executeWithRetry(ctx, node, nodeRetries)
 		if err != nil {

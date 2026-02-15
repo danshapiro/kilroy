@@ -93,21 +93,52 @@ func (h *ParallelHandler) Execute(ctx context.Context, exec *Execution, node *mo
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
 	}
 
-	results, baseSHA, err := dispatchParallelBranches(ctx, exec, node.ID, branches, joinID)
+	// Spec §4.8: read join_policy and error_policy from node attributes.
+	jp, ep := parallelPolicies(node)
+
+	// Spec §9.6: emit ParallelStarted CXDB event.
+	parallelStart := time.Now()
+	exec.Engine.cxdbParallelStarted(ctx, node.ID, len(branches),
+		string(jp), string(ep))
+
+	results, baseSHA, err := dispatchParallelBranchesWithPolicy(ctx, exec, node.ID, branches, joinID, jp, ep, node)
 	if err != nil {
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, err
 	}
+
+	// Spec §9.6: emit ParallelCompleted CXDB event.
+	successCount, failCount := 0, 0
+	for _, r := range results {
+		if r.Outcome.Status == runtime.StatusSuccess || r.Outcome.Status == runtime.StatusPartialSuccess {
+			successCount++
+		} else if r.Outcome.Status == runtime.StatusFail {
+			failCount++
+		}
+	}
+	exec.Engine.cxdbParallelCompleted(ctx, node.ID, successCount, failCount,
+		time.Since(parallelStart).Milliseconds())
+
+	// Spec §4.8: apply error_policy=ignore to filter failed results BEFORE
+	// join evaluation, so ignored failures don't affect join policy outcome.
+	filteredResults := filterResultsByErrorPolicy(ep, results)
+
+	// Spec §4.8: evaluate join_policy to determine aggregate outcome.
+	policyOutcome := evaluateJoinPolicy(jp, node, filteredResults)
+
+	// Use filtered results for context propagation to fan-in handler.
+	contextResults := filteredResults
 
 	stageDir := filepath.Join(exec.LogsRoot, node.ID)
 	_ = os.MkdirAll(stageDir, 0o755)
 	_ = writeJSON(filepath.Join(stageDir, "parallel_results.json"), results)
 
 	return runtime.Outcome{
-		Status: runtime.StatusSuccess,
-		Notes:  fmt.Sprintf("parallel fan-out complete (%d branches), join=%s", len(results), joinID),
+		Status:        policyOutcome.Status,
+		Notes:         fmt.Sprintf("parallel fan-out complete (%d branches), join=%s; %s", len(results), joinID, policyOutcome.Notes),
+		FailureReason: policyOutcome.FailureReason,
 		ContextUpdates: map[string]any{
 			"parallel.join_node": joinID,
-			"parallel.results":   results,
+			"parallel.results":   contextResults,
 		},
 		Meta: map[string]any{
 			"kilroy.git_checkpoint_sha": baseSHA,
@@ -395,6 +426,9 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 		emitBranchProgress(eventName, extra)
 	}
 	emitBranchProgress("branch_subgraph_start", nil)
+	// Spec §9.6: emit ParallelBranchStarted CXDB event.
+	branchStart := time.Now()
+	exec.Engine.cxdbParallelBranchStarted(ctx, parallelNode.ID, key, idx)
 	keepaliveStop := make(chan struct{})
 	keepaliveDone := make(chan struct{})
 	keepaliveInterval := branchHeartbeatKeepaliveInterval(exec.Engine.Options.StallTimeout)
@@ -430,6 +464,9 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 		doneExtra["branch_failure_reason"] = reason
 	}
 	emitBranchProgress("branch_subgraph_done", doneExtra)
+	// Spec §9.6: emit ParallelBranchCompleted CXDB event.
+	exec.Engine.cxdbParallelBranchCompleted(ctx, parallelNode.ID, key, idx,
+		strings.TrimSpace(string(res.Outcome.Status)), time.Since(branchStart).Milliseconds())
 	res.BranchKey = key
 	res.BranchName = branchName
 	res.StartNodeID = edge.To
@@ -513,14 +550,8 @@ func (h *FanInHandler) Execute(ctx context.Context, exec *Execution, node *model
 	}, nil
 }
 
+// ManagerLoopHandler is defined in manager_loop.go.
 type ManagerLoopHandler struct{}
-
-func (h *ManagerLoopHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
-	_ = ctx
-	_ = exec
-	_ = node
-	return runtime.Outcome{Status: runtime.StatusFail, FailureReason: "stack.manager_loop not implemented in v1"}, nil
-}
 
 func decodeParallelResults(raw any) ([]parallelBranchResult, error) {
 	switch v := raw.(type) {

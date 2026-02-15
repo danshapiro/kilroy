@@ -23,10 +23,37 @@ type Execution struct {
 	LogsRoot    string
 	WorktreeDir string
 	Engine      *Engine
+	Artifacts   *ArtifactStore // spec §5.5: per-run artifact store
 }
 
 type Handler interface {
 	Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error)
+}
+
+// FidelityAwareHandler is an optional interface that handlers implement to
+// declare they use fidelity/thread resolution (e.g., LLM session continuity).
+// The engine resolves fidelity and thread keys only for handlers that
+// implement this interface, avoiding hardcoded handler-type checks.
+type FidelityAwareHandler interface {
+	Handler
+	UsesFidelity() bool
+}
+
+// SingleExecutionHandler is an optional interface that handlers implement to
+// declare they should bypass retry logic (execute exactly once). Conditional
+// pass-through nodes are the canonical example: retrying a routing point
+// burns retry budget without useful work.
+type SingleExecutionHandler interface {
+	Handler
+	SkipRetry() bool
+}
+
+// ProviderRequiringHandler is an optional interface that handlers implement
+// to declare they require an LLM provider. The engine uses this during
+// preflight to gather provider requirements instead of checking node shapes.
+type ProviderRequiringHandler interface {
+	Handler
+	RequiresProvider() bool
 }
 
 type HandlerRegistry struct {
@@ -57,6 +84,19 @@ func (r *HandlerRegistry) Register(typeString string, h Handler) {
 		r.handlers = map[string]Handler{}
 	}
 	r.handlers[typeString] = h
+}
+
+// KnownTypes returns the list of registered handler type strings.
+// Used by the validate package's TypeKnownRule to check node type overrides.
+func (r *HandlerRegistry) KnownTypes() []string {
+	if r == nil || r.handlers == nil {
+		return nil
+	}
+	types := make([]string, 0, len(r.handlers))
+	for t := range r.handlers {
+		types = append(types, t)
+	}
+	return types
 }
 
 func (r *HandlerRegistry) Resolve(n *model.Node) Handler {
@@ -114,6 +154,11 @@ func (h *ExitHandler) Execute(ctx context.Context, exec *Execution, node *model.
 
 type ConditionalHandler struct{}
 
+// SkipRetry implements SingleExecutionHandler. Conditional nodes are
+// pass-through routing points — retrying them burns retry budget without
+// useful work.
+func (h *ConditionalHandler) SkipRetry() bool { return true }
+
 func (h *ConditionalHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
 	_ = ctx
 	_ = node
@@ -158,12 +203,20 @@ type SimulatedCodergenBackend struct{}
 func (b *SimulatedCodergenBackend) Run(ctx context.Context, exec *Execution, node *model.Node, prompt string) (string, *runtime.Outcome, error) {
 	_ = ctx
 	_ = exec
-	_ = node
+	_ = prompt
 	out := runtime.Outcome{Status: runtime.StatusSuccess, Notes: "simulated codergen completed"}
-	return "[Simulated] " + prompt, &out, nil
+	return "[Simulated] Response for stage: " + node.ID, &out, nil
 }
 
 type CodergenHandler struct{}
+
+// UsesFidelity implements FidelityAwareHandler. LLM nodes need fidelity/thread
+// resolution for context management and session reuse.
+func (h *CodergenHandler) UsesFidelity() bool { return true }
+
+// RequiresProvider implements ProviderRequiringHandler. LLM nodes require an
+// LLM provider to be configured.
+func (h *CodergenHandler) RequiresProvider() bool { return true }
 
 type statusSource string
 
@@ -274,8 +327,15 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 	resp, out, err := backend.Run(ctx, exec, node, promptText)
 	if err != nil {
 		fc, sig := classifyAPIError(err)
+		// Spec §4.5: set semantically correct status based on failure classification.
+		// Deterministic errors (auth, bad request, etc.) are FAIL — retrying won't help.
+		// Transient errors (rate limits, timeouts, server errors) are RETRY — worth retrying.
+		status := runtime.StatusFail
+		if fc == failureClassTransientInfra {
+			status = runtime.StatusRetry
+		}
 		return runtime.Outcome{
-			Status:         runtime.StatusRetry,
+			Status:         status,
 			FailureReason:  err.Error(),
 			Meta:           map[string]any{"failure_class": fc, "failure_signature": sig},
 			ContextUpdates: map[string]any{"failure_class": fc},
@@ -305,6 +365,16 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 	}
 
 	if out != nil {
+		// Spec §5.1: always set last_stage/last_response on handler completion.
+		if out.ContextUpdates == nil {
+			out.ContextUpdates = map[string]any{}
+		}
+		if _, ok := out.ContextUpdates["last_stage"]; !ok {
+			out.ContextUpdates["last_stage"] = node.ID
+		}
+		if _, ok := out.ContextUpdates["last_response"]; !ok {
+			out.ContextUpdates["last_response"] = truncate(resp, 200)
+		}
 		return *out, nil
 	}
 
@@ -312,7 +382,15 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 	// auto_status is explicitly enabled.
 	if _, err := os.Stat(stageStatusPath); err == nil {
 		// The engine will parse the status.json after the handler returns.
-		return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "codergen completed (status.json written)"}, nil
+		// Spec §5.1: always set last_stage/last_response on handler completion.
+		return runtime.Outcome{
+			Status: runtime.StatusSuccess,
+			Notes:  "codergen completed (status.json written)",
+			ContextUpdates: map[string]any{
+				"last_stage":    node.ID,
+				"last_response": truncate(resp, 200),
+			},
+		}, nil
 	}
 	autoStatus := strings.EqualFold(node.Attr("auto_status", "false"), "true")
 	if autoStatus {
@@ -377,9 +455,34 @@ func (h *WaitHumanHandler) Execute(ctx context.Context, exec *Execution, node *m
 	if interviewer == nil {
 		interviewer = &AutoApproveInterviewer{}
 	}
+	// Spec §9.6: emit InterviewStarted CXDB event.
+	interviewStart := time.Now()
+	exec.Engine.cxdbInterviewStarted(ctx, node.ID, q.Text, string(q.Type))
+
 	ans := interviewer.Ask(q)
+	interviewDurationMS := time.Since(interviewStart).Milliseconds()
+
 	if ans.TimedOut {
-		return runtime.Outcome{Status: runtime.StatusRetry, FailureReason: "human gate timeout"}, nil
+		// Spec §9.6: emit InterviewTimeout CXDB event.
+		exec.Engine.cxdbInterviewTimeout(ctx, node.ID, q.Text, interviewDurationMS)
+		// §4.6: On timeout, check for a default choice before returning RETRY.
+		if dc := strings.TrimSpace(node.Attr("human.default_choice", "")); dc != "" {
+			for _, o := range options {
+				if strings.EqualFold(o.Key, dc) || strings.EqualFold(o.To, dc) {
+					return runtime.Outcome{
+						Status:           runtime.StatusSuccess,
+						SuggestedNextIDs: []string{o.To},
+						PreferredLabel:   o.Label,
+						ContextUpdates: map[string]any{
+							"human.gate.selected": o.To,
+							"human.gate.label":    o.Label,
+						},
+						Notes: "human gate timeout, used default choice",
+					}, nil
+				}
+			}
+		}
+		return runtime.Outcome{Status: runtime.StatusRetry, FailureReason: "human gate timeout, no default"}, nil
 	}
 	if ans.Skipped {
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: "human gate skipped interaction"}, nil
@@ -394,6 +497,9 @@ func (h *WaitHumanHandler) Execute(ctx context.Context, exec *Execution, node *m
 			}
 		}
 	}
+
+	// Spec §9.6: emit InterviewCompleted CXDB event.
+	exec.Engine.cxdbInterviewCompleted(ctx, node.ID, ans.Value, interviewDurationMS)
 
 	return runtime.Outcome{
 		Status:           runtime.StatusSuccess,
@@ -618,6 +724,8 @@ func parseIntPrefix(s string) (int, bool) {
 
 type Interviewer interface {
 	Ask(question Question) Answer
+	AskMultiple(questions []Question) []Answer
+	Inform(message string, stage string)
 }
 
 type QuestionType string
@@ -627,13 +735,17 @@ const (
 	QuestionMultiSelect  QuestionType = "MULTI_SELECT"
 	QuestionFreeText     QuestionType = "FREE_TEXT"
 	QuestionConfirm      QuestionType = "CONFIRM"
+	QuestionYesNo        QuestionType = "YES_NO" // binary yes/no; semantically distinct from CONFIRM
 )
 
 type Question struct {
-	Type    QuestionType
-	Text    string
-	Options []Option
-	Stage   string
+	Type           QuestionType
+	Text           string
+	Options        []Option
+	Default        *Answer            // default answer if timeout/skip (nil = no default)
+	TimeoutSeconds float64            // max wait time; 0 means no timeout
+	Stage          string
+	Metadata       map[string]any     // arbitrary key-value pairs for frontend use
 }
 
 type Option struct {
@@ -643,11 +755,12 @@ type Option struct {
 }
 
 type Answer struct {
-	Value    string
-	Values   []string
-	Text     string
-	TimedOut bool
-	Skipped  bool
+	Value          string
+	Values         []string
+	SelectedOption *Option // the full selected option (for SINGLE_SELECT); nil if not applicable
+	Text           string
+	TimedOut       bool
+	Skipped        bool
 }
 
 type AutoApproveInterviewer struct{}
@@ -657,4 +770,16 @@ func (i *AutoApproveInterviewer) Ask(q Question) Answer {
 		return Answer{Value: q.Options[0].Key}
 	}
 	return Answer{Value: "YES"}
+}
+
+func (i *AutoApproveInterviewer) AskMultiple(questions []Question) []Answer {
+	answers := make([]Answer, len(questions))
+	for idx, q := range questions {
+		answers[idx] = i.Ask(q)
+	}
+	return answers
+}
+
+func (i *AutoApproveInterviewer) Inform(message string, stage string) {
+	// No-op for auto-approve.
 }

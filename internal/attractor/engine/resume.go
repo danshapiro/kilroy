@@ -338,6 +338,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 				LogsRoot:    eng.LogsRoot,
 				WorktreeDir: eng.WorktreeDir,
 				Engine:      eng,
+				Artifacts:   eng.Artifacts,
 			}
 			results, baseSHA, dispatchErr := dispatchParallelBranches(ctx, exec, lastNodeID, allEdges, joinID)
 			if dispatchErr != nil {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/danshapiro/kilroy/internal/attractor/dot"
+	"github.com/danshapiro/kilroy/internal/attractor/model"
 )
 
 func TestValidate_StartAndExitNodeRules(t *testing.T) {
@@ -391,4 +392,197 @@ func assertNoRule(t *testing.T, diags []Diagnostic, rule string) {
 			t.Fatalf("unexpected diagnostic %s:%s (%s)", d.Severity, d.Rule, d.Message)
 		}
 	}
+}
+
+// --- Tests for V7.2: type_known lint rule ---
+
+func TestValidate_TypeKnownRule_RecognizedType_NoWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=box, type=codergen, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	rule := NewTypeKnownRule([]string{"codergen", "conditional", "start", "exit"})
+	diags := Validate(g, rule)
+	assertNoRule(t, diags, "type_known")
+}
+
+func TestValidate_TypeKnownRule_UnrecognizedType_Warning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=box, type=unknown_handler, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	rule := NewTypeKnownRule([]string{"codergen", "conditional", "start", "exit"})
+	diags := Validate(g, rule)
+	assertHasRule(t, diags, "type_known", SeverityWarning)
+}
+
+func TestValidate_TypeKnownRule_NoTypeOverride_NoWarning(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	rule := NewTypeKnownRule([]string{"codergen"})
+	diags := Validate(g, rule)
+	assertNoRule(t, diags, "type_known")
+}
+
+// --- Tests for V7.3/V7.4: LintRule interface and extra_rules ---
+
+type testLintRule struct {
+	name string
+	diag Diagnostic
+}
+
+func (r *testLintRule) Name() string                     { return r.name }
+func (r *testLintRule) Apply(g *model.Graph) []Diagnostic { return []Diagnostic{r.diag} }
+
+func TestValidate_ExtraRules_AreAppendedToBuiltInRules(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	custom := &testLintRule{
+		name: "custom_test_rule",
+		diag: Diagnostic{Rule: "custom_test_rule", Severity: SeverityInfo, Message: "test"},
+	}
+	diags := Validate(g, custom)
+	assertHasRule(t, diags, "custom_test_rule", SeverityInfo)
+}
+
+func TestValidate_ExtraRules_NilRulesIgnored(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	// Should not panic on nil rules.
+	_ = Validate(g, nil)
+}
+
+// --- Tests for V7.5: ValidateOrError collects all errors ---
+
+func TestValidateOrError_CollectsAllErrors(t *testing.T) {
+	// Graph with multiple validation errors: no start, no exit, edge to missing node.
+	g, err := dot.Parse([]byte(`
+digraph G {
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  a -> missing
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	vErr := ValidateOrError(g)
+	if vErr == nil {
+		t.Fatal("expected validation error")
+	}
+	msg := vErr.Error()
+	// Should contain multiple errors, not just the first one.
+	if !strings.Contains(msg, "start_node") {
+		t.Fatalf("expected start_node error in message: %s", msg)
+	}
+	if !strings.Contains(msg, "terminal_node") {
+		t.Fatalf("expected terminal_node error in message: %s", msg)
+	}
+	if !strings.Contains(msg, "edge_target_exists") {
+		t.Fatalf("expected edge_target_exists error in message: %s", msg)
+	}
+}
+
+// --- Tests for V7.6: at-least-one exit node ---
+
+func TestValidate_MultipleExitNodes_NoError(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  success_exit [shape=Msquare]
+  error_exit [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a
+  a -> success_exit [condition="outcome=success"]
+  a -> error_exit [condition="outcome=fail"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "terminal_node")
+}
+
+func TestValidate_ZeroExitNodes_Error(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2]
+  start -> a
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "terminal_node", SeverityError)
+}
+
+func TestValidate_MultipleExitNodes_ExitNoOutgoingChecksAll(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit1 [shape=Msquare]
+  exit2 [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  start -> a
+  a -> exit1 [condition="outcome=success"]
+  a -> exit2 [condition="outcome=fail"]
+  exit2 -> a
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	// exit2 has an outgoing edge, so exit_no_outgoing should fire.
+	assertHasRule(t, diags, "exit_no_outgoing", SeverityError)
+	// Verify the diagnostic points at exit2, not exit1.
+	for _, d := range diags {
+		if d.Rule == "exit_no_outgoing" && d.NodeID == "exit2" {
+			return
+		}
+	}
+	t.Fatal("expected exit_no_outgoing diagnostic for exit2")
 }

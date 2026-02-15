@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -121,10 +120,11 @@ digraph G {
 	}
 }
 
-// TestRun_BoxNodeCustomOutcome_NoMatchingEdge_StillFails verifies that a box
-// node returning a custom outcome that does NOT match any outgoing edge condition
-// is still treated as a failure (preserving existing retry/failure behavior).
-func TestRun_BoxNodeCustomOutcome_NoMatchingEdge_StillFails(t *testing.T) {
+// TestRun_BoxNodeCustomOutcome_NoMatchingEdge_Errors verifies that when a box
+// node returns a custom outcome that does NOT match any outgoing edge condition,
+// and no unconditional fallback edge exists, the engine treats this as a routing
+// gap and errors. The user should add an unconditional edge for unmatched outcomes.
+func TestRun_BoxNodeCustomOutcome_NoMatchingEdge_Errors(t *testing.T) {
 	cleanupStrayEngineArtifacts(t)
 	t.Cleanup(func() { cleanupStrayEngineArtifacts(t) })
 
@@ -159,7 +159,7 @@ echo '{"type":"done","text":"ok"}'
 	cfg.Git.RunBranchPrefix = "attractor/run"
 
 	// The box node returns "unknown_value" but edges only match "needs_dod" and "has_dod".
-	// This should be treated as a failure since no route matches.
+	// No unconditional edge exists — this is a routing gap.
 	dot := []byte(`
 digraph G {
   graph [goal="test unmatched custom outcome", default_max_retry=0]
@@ -180,14 +180,16 @@ digraph G {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "custom-outcome-nomatch", LogsRoot: logsRoot, AllowTestShim: true})
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "custom-outcome-nomatch", LogsRoot: logsRoot, AllowTestShim: true})
 
-	// Should fail — no matching route for "unknown_value".
+	// Routing gap: no condition matched "unknown_value", no unconditional edge.
+	// Engine must return a non-nil error (not just a non-success FinalStatus).
 	if err == nil {
-		t.Fatalf("expected error for unmatched custom outcome, got nil")
-	}
-	if !strings.Contains(err.Error(), "no eligible") && !strings.Contains(err.Error(), "fail") && !strings.Contains(err.Error(), "retries") {
-		t.Logf("error (acceptable): %v", err)
+		status := ""
+		if res != nil {
+			status = string(res.FinalStatus)
+		}
+		t.Fatalf("expected error from routing gap (no matching edge for unknown_value outcome), got nil error with status %q", status)
 	}
 }
 

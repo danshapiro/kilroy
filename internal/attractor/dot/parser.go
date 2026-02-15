@@ -235,18 +235,15 @@ func (p *parser) parseStatements(g *model.Graph, sc *scope) error {
 				if _, err := p.next(); err != nil {
 					return err
 				}
-				valTok, err := p.next()
+				val, err := p.parseTopLevelValue()
 				if err != nil {
 					return err
 				}
-				if valTok.typ != tokenIdent && valTok.typ != tokenString {
-					return fmt.Errorf("dot parse: expected value after '=', got %q at %d", valTok.lit, valTok.pos)
-				}
 				// Special case: label inside subgraph scope becomes a derived class source.
 				if sc.parent != nil && tok.lit == "label" {
-					sc.subgraphLabel = valTok.lit
+					sc.subgraphLabel = val
 				} else {
-					g.Attrs[tok.lit] = valTok.lit
+					g.Attrs[tok.lit] = val
 				}
 				_ = p.consumeOptionalSemicolon()
 				continue
@@ -433,6 +430,45 @@ func (p *parser) parseAttrValue() (string, error) {
 		return "", fmt.Errorf("dot parse: empty attr value")
 	}
 	return val, nil
+}
+
+func (p *parser) parseTopLevelValue() (string, error) {
+	// Parse a value for a top-level graph attr decl (key = value).
+	// Handles quoted strings, identifiers, and negative numbers/floats/durations
+	// (e.g. -1, -3.5, -900s) where the lexer emits '-' as a separate symbol token.
+	if err := p.read(); err != nil {
+		return "", err
+	}
+	if p.peek.typ == tokenString {
+		tok, err := p.next()
+		if err != nil {
+			return "", err
+		}
+		return tok.lit, nil
+	}
+	if p.peek.typ == tokenSymbol && p.peek.lit == "-" {
+		// Negative number: consume '-' then the numeric ident.
+		neg, err := p.next()
+		if err != nil {
+			return "", err
+		}
+		numTok, err := p.next()
+		if err != nil {
+			return "", err
+		}
+		if numTok.typ != tokenIdent {
+			return "", fmt.Errorf("dot parse: expected number after '-', got %q at %d", numTok.lit, numTok.pos)
+		}
+		return neg.lit + numTok.lit, nil
+	}
+	if p.peek.typ == tokenIdent {
+		tok, err := p.next()
+		if err != nil {
+			return "", err
+		}
+		return tok.lit, nil
+	}
+	return "", fmt.Errorf("dot parse: expected value after '=', got %q at %d", p.peek.lit, p.peek.pos)
 }
 
 func (p *parser) parseQualifiedKey() (string, error) {

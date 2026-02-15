@@ -37,6 +37,13 @@ type SessionConfig struct {
 	// Use this for provider-specific parameters (e.g., Cerebras clear_thinking).
 	ProviderOptions map[string]any
 
+	// ToolCallFilter, when non-nil, is invoked before each tool call is executed.
+	// It receives the tool name, call ID, and arguments JSON. If it returns a
+	// non-empty string, the tool call is skipped and the returned string is used
+	// as the tool result (with IsError=true). This enables pre-hook scripts to
+	// veto tool calls.
+	ToolCallFilter func(toolName, callID, argsJSON string) (skipReason string)
+
 	EnableLoopDetection *bool
 	LoopDetectionWindow int
 
@@ -250,6 +257,27 @@ func (s *Session) execTool(ctx context.Context, call llm.ToolCallData) ToolExecR
 		"call_id":        call.ID,
 		"arguments_json": string(argsJSON),
 	})
+
+	// Spec §9.7: ToolCallFilter allows pre-hooks to veto tool calls.
+	if s.cfg.ToolCallFilter != nil {
+		if skipReason := s.cfg.ToolCallFilter(call.Name, call.ID, string(argsJSON)); skipReason != "" {
+			res := ToolExecResult{
+				ToolName:   call.Name,
+				CallID:     call.ID,
+				Output:     skipReason,
+				FullOutput: skipReason,
+				IsError:    true,
+			}
+			s.emit(EventToolCallEnd, map[string]any{
+				"tool_name":   res.ToolName,
+				"call_id":     res.CallID,
+				"is_error":    res.IsError,
+				"full_output": res.FullOutput,
+				"skipped":     true,
+			})
+			return res
+		}
+	}
 
 	// Session-level tools (subagents) are registered in the registry with closures.
 	res := s.reg.ExecuteCall(ctx, s.env, call)

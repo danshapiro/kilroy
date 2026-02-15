@@ -4,7 +4,6 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -54,7 +53,11 @@ digraph G {
 	}
 }
 
-func TestRun_NoMatchingFailEdge_NoRetryTarget_StillFails(t *testing.T) {
+// TestRun_NoMatchingFailEdge_NoRetryTarget_Errors verifies that when a node
+// fails and no condition matches (only a "success" edge exists) and there is no
+// retry_target, the engine returns an error. The graph has a routing gap — the
+// user should add an unconditional fallback edge or a fail-matching edge.
+func TestRun_NoMatchingFailEdge_NoRetryTarget_Errors(t *testing.T) {
 	repo := t.TempDir()
 	runCmd(t, repo, "git", "init")
 	runCmd(t, repo, "git", "config", "user.name", "tester")
@@ -63,10 +66,12 @@ func TestRun_NoMatchingFailEdge_NoRetryTarget_StillFails(t *testing.T) {
 	runCmd(t, repo, "git", "add", "-A")
 	runCmd(t, repo, "git", "commit", "-m", "init")
 
-	// No retry_target, no matching edge — should still fail.
+	// No retry_target, no matching edge. The only edge has condition="outcome=yes"
+	// but the node fails. This is a routing gap — the engine should error, not
+	// silently route through a condition-failed edge.
 	dot := []byte(`
 digraph G {
-  graph [goal="test"]
+  graph [goal="test", default_max_retry=0]
   start  [shape=Mdiamond]
   exit   [shape=Msquare]
   review [
@@ -79,11 +84,14 @@ digraph G {
 `)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	_, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	res, err := Run(ctx, dot, RunOptions{RepoPath: repo})
+	// Routing gap: no eligible edge for the fail outcome. Engine must return
+	// a non-nil error (not just a non-success FinalStatus).
 	if err == nil {
-		t.Fatalf("expected error, got nil")
-	}
-	if !strings.Contains(err.Error(), "stage failed with no outgoing fail edge") {
-		t.Fatalf("error: %v", err)
+		status := ""
+		if res != nil {
+			status = string(res.FinalStatus)
+		}
+		t.Fatalf("expected error from routing gap (no matching edge for fail outcome), got nil error with status %q", status)
 	}
 }

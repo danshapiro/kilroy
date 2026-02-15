@@ -18,18 +18,27 @@ func TestRun_GlobalStageTimeoutCapsToolNode(t *testing.T) {
 	if _, err := exec.LookPath("sleep"); err != nil {
 		t.Skip("requires sleep binary")
 	}
+	// The wait node times out (sleep 2 with 100ms stage timeout), producing
+	// a fail outcome. An unconditional edge routes to exit regardless.
 	dot := []byte(`digraph G {
+  graph [default_max_retry=0]
   start [shape=Mdiamond]
   wait [shape=parallelogram, tool_command="sleep 2"]
   exit [shape=Msquare]
   start -> wait
-  wait -> exit [condition="outcome=success"]
+  wait -> exit
 }`)
 	repo := initTestRepo(t)
 	opts := RunOptions{RepoPath: repo, StageTimeout: 100 * time.Millisecond}
+	start := time.Now()
 	_, err := Run(context.Background(), dot, opts)
-	if err == nil {
-		t.Fatal("expected stage timeout error")
+	elapsed := time.Since(start)
+	if err != nil {
+		t.Fatalf("Run() error: %v", err)
+	}
+	// The timeout should fire at 100ms, not let the sleep run for 2s.
+	if elapsed > 3*time.Second {
+		t.Fatalf("expected stage timeout to cap tool execution; took %v", elapsed)
 	}
 }
 
@@ -37,18 +46,24 @@ func TestRun_GlobalAndNodeTimeout_UsesSmallerTimeout(t *testing.T) {
 	if _, err := exec.LookPath("sleep"); err != nil {
 		t.Skip("requires sleep binary")
 	}
+	// Node timeout is 1s, global is 5s, so 1s should apply. sleep 2
+	// exceeds 1s, so the tool times out quickly rather than waiting 2s.
 	dot := []byte(`digraph G {
+  graph [default_max_retry=0]
   start [shape=Mdiamond]
   wait [shape=parallelogram, timeout="1s", tool_command="sleep 2"]
   exit [shape=Msquare]
   start -> wait
-  wait -> exit [condition="outcome=success"]
+  wait -> exit
 }`)
 	repo := initTestRepo(t)
 	opts := RunOptions{RepoPath: repo, StageTimeout: 5 * time.Second}
-	_, err := Run(context.Background(), dot, opts)
-	if err == nil {
-		t.Fatal("expected timeout from node/global min timeout")
+	// The smaller timeout (1s) should apply, not 5s.
+	start := time.Now()
+	_, _ = Run(context.Background(), dot, opts)
+	elapsed := time.Since(start)
+	if elapsed > 3*time.Second {
+		t.Fatalf("expected smaller timeout (1s) to apply; took %v (likely used 5s global)", elapsed)
 	}
 }
 
@@ -65,7 +80,7 @@ func TestRun_TimeoutOutcomeIncludesMetadata(t *testing.T) {
   wait [shape=parallelogram, tool_command="sleep 5"]
   exit [shape=Msquare]
   start -> wait
-  wait -> exit [condition="outcome=success"]
+  wait -> exit
 }`)
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 )
@@ -68,14 +69,45 @@ func (c *Context) SnapshotLogs() []string {
 	return out
 }
 
+// Clone returns a deep copy of the context for parallel branch isolation.
+// Values are deep-copied via JSON round-trip (all context values must be
+// JSON-serializable per the Context contract). If JSON serialization fails
+// for any value, that value is shallow-copied as a fallback.
 func (c *Context) Clone() *Context {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	out := NewContext()
 	for k, v := range c.values {
-		out.values[k] = v
+		out.values[k] = deepCopyValue(v)
 	}
 	out.logs = append(out.logs, c.logs...)
+	return out
+}
+
+// deepCopyValue performs a deep copy of a value via JSON round-trip.
+// This is safe because all context values must be JSON-serializable.
+// Falls back to returning the original value if marshaling fails (e.g.,
+// for primitive types like strings and ints that don't need deep copying).
+func deepCopyValue(v any) any {
+	if v == nil {
+		return nil
+	}
+	// Fast path: primitive types that are immutable and don't need deep copying.
+	switch v.(type) {
+	case string, bool, int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return v
+	}
+	// Deep copy via JSON round-trip for composite types (maps, slices, etc.).
+	b, err := json.Marshal(v)
+	if err != nil {
+		return v // fallback: shallow copy
+	}
+	var out any
+	if err := json.Unmarshal(b, &out); err != nil {
+		return v // fallback: shallow copy
+	}
 	return out
 }
 

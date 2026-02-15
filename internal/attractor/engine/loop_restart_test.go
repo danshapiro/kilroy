@@ -32,7 +32,7 @@ func TestRun_LoopRestartCreatesNewLogDirectory(t *testing.T) {
 	// The backend returns fail on the first call to "work", success on the second.
 	dot := []byte(`
 digraph G {
-  graph [goal="test loop restart"]
+  graph [goal="test loop restart", default_max_retry=0]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
@@ -732,7 +732,7 @@ func TestLoopRestart_PersistsContextKeys(t *testing.T) {
 	// each iteration. After a restart, the value should carry over.
 	dot := []byte(`
 digraph G {
-  graph [goal="test context persistence", loop_restart_persist_keys="completed_features,skipped_features"]
+  graph [goal="test context persistence", default_max_retry=0, loop_restart_persist_keys="completed_features,skipped_features"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]
@@ -835,7 +835,7 @@ func TestLoopRestart_PersistKeysProgressEvent(t *testing.T) {
 
 	dot := []byte(`
 digraph G {
-  graph [goal="test persist keys in progress", loop_restart_persist_keys="my_key"]
+  graph [goal="test persist keys in progress", default_max_retry=0, loop_restart_persist_keys="my_key"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   work  [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do work"]

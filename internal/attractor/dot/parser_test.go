@@ -123,6 +123,28 @@ digraph G {
 	}
 }
 
+func TestParse_TopLevelNegativeNumericValue(t *testing.T) {
+	src := []byte(`
+digraph G {
+    some_threshold = -1
+    float_val = -3.5
+    start [shape=Mdiamond]
+    exit  [shape=Msquare]
+    start -> exit
+}
+`)
+	g, err := Parse(src)
+	if err != nil {
+		t.Fatalf("Parse() error: %v", err)
+	}
+	if got := g.Attrs["some_threshold"]; got != "-1" {
+		t.Fatalf("some_threshold: got %q, want %q", got, "-1")
+	}
+	if got := g.Attrs["float_val"]; got != "-3.5" {
+		t.Fatalf("float_val: got %q, want %q", got, "-3.5")
+	}
+}
+
 func contains(xs []string, want string) bool {
 	for _, x := range xs {
 		if x == want {

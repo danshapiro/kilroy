@@ -135,7 +135,7 @@ Graph attributes are declared in a `graph [ ... ]` block or as top-level `key = 
 | `goal`                    | String   | `""`      | Human-readable goal for the pipeline. Exposed as `$goal` in prompt templates and mirrored into the run context as `graph.goal`. |
 | `label`                   | String   | `""`      | Display name for the graph (used in visualization). |
 | `model_stylesheet`        | String   | `""`      | CSS-like stylesheet for per-node LLM model/provider defaults. See Section 8. |
-| `default_max_retry`       | Integer  | `50`      | Global retry ceiling for nodes that omit `max_retries`. |
+| `default_max_retry`       | Integer  | `3`       | Global retry ceiling for nodes that omit `max_retries`. |
 | `retry_target`            | String   | `""`      | Node ID to jump to if exit is reached with unsatisfied goal gates. |
 | `fallback_retry_target`   | String   | `""`      | Secondary jump target if `retry_target` is missing or invalid. |
 | `default_fidelity`        | String   | `""`      | Default context fidelity mode (see Section 5.4). |
@@ -477,7 +477,7 @@ Each node has a retry policy determined by:
 
 1. Node attribute `max_retries` (if set) -- number of additional attempts beyond the initial execution
 2. Graph attribute `default_max_retry` (fallback)
-3. Built-in default: 0 (no retries)
+3. Built-in default: 3
 
 The `max_retries` attribute specifies additional attempts. So `max_retries=3` means a total of 4 executions (1 initial + 3 retries). Internally this maps to `max_attempts = max_retries + 1`.
 
@@ -494,7 +494,7 @@ FUNCTION execute_with_retry(node, context, graph, retry_policy):
             ELSE:
                 RETURN Outcome(status=FAIL, failure_reason=str(exception))
 
-        IF outcome.status IN {SUCCESS, PARTIAL_SUCCESS}:
+        IF outcome.status IN {SUCCESS, PARTIAL_SUCCESS, SKIPPED}:
             reset_retry_counter(node.id)
             RETURN outcome
 
@@ -514,6 +514,10 @@ FUNCTION execute_with_retry(node, context, graph, retry_policy):
 
     RETURN Outcome(status=FAIL, failure_reason="max retries exceeded")
 ```
+
+**Note on SKIPPED status:** SKIPPED is treated as success-like for retry and routing purposes — the node executed and decided to skip, which is not a failure. The retry counter is reset and the outcome is returned immediately. However, SKIPPED does **not** satisfy goal gates (§3.4): a skipped goal gate node has not actually achieved its objective, so `check_goal_gates` correctly requires SUCCESS or PARTIAL_SUCCESS.
+
+**Note on failure classification and retry gating:** The `should_retry` predicate in the retry policy considers failure classification metadata (`failure_class` in the outcome's `meta` or `context_updates`), not just the RETRY/FAIL status distinction. Handlers should set semantically correct status (FAIL for deterministic errors, RETRY for transient errors) with `failure_class` metadata. The engine's failure classification acts as a safety net: a RETRY outcome with `failure_class=deterministic` will NOT be retried (the error is permanent), and a FAIL outcome with `failure_class=transient_infra` MAY be retried (the error is temporary). Recognized failure classes: `transient_infra` (retryable), `budget_exhausted` (retryable with escalation), `compilation_loop` (retryable with escalation), `deterministic` (not retryable), `canceled` (not retryable), `structural` (not retryable). If no failure class is provided, the engine classifies based on heuristic matching of `failure_reason` text.
 
 ### 3.6 Retry Policy
 
@@ -677,7 +681,17 @@ CodergenHandler:
                     RETURN result
                 response_text = string(result)
             CATCH exception:
-                RETURN Outcome(status=FAIL, failure_reason=str(exception))
+                -- Classify the error to set semantically correct status.
+                -- Transient errors (rate limits, timeouts, server errors) use RETRY;
+                -- deterministic errors (auth, bad request, model not found) use FAIL.
+                failure_class, failure_signature = classify_error(exception)
+                status = RETRY IF failure_class == "transient_infra" ELSE FAIL
+                RETURN Outcome(
+                    status=status,
+                    failure_reason=str(exception),
+                    meta={"failure_class": failure_class, "failure_signature": failure_signature},
+                    context_updates={"failure_class": failure_class}
+                )
         ELSE:
             response_text = "[Simulated] Response for stage: " + node.id
 
@@ -734,7 +748,7 @@ WaitForHumanHandler:
         options = [Option(key=c.key, label=c.label) FOR c IN choices]
         question = Question(
             text=node.label OR "Select an option:",
-            type=MULTIPLE_CHOICE,
+            type=SINGLE_SELECT,
             options=options,
             stage=node.id
         )
@@ -743,14 +757,23 @@ WaitForHumanHandler:
         answer = interviewer.ask(question)
 
         -- 4. Handle timeout/skip
-        IF answer is TIMEOUT:
+        IF answer.timed_out:
             default_choice = node.attrs["human.default_choice"]
             IF default_choice exists:
-                -- Use default
-            ELSE:
-                RETURN Outcome(status=RETRY, failure_reason="human gate timeout, no default")
+                selected = find_choice_matching(default_choice, choices)
+                IF selected is not NONE:
+                    RETURN Outcome(
+                        status=SUCCESS,
+                        suggested_next_ids=[selected.to],
+                        context_updates={
+                            "human.gate.selected": selected.to,
+                            "human.gate.label": selected.label
+                        },
+                        notes="human gate timeout, used default choice"
+                    )
+            RETURN Outcome(status=RETRY, failure_reason="human gate timeout, no default")
 
-        IF answer is SKIPPED:
+        IF answer.skipped:
             RETURN Outcome(status=FAIL, failure_reason="human skipped interaction")
 
         -- 5. Find matching choice
@@ -763,7 +786,7 @@ WaitForHumanHandler:
             status=SUCCESS,
             suggested_next_ids=[selected.to],
             context_updates={
-                "human.gate.selected": selected.key,
+                "human.gate.selected": selected.to,  -- target node ID (stable, useful for conditions)
                 "human.gate.label": selected.label
             }
         )
@@ -780,78 +803,105 @@ WaitForHumanHandler:
 
 ### 4.7 Conditional Handler
 
-For diamond-shaped nodes that act as conditional routing points. The handler itself is a no-op that returns SUCCESS; the actual routing is handled by the execution engine's edge selection algorithm (Section 3.3), which evaluates conditions on outgoing edges.
+For diamond-shaped nodes that act as conditional routing points. The handler passes through the previous node's outcome (status, preferred_label, failure_reason) so that edge conditions on outgoing edges can evaluate against it. The actual routing is handled by the execution engine's edge selection algorithm (Section 3.3), which evaluates conditions on outgoing edges using the current node's Outcome struct.
 
 ```
 ConditionalHandler:
     FUNCTION execute(node, context, graph, logs_root) -> Outcome:
+        -- Pass through the previous node's outcome so that edge condition
+        -- expressions like "outcome=fail" or "outcome=success" resolve
+        -- correctly.  The condition evaluator (Section 10) reads the
+        -- "outcome" key from the current node's Outcome struct, NOT from
+        -- context.  If this handler returned a fixed SUCCESS, conditional
+        -- edges checking for non-success outcomes would never match,
+        -- breaking diamond-node routing in every pipeline.
+        prev_status  = context.get("outcome", "success")
+        prev_label   = context.get("preferred_label", "")
+        prev_failure = context.get("failure_reason", "")
         RETURN Outcome(
-            status=SUCCESS,
-            notes="Conditional node evaluated: " + node.id
+            status=prev_status,
+            preferred_label=prev_label,
+            failure_reason=prev_failure,
+            notes="conditional pass-through"
         )
 ```
 
-This design keeps routing logic in the engine (where it can be deterministic and inspectable) rather than in the handler.
+This design keeps routing logic in the engine (where it can be deterministic and inspectable) rather than in the handler. The pass-through is necessary because `resolve_key("outcome")` (Section 10) reads the `status` field of the Outcome struct returned by the handler for the current node -- not from the pipeline context. Without pass-through, a diamond node following a failed stage would report SUCCESS, and `condition="outcome=fail"` on the failure edge would never match.
 
 ### 4.8 Parallel Handler
 
-Fans out execution to multiple branches concurrently. Each parallel branch receives an isolated clone of the parent context and runs independently. The handler waits for all branches to complete (or applies a configurable join policy) before returning.
+Fans out execution to multiple branches concurrently. Each parallel branch receives an isolated clone of the parent context and runs independently.
+
+The handler reads `join_policy`, `error_policy`, and `max_parallel` from node attributes. Defaults are `join_policy=wait_all`, `error_policy=continue`, and `max_parallel=4`.
 
 ```
 ParallelHandler:
     FUNCTION execute(node, context, graph, logs_root) -> Outcome:
-        -- 1. Identify fan-out edges (all outgoing edges from this node)
+        -- 1. Identify fan-out edges and join node
         branches = graph.outgoing_edges(node.id)
+        join_node = find_fan_in_node(graph, branches)
 
-        -- 2. Determine join policy from node attributes
+        -- 2. Read configuration from node attributes
+        max_parallel = integer(node.attrs.get("max_parallel", "4"))
         join_policy = node.attrs.get("join_policy", "wait_all")
         error_policy = node.attrs.get("error_policy", "continue")
-        max_parallel = integer(node.attrs.get("max_parallel", "4"))
 
-        -- 3. Execute branches concurrently with bounded parallelism
+        -- 3. Create git checkpoint commit for branch isolation
+        base_sha = git_commit_allow_empty(worktree, message)
+
+        -- 4. Execute branches concurrently with bounded parallelism
+        --    Each branch gets its own git worktree and context clone.
+        --    For policies that support early termination (fail_fast,
+        --    first_success), results are streamed over a channel and
+        --    earlyTerminationCheck is evaluated after each result.
+        --    When early termination fires, the context is cancelled
+        --    so remaining branches observe ctx.Done() and exit.
         results = []
-        FOR EACH branch IN branches (up to max_parallel at a time):
+        FOR EACH branch IN branches (up to max_parallel workers):
+            branch_worktree = create_git_worktree(base_sha)
             branch_context = context.clone()
-            branch_outcome = execute_subgraph(branch.to_node, branch_context, graph, logs_root)
+            branch_outcome = run_subgraph_until(branch.to_node, join_node, branch_context)
             results.append(branch_outcome)
 
-        -- 4. Evaluate join policy
-        success_count = count(r FOR r IN results WHERE r.status == SUCCESS)
-        fail_count = count(r FOR r IN results WHERE r.status == FAIL)
+            -- Check early termination after each result (streaming mode)
+            IF needs_early_termination(join_policy, error_policy):
+                should_cancel, reason = early_termination_check(
+                    join_policy, error_policy, node, branch_outcome,
+                    success_so_far, fail_so_far, total)
+                IF should_cancel:
+                    cancel_remaining_branches()
 
-        IF join_policy == "wait_all":
-            IF fail_count == 0:
-                RETURN Outcome(status=SUCCESS)
-            ELSE:
-                RETURN Outcome(status=PARTIAL_SUCCESS)
+        -- 5. Apply error_policy filtering
+        IF error_policy == "ignore":
+            results = filter_out_failed(results)
 
-        IF join_policy == "first_success":
-            IF success_count > 0:
-                RETURN Outcome(status=SUCCESS)
-            ELSE:
-                RETURN Outcome(status=FAIL)
+        -- 6. Evaluate join policy to determine aggregate outcome
+        outcome = evaluate_join_policy(join_policy, node, results)
 
-        -- 5. Store results in context for downstream fan-in
+        -- 7. Store results in context for downstream fan-in
         context.set("parallel.results", serialize_results(results))
-        RETURN Outcome(status=SUCCESS)
+        context.set("parallel.join_node", join_node)
+        RETURN outcome
 ```
 
 **Join policies:**
 
-| Policy           | Behavior |
-|------------------|----------|
-| `wait_all`       | All branches must complete. Join satisfied when all are done. |
-| `k_of_n`         | At least K branches must succeed. |
-| `first_success`  | Join satisfied as soon as one branch succeeds. Others may be cancelled. |
-| `quorum`         | At least a configurable fraction of branches must succeed. |
+| Policy           | Behavior | Default |
+|------------------|----------|---------|
+| `wait_all`       | All branches must complete. Returns SUCCESS if no branches failed; PARTIAL_SUCCESS otherwise. | Yes (default) |
+| `first_success`  | Returns SUCCESS as soon as one branch succeeds. Remaining branches are cancelled via context cancellation. Returns FAIL if all branches fail. | No |
+| `k_of_n`         | At least K branches must succeed, where K is read from `node.attrs["k"]` (default 1). Returns FAIL if fewer than K succeed. | No |
+| `quorum`         | At least a configurable fraction of branches must succeed, read from `node.attrs["quorum_fraction"]` (default 0.5, range 0-1). The required count is `ceil(total * fraction)`. Returns FAIL if the quorum is not met. | No |
 
 **Error policies:**
 
 | Policy              | Behavior |
 |---------------------|----------|
-| `fail_fast`         | Cancel all remaining branches on first failure. |
-| `continue`          | Continue remaining branches. Collect all results. |
-| `ignore`            | Ignore failures entirely. Return only successful results. |
+| `continue`          | Continue remaining branches regardless of failures. Collect all results. (Default) |
+| `fail_fast`         | Cancel all remaining branches on first failure via context cancellation. |
+| `ignore`            | After all branches complete, filter out failed results before passing to the join policy evaluation and downstream fan-in handler. |
+
+**Early termination:** Policies `fail_fast` and `first_success` use a streaming dispatch pattern where branch results are sent over a channel as they complete. The `earlyTerminationCheck` function is evaluated after each result. When it fires, the cancellable child context is cancelled immediately, and the function waits for all goroutines to finish (via WaitGroup) to prevent leaks. The `k_of_n` policy also supports early termination once K successes have been observed.
 
 ### 4.9 Fan-In Handler
 
@@ -870,29 +920,37 @@ FanInHandler:
             -- LLM-based evaluation: call LLM to rank candidates
             best = llm_evaluate(node.prompt, results)
         ELSE:
-            -- Heuristic: rank by outcome status, then by score
+            -- Heuristic: rank by outcome status, then by branch key
             best = heuristic_select(results)
 
         -- 3. Record winner in context
         context_updates = {
-            "parallel.fan_in.best_id": best.id,
-            "parallel.fan_in.best_outcome": best.outcome
+            "parallel.fan_in.best_id": best.branch_key,
+            "parallel.fan_in.best_outcome": best.outcome,
+            "parallel.fan_in.best_head_sha": best.head_sha,
+            "parallel.fan_in.losers": [loser metadata for non-winners]
         }
 
         RETURN Outcome(
             status=SUCCESS,
             context_updates=context_updates,
-            notes="Selected best candidate: " + best.id
+            notes="fan-in selected " + best.branch_key + " (" + best.outcome.status + ")"
         )
 
 
 FUNCTION heuristic_select(candidates):
+    -- Filter to non-fail candidates only
+    non_fail = [c FOR c IN candidates IF c.outcome != FAIL]
+    IF non_fail is empty: RETURN NONE  -- triggers all-fail path
+
     outcome_rank = {SUCCESS: 0, PARTIAL_SUCCESS: 1, RETRY: 2, FAIL: 3}
-    SORT candidates BY (outcome_rank[c.outcome], -c.score, c.id)
-    RETURN candidates[0]
+    SORT non_fail BY (outcome_rank[c.outcome], c.branch_key, c.head_sha)
+    RETURN non_fail[0]
 ```
 
-Fan-in runs even when some candidates failed, as long as at least one candidate is available. Only when all candidates fail does fan-in return FAIL.
+> **Note on sort order:** The spec originally used `-c.score` as the secondary sort key. No scoring mechanism exists in the git-based parallel workflow — branches are git worktrees that execute subgraphs and return an Outcome with no numeric score. The tiebreaker uses `branch_key` (ascending, lexicographic) for deterministic selection among equally-ranked candidates, followed by `head_sha` for full determinism when branch keys collide.
+
+Fan-in runs even when some candidates failed, as long as at least one non-fail candidate is available. Only when ALL candidates fail does fan-in return FAIL, with `failure_class` metadata aggregated from branch results (deterministic if any branch failed deterministically, transient only if all branches failed transiently).
 
 ### 4.10 Tool Handler
 
@@ -966,6 +1024,19 @@ The manager pattern implements a **supervisor architecture** where:
 - **Guard** scores worker progress and routes to continue, intervene, or escalate
 - **Steer** writes intervention instructions to the child's active stage directory
 
+> **Implementation status:** The ManagerLoopHandler is registered and wired to the `house` shape. The observation loop, child pipeline execution, configurable attributes (`poll_interval`, `max_cycles`, `stop_condition`, `actions`), and stop condition evaluation are fully implemented. Child pipelines are loaded from `stack.child_dotfile` (resolved from graph attrs, then node attrs) and executed using the same sub-pipeline infrastructure as parallel branches (`Prepare`, `runSubgraphUntil`). The `observe` and `wait` actions are implemented; the `steer` action is recognized but logged as deferred to v2 (intervention protocol not yet built).
+>
+> **Configurable attributes:**
+>
+> | Attribute | Default | Description |
+> |-----------|---------|-------------|
+> | `manager.poll_interval` | `45s` | Duration between observation cycles |
+> | `manager.max_cycles` | `1000` | Maximum observation cycles before failing |
+> | `manager.stop_condition` | (empty) | Condition expression evaluated each cycle; when satisfied, the handler returns SUCCESS and cancels the child |
+> | `manager.actions` | `observe,wait` | Comma-separated list of actions per cycle (`observe`, `wait`, `steer`) |
+> | `stack.child_dotfile` | (required) | Path to the child DOT pipeline file, resolved relative to the active worktree |
+> | `stack.child_autostart` | `true` | Whether to auto-start the child pipeline on handler entry |
+
 ### 4.12 Custom Handlers
 
 New handler types are added by implementing the Handler interface and registering with the registry:
@@ -986,7 +1057,8 @@ my_node [type="my_custom_type", shape=box, custom_attr="value"]
 
 **Handler contract:**
 - Handlers MUST be stateless or protect shared mutable state with synchronization.
-- Handler panics/exceptions MUST be caught by the engine and converted to FAIL outcomes.
+- Handler panics/exceptions MUST be caught by the engine and converted to FAIL outcomes (not RETRY).
+- Handlers SHOULD set semantically correct status: use FAIL for deterministic/permanent errors, RETRY for transient errors. Include `failure_class` metadata (in `meta` and/or `context_updates`) so the retry policy can make informed decisions. The engine's failure classification acts as a safety net but handlers should not rely on it as the primary decision-maker.
 - Handlers SHOULD NOT embed provider-specific logic; LLM orchestration is delegated to the integrated SDK.
 
 ---
@@ -1032,10 +1104,14 @@ Context:
         RETURN result
 
     FUNCTION clone() -> Context:
-        -- Deep copy for parallel branch isolation
+        -- Deep copy for parallel branch isolation.
+        -- Each value is deep-copied (e.g., via JSON round-trip) so that
+        -- parallel branches cannot mutate each other's nested maps/slices.
+        -- Primitive types (strings, numbers, booleans) are immutable and
+        -- may be shared directly.
         ACQUIRE read lock
         new_context = new Context()
-        new_context.values = shallow_copy(values)
+        new_context.values = deep_copy(values)
         new_context.logs = copy(logs)
         RELEASE read lock
         RETURN new_context
@@ -1106,7 +1182,7 @@ Checkpoint:
     current_node    : String                  -- ID of the last completed node
     completed_nodes : List<String>            -- IDs of all completed nodes in order
     node_retries    : Map<String, Integer>    -- retry counters per node
-    context_values  : Map<String, Any>        -- serialized snapshot of the context
+    context         : Map<String, Any>        -- serialized snapshot of the context
     logs            : List<String>            -- run log entries
 
     FUNCTION save(path):
@@ -1116,7 +1192,7 @@ Checkpoint:
             "current_node": current_node,
             "completed_nodes": completed_nodes,
             "node_retries": node_retries,
-            "context": serialize_to_json(context_values),
+            "context": serialize_to_json(context),
             "logs": logs
         }
         write_json_file(path, data)
@@ -1130,7 +1206,7 @@ Checkpoint:
 **Resume behavior:**
 
 1. Load the checkpoint from `{logs_root}/checkpoint.json`.
-2. Restore context state from `context_values`.
+2. Restore context state from `context`.
 3. Restore `completed_nodes` to skip already-finished work.
 4. Restore retry counters from `node_retries`.
 5. Determine the next node to execute (the one after `current_node` in the traversal).
@@ -1259,17 +1335,18 @@ INTERFACE Interviewer:
 Question:
     text            : String              -- the question to present to the human
     type            : QuestionType        -- determines the UI and valid answers
-    options         : List<Option>        -- for MULTIPLE_CHOICE type
+    options         : List<Option>        -- for SINGLE_SELECT type
     default         : Answer or NONE      -- default if timeout/skip
-    timeout_seconds : Float or NONE       -- max wait time
+    timeout_seconds : Float or NONE       -- max wait time (0 or NONE = no timeout)
     stage           : String              -- originating stage name (for display)
     metadata        : Map<String, Any>    -- arbitrary key-value pairs
 
 QuestionType:
     YES_NO              -- yes/no binary choice
-    MULTIPLE_CHOICE     -- select one from a list of options
-    FREEFORM            -- free text input
-    CONFIRMATION        -- yes/no confirmation (semantically distinct from YES_NO)
+    SINGLE_SELECT       -- select one from a list of options
+    MULTI_SELECT        -- select multiple from a list of options
+    FREE_TEXT           -- free text input
+    CONFIRM             -- yes/no confirmation (semantically distinct from YES_NO)
 
 Option:
     key   : String    -- accelerator key (e.g., "Y", "A")
@@ -1280,48 +1357,61 @@ Option:
 
 ```
 Answer:
-    value           : String or AnswerValue   -- the selected value
-    selected_option : Option or NONE          -- the full selected option (for MULTIPLE_CHOICE)
-    text            : String                  -- free text response (for FREEFORM)
-
-AnswerValue:
-    YES       -- affirmative
-    NO        -- negative
-    SKIPPED   -- human skipped the question
-    TIMEOUT   -- no response within timeout
+    value           : String              -- the selected value (e.g., accelerator key or "YES"/"NO")
+    values          : List<String>        -- selected values (for MULTI_SELECT)
+    selected_option : Option or NONE      -- the full selected option (for SINGLE_SELECT)
+    text            : String              -- free text response (for FREE_TEXT)
+    timed_out       : Boolean             -- true if the question timed out without a response
+    skipped         : Boolean             -- true if the question was skipped (e.g., queue exhausted)
 ```
+
+The `timed_out` and `skipped` fields are boolean flags rather than enum variants of the `value` field. This allows the handler to distinguish between a timeout/skip and an explicit answer of "YES" or "NO" unambiguously. The handler checks `timed_out` first (to apply default choices or retry), then `skipped` (to fail), then processes the normal `value`/`text` fields.
 
 ### 6.4 Built-In Interviewer Implementations
 
-**AutoApproveInterviewer:** Always selects YES for yes/no questions and the first option for multiple choice. Used for automated testing and CI/CD pipelines where no human is available.
+**AutoApproveInterviewer:** Always selects YES for yes/no questions and the first option for single-select. Used for automated testing and CI/CD pipelines where no human is available.
 
 ```
 AutoApproveInterviewer:
     FUNCTION ask(question) -> Answer:
-        IF question.type IN {YES_NO, CONFIRMATION}:
+        IF question.type IN {YES_NO, CONFIRM}:
             RETURN Answer(value=YES)
-        IF question.type == MULTIPLE_CHOICE AND question.options is not empty:
-            RETURN Answer(value=question.options[0].key, selected_option=question.options[0])
+        IF question.type == SINGLE_SELECT AND question.options is not empty:
+            RETURN Answer(value=question.options[0].key)
         RETURN Answer(value="auto-approved", text="auto-approved")
 ```
 
-**ConsoleInterviewer (CLI):** Reads from standard input. Displays formatted prompts with option keys. Supports timeout via non-blocking read.
+**ConsoleInterviewer (CLI):** Reads from standard input. Displays formatted prompts with option keys. Supports timeout via non-blocking read: reads input in a background thread and uses `timeout_seconds` from the Question to return `Answer(timed_out=true)` if no response arrives in time. If `timeout_seconds` is 0 or NONE, blocks indefinitely.
 
 ```
 ConsoleInterviewer:
     FUNCTION ask(question) -> Answer:
-        print("[?] " + question.text)
-        IF question.type == MULTIPLE_CHOICE:
+        timeout = question.timeout_seconds
+        print("[" + question.stage + "] " + question.text)
+        IF question.type == SINGLE_SELECT:
             FOR EACH option IN question.options:
                 print("  [" + option.key + "] " + option.label)
-            response = read_input("Select: ")
-            RETURN find_matching_option(response, question.options)
-        IF question.type == YES_NO:
-            response = read_input("[Y/N]: ")
+            response = read_input_with_timeout("> ", timeout)
+            IF response is TIMEOUT:
+                RETURN Answer(timed_out=true)
+            RETURN Answer(value=response)
+        IF question.type IN {YES_NO, CONFIRM}:
+            response = read_input_with_timeout("(y/n)> ", timeout)
+            IF response is TIMEOUT:
+                RETURN Answer(timed_out=true)
             RETURN Answer(value=YES if response is "y" ELSE NO)
-        IF question.type == FREEFORM:
-            response = read_input("> ")
+        IF question.type == FREE_TEXT:
+            response = read_input_with_timeout("> ", timeout)
+            IF response is TIMEOUT:
+                RETURN Answer(timed_out=true)
             RETURN Answer(text=response)
+        IF question.type == MULTI_SELECT:
+            FOR EACH option IN question.options:
+                print("  [" + option.key + "] " + option.label)
+            response = read_input_with_timeout("comma-separated> ", timeout)
+            IF response is TIMEOUT:
+                RETURN Answer(timed_out=true)
+            RETURN Answer(values=split(response, ","))
 ```
 
 **CallbackInterviewer:** Delegates question answering to a provided callback function. Useful for integrating with external systems (Slack, web UI, API).
@@ -1334,7 +1424,7 @@ CallbackInterviewer:
         RETURN callback(question)
 ```
 
-**QueueInterviewer:** Reads answers from a pre-filled answer queue. Used for deterministic testing and replay.
+**QueueInterviewer:** Reads answers from a pre-filled answer queue. Used for deterministic testing and replay. Returns `Answer(skipped=true)` when the queue is empty.
 
 ```
 QueueInterviewer:
@@ -1343,7 +1433,7 @@ QueueInterviewer:
     FUNCTION ask(question) -> Answer:
         IF answers is not empty:
             RETURN answers.dequeue()
-        RETURN Answer(value=SKIPPED)
+        RETURN Answer(skipped=true)
 ```
 
 **RecordingInterviewer:** Wraps another interviewer and records all question-answer pairs. Used for replay, debugging, and audit trails.
@@ -1383,7 +1473,8 @@ Diagnostic:
     severity : Severity                  -- ERROR, WARNING, or INFO
     message  : String                    -- human-readable description
     node_id  : String                    -- related node ID (optional)
-    edge     : (String, String) or NONE  -- related edge as (from, to) (optional)
+    edge_from : String or NONE           -- source node of related edge (optional)
+    edge_to   : String or NONE           -- target node of related edge (optional)
     fix      : String                    -- suggested fix (optional)
 
 Severity:
@@ -1409,6 +1500,14 @@ Severity:
 | `retry_target_exists`    | WARNING  | `retry_target` and `fallback_retry_target` must reference existing nodes. |
 | `goal_gate_has_retry`    | WARNING  | Nodes with `goal_gate=true` should have a `retry_target` or `fallback_retry_target`. |
 | `prompt_on_llm_nodes`    | WARNING  | Nodes that resolve to the codergen handler should have a `prompt` or `label` attribute. |
+| `graph_nil`              | ERROR    | Graph must not be nil (programming error guard). |
+| `goal_gate_exit_status_contract` | ERROR | A `goal_gate=true` node routing directly to the exit node must use `outcome=success` or `outcome=partial_success` on the edge condition. |
+| `prompt_file_conflict`   | ERROR    | A node must not have both `prompt_file` and `prompt`/`llm_prompt` — use one or the other. |
+| `llm_provider_required`  | ERROR    | Codergen nodes (shape=box) must have an `llm_provider` attribute; Kilroy forbids provider auto-detection. |
+| `goal_gate_prompt_status_hint` | WARNING | A `goal_gate=true` node's prompt instructs a custom outcome without a canonical success outcome; prefer `outcome=success` or `outcome=partial_success`. |
+| `prompt_on_conditional_node` | WARNING | Diamond (conditional) nodes should not have a `prompt` attribute — prompts are ignored by the conditional handler. Use shape=box if the prompt should execute. |
+| `loop_restart_failure_class_guard` | WARNING | A `loop_restart=true` edge on a failure path should be guarded by `context.failure_class=transient_infra` and paired with a non-restart deterministic fail edge. |
+| `escalation_models_syntax` | WARNING | `escalation_models` entries must use `provider:model` format (e.g., `"anthropic:claude-opus-4-6"`). |
 
 ### 7.3 Validation API
 
@@ -1456,20 +1555,24 @@ The `model_stylesheet` graph attribute provides CSS-like rules for setting defau
 ```
 Stylesheet    ::= Rule+
 Rule          ::= Selector '{' Declaration ( ';' Declaration )* ';'? '}'
-Selector      ::= '*' | '#' Identifier | '.' ClassName
+Selector      ::= '*' | ShapeName | '.' ClassName | '#' Identifier
+ShapeName     ::= [A-Za-z_][A-Za-z0-9_\-.]*    -- bare identifier matching node shape
 ClassName     ::= [a-z0-9-]+
 Declaration   ::= Property ':' PropertyValue
 Property      ::= 'llm_model' | 'llm_provider' | 'reasoning_effort'
 PropertyValue ::= String | 'low' | 'medium' | 'high'
 ```
 
+A bare identifier (without `#` or `.` prefix) is a **shape selector** that matches nodes whose `shape` attribute equals the identifier. This follows the CSS convention where bare element names match by type. Common Graphviz shapes used in Attractor pipelines include `box` (codergen nodes), `diamond` (conditional nodes), `hexagon` (parallel fan-out), and `octagon` (parallel fan-in).
+
 ### 8.3 Selectors and Specificity
 
-| Selector      | Matches                      | Specificity |
-|---------------|------------------------------|-------------|
-| `*`           | All nodes                    | 0 (lowest)  |
-| `.class_name` | Nodes with that class        | 1 (medium)  |
-| `#node_id`    | Specific node by ID          | 2 (highest) |
+| Selector      | Matches                              | Specificity |
+|---------------|--------------------------------------|-------------|
+| `*`           | All nodes                            | 0 (lowest)  |
+| `shape_name`  | Nodes with that shape (e.g., `box`)  | 1           |
+| `.class_name` | Nodes with that class                | 2           |
+| `#node_id`    | Specific node by ID                  | 3 (highest) |
 
 Later rules of equal specificity override earlier ones. Explicit node attributes always override stylesheet values (highest precedence).
 
@@ -1486,7 +1589,7 @@ Later rules of equal specificity override earlier ones. Explicit node attributes
 The resolution order for any model-related property on a node is:
 
 1. Explicit node attribute (e.g., `llm_model="gpt-5.2"` on the node) -- highest precedence
-2. Stylesheet rule matching by specificity (ID > class > universal)
+2. Stylesheet rule matching by specificity (ID > class > shape > universal)
 3. Graph-level default attribute
 4. Handler/system default
 
@@ -1500,6 +1603,7 @@ digraph Pipeline {
         goal="Implement feature X",
         model_stylesheet="
             * { llm_model: claude-sonnet-4-5; llm_provider: anthropic; }
+            box { reasoning_effort: low; }
             .code { llm_model: claude-opus-4-6; llm_provider: anthropic; }
             #critical_review { llm_model: gpt-5.2; llm_provider: openai; reasoning_effort: high; }
         "
@@ -1517,9 +1621,9 @@ digraph Pipeline {
 ```
 
 In this example:
-- `plan` gets `claude-sonnet-4-5` from the `*` rule (no class match for `.code`).
-- `implement` gets `claude-opus-4-6` from the `.code` rule.
-- `critical_review` gets `gpt-5.2` from the `#critical_review` rule (highest specificity), overriding the `.code` class match.
+- `plan` gets `claude-sonnet-4-5` from the `*` rule (no class match for `.code`), and `reasoning_effort: low` from the `box` shape rule (all task nodes default to `box` shape).
+- `implement` gets `claude-opus-4-6` from the `.code` rule (specificity 2 overrides `*` at 0), and `reasoning_effort: low` from the `box` shape rule.
+- `critical_review` gets `gpt-5.2` and `reasoning_effort: high` from the `#critical_review` rule (specificity 3, overriding both `.code` and `box`).
 
 ---
 
@@ -1531,8 +1635,12 @@ Transforms are functions that modify the pipeline graph after parsing and before
 
 ```
 INTERFACE Transform:
-    FUNCTION apply(graph) -> Graph
-    -- Returns a new or modified graph. Should not modify the input graph.
+    FUNCTION id() -> String
+    FUNCTION apply(graph) -> Error
+    -- Mutates the graph in-place. The caller passes ownership of the graph
+    -- to the transform. Returns an error on failure (e.g., missing file,
+    -- conflicting attributes). Transforms run in a deterministic order;
+    -- each transform sees the output of all previous transforms.
 ```
 
 Transforms are applied in a defined order after parsing and before validation:
@@ -1541,7 +1649,8 @@ Transforms are applied in a defined order after parsing and before validation:
 FUNCTION prepare_pipeline(dot_source):
     graph = parse(dot_source)
     FOR EACH transform IN transforms:
-        graph = transform.apply(graph)
+        error = transform.apply(graph)
+        IF error: RETURN error
     diagnostics = validate(graph)
     RETURN (graph, diagnostics)
 ```
@@ -1552,11 +1661,12 @@ FUNCTION prepare_pipeline(dot_source):
 
 ```
 VariableExpansionTransform:
-    FUNCTION apply(graph) -> Graph:
+    FUNCTION id() -> "expand_goal"
+    FUNCTION apply(graph) -> Error:
         FOR EACH node IN graph.nodes:
             IF node.prompt contains "$goal":
                 node.prompt = replace(node.prompt, "$goal", graph.goal)
-        RETURN graph
+        RETURN nil
 ```
 
 **Stylesheet Application Transform:** Applies the `model_stylesheet` to resolve `llm_model`, `llm_provider`, and `reasoning_effort` for each node. See Section 8 for details.
@@ -1681,18 +1791,31 @@ Literal        ::= String | Integer | Boolean
 ### 10.3 Semantics
 
 - Clauses are AND-combined, evaluated left to right.
-- `outcome` refers to the executing node's outcome status (`success`, `retry`, `fail`, `partial_success`).
+- `outcome` refers to the executing node's outcome status (`success`, `retry`, `fail`, `partial_success`, `skipped`).
 - `preferred_label` refers to the `preferred_label` value from the node's outcome.
 - `context.*` keys look up values from the run context. Missing keys compare as empty strings (never equal to non-empty values).
-- String comparison is exact and case-sensitive.
+- String comparison is exact and case-sensitive after alias canonicalization (see below).
 - All clauses must evaluate to true for the condition to pass.
+
+**Outcome alias canonicalization:** When the key is `outcome`, both the resolved value and the comparison literal are canonicalized through `ParseStageStatus` before comparison. This normalizes common aliases to their canonical forms:
+
+| Alias | Canonical form |
+|-------|---------------|
+| `ok` | `success` |
+| `failure`, `error` | `fail` |
+| `skip` | `skipped` |
+| `partialsuccess`, `partial-success` | `partial_success` |
+
+Canonicalization is case-insensitive and trims whitespace. For example, `outcome=skip` matches a node whose status is `skipped`, and `outcome=failure` matches `fail`. Custom (non-canonical) outcome values (e.g., `process`, `done`, `port`) pass through canonicalization unchanged but are lowercased.
+
+This aliasing is intentional: it allows DOT authors to use natural terms (`skip`, `failure`) while the engine stores canonical forms (`skipped`, `fail`). Implementations MUST support these aliases to ensure DOT file portability.
 
 ### 10.4 Variable Resolution
 
 ```
 FUNCTION resolve_key(key, outcome, context) -> String:
     IF key == "outcome":
-        RETURN outcome.status as string
+        RETURN canonicalize(outcome.status)  -- normalize to canonical form (e.g. "skip" -> "skipped")
     IF key == "preferred_label":
         RETURN outcome.preferred_label
     IF key starts with "context.":
@@ -1731,13 +1854,32 @@ FUNCTION evaluate_condition(condition, outcome, context) -> Boolean:
 FUNCTION evaluate_clause(clause, outcome, context) -> Boolean:
     IF clause contains "!=":
         (key, value) = split(clause, "!=", max=1)
-        RETURN resolve_key(trim(key), outcome, context) != trim(value)
+        got = resolve_key(trim(key), outcome, context)
+        want = canonicalize_compare_value(trim(key), trim(value))
+        RETURN got != want
     ELSE IF clause contains "=":
         (key, value) = split(clause, "=", max=1)
-        RETURN resolve_key(trim(key), outcome, context) == trim(value)
+        got = resolve_key(trim(key), outcome, context)
+        want = canonicalize_compare_value(trim(key), trim(value))
+        RETURN got == want
     ELSE:
-        -- Bare key: check if truthy
-        RETURN bool(resolve_key(trim(clause), outcome, context))
+        -- Bare key: check if truthy using extended falsy coercion
+        value = resolve_key(trim(clause), outcome, context)
+        IF value == "":
+            RETURN false
+        IF lowercase(value) IN {"false", "0", "no"}:
+            RETURN false
+        RETURN true
+
+FUNCTION canonicalize_compare_value(key, value) -> String:
+    -- When comparing against 'outcome', canonicalize the literal through
+    -- ParseStageStatus so aliases like "skip", "failure", "ok" match their
+    -- canonical forms ("skipped", "fail", "success").
+    IF key == "outcome":
+        canonical = ParseStageStatus(value)
+        IF canonical is valid:
+            RETURN canonical
+    RETURN value
 ```
 
 ### 10.6 Examples
@@ -1757,6 +1899,15 @@ review -> iterate [condition="context.loop_state!=exhausted"]
 
 -- Route based on preferred label
 gate -> fix [condition="preferred_label=Fix"]
+
+-- Outcome aliases: "skip" is canonicalized to "skipped"
+analyze -> fetch_next [condition="outcome=skip", label="skip"]
+
+-- Outcome aliases: "failure" is canonicalized to "fail"
+plan -> error_handler [condition="outcome=failure"]
+
+-- Bare key with extended falsy: truthy if non-empty and not "false"/"0"/"no"
+deploy -> notify [condition="context.notifications_enabled"]
 ```
 
 ### 10.7 Extended Operators (Future)
@@ -1793,7 +1944,7 @@ This section defines how to validate that an implementation of this spec is comp
 ### 11.2 Validation and Linting
 
 - [ ] Exactly one start node (shape=Mdiamond) is required
-- [ ] Exactly one exit node (shape=Msquare) is required
+- [ ] At least one exit node (shape=Msquare) is required
 - [ ] Start node has no incoming edges
 - [ ] Exit node has no outgoing edges
 - [ ] All nodes are reachable from start (no orphans)
@@ -1823,7 +1974,7 @@ This section defines how to validate that an implementation of this spec is comp
 
 ### 11.5 Retry Logic
 
-- [ ] Nodes with `max_retries > 0` are retried on RETRY or FAIL outcomes
+- [ ] Nodes with `max_retries > 0` are retried on RETRY or FAIL outcomes when the failure class is retryable (transient_infra, budget_exhausted, compilation_loop)
 - [ ] Retry count is tracked per-node and respects the configured limit
 - [ ] Backoff between retries works (constant, linear, or exponential as configured)
 - [ ] Jitter is applied to backoff delays when configured
@@ -1835,7 +1986,7 @@ This section defines how to validate that an implementation of this spec is comp
 - [ ] **Exit handler:** Returns SUCCESS immediately (no-op, engine checks goal gates)
 - [ ] **Codergen handler:** Expands `$goal` in prompt, calls `CodergenBackend.run()`, writes prompt.md and response.md to stage dir
 - [ ] **Wait.human handler:** Presents outgoing edge labels as choices to the interviewer, returns selected label as preferred_label
-- [ ] **Conditional handler:** Passes through; engine evaluates edge conditions against outcome/context
+- [ ] **Conditional handler:** Passes through previous node's outcome (status, preferred_label, failure_reason) so edge conditions evaluate correctly (see §4.7)
 - [ ] **Parallel handler:** Fans out to multiple target nodes concurrently (or sequentially as fallback)
 - [ ] **Fan-in handler:** Waits for all parallel branches to complete before proceeding
 - [ ] **Tool handler:** Executes configured tool/command and returns result
@@ -1852,12 +2003,13 @@ This section defines how to validate that an implementation of this spec is comp
 
 ### 11.8 Human-in-the-Loop
 
-- [ ] Interviewer interface works: `ask(question) -> Answer`
-- [ ] Question supports types: SINGLE_SELECT, MULTI_SELECT, FREE_TEXT, CONFIRM
+- [ ] Interviewer interface works: `ask(question) -> Answer`, `ask_multiple(questions) -> List<Answer>`, `inform(message, stage) -> Void`
+- [ ] Question supports types: YES_NO, SINGLE_SELECT, MULTI_SELECT, FREE_TEXT, CONFIRM
 - [ ] AutoApproveInterviewer always selects the first option (for automation/testing)
-- [ ] ConsoleInterviewer prompts in terminal and reads user input
+- [ ] ConsoleInterviewer prompts in terminal, reads user input, and supports timeout via non-blocking read
 - [ ] CallbackInterviewer delegates to a provided function
-- [ ] QueueInterviewer reads from a pre-filled answer queue (for testing)
+- [ ] QueueInterviewer reads from a pre-filled answer queue; returns `Answer(skipped=true)` when empty
+- [ ] RecordingInterviewer wraps another interviewer and records all Q&A pairs
 
 ### 11.9 Condition Expressions
 
@@ -1881,7 +2033,7 @@ This section defines how to validate that an implementation of this spec is comp
 ### 11.11 Transforms and Extensibility
 
 - [ ] AST transforms can modify the Graph between parsing and validation
-- [ ] Transform interface: `transform(graph) -> graph`
+- [ ] Transform interface: `apply(graph) -> error` (in-place mutation, returns error on failure)
 - [ ] Built-in variable expansion transform replaces `$goal` in prompts
 - [ ] Custom transforms can be registered and run in order
 - [ ] HTTP server mode (if implemented): POST /run starts pipeline, GET /status checks state, POST /answer submits human input
@@ -1983,7 +2135,7 @@ ASSERT "review" IN checkpoint.completed_nodes
 | `goal`                  | String   | `""`    | Pipeline-level goal description |
 | `label`                 | String   | `""`    | Display name for the graph |
 | `model_stylesheet`      | String   | `""`    | CSS-like LLM model/provider stylesheet |
-| `default_max_retry`     | Integer  | `50`    | Global retry ceiling |
+| `default_max_retry`     | Integer  | `3`     | Global retry ceiling |
 | `default_fidelity`      | String   | `""`    | Default context fidelity mode |
 | `retry_target`          | String   | `""`    | Node to jump to on unsatisfied exit |
 | `fallback_retry_target` | String   | `""`    | Secondary jump target |

@@ -248,6 +248,11 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			// Give lots of room for transient LLM errors before failing the stage.
 			policy := attractorLLMRetryPolicy(execCtx, node.ID, prov, mid)
 			sessCfg.LLMRetryPolicy = &policy
+			// Spec §9.7: wire pre-hook filter so tool calls can be skipped by
+			// tool_hooks.pre scripts (non-zero exit = skip the tool call).
+			sessCfg.ToolCallFilter = func(toolName, callID, argsJSON string) string {
+				return runPreToolHook(ctx, execCtx, node, stageDir, toolName, callID, argsJSON)
+			}
 			sess, err := agent.NewSession(client, profile, env, sessCfg)
 			if err != nil {
 				return "", err
@@ -277,6 +282,10 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 					// Best-effort: emit normalized tool call/result turns to CXDB.
 					if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
 						emitCXDBToolTurns(ctx, execCtx.Engine, node.ID, ev)
+					}
+					// Spec §9.7: execute tool hooks around tool calls.
+					if execCtx != nil && execCtx.Engine != nil {
+						executeToolHookForEvent(ctx, execCtx, node, ev, stageDir)
 					}
 					eventsMu.Lock()
 					events = append(events, ev)

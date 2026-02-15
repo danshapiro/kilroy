@@ -21,19 +21,28 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	}
 	applyConfigDefaults(cfg)
 
+	// Create handler registry early so we can wire KnownTypes into validation
+	// and use it for provider requirement checks below.
+	reg := NewDefaultRegistry()
+
 	// Prepare graph (parse + transforms + validate).
-	g, _, err := PrepareWithOptions(dotSource, PrepareOptions{RepoPath: cfg.Repo.Path})
+	g, _, err := PrepareWithOptions(dotSource, PrepareOptions{
+		RepoPath:   cfg.Repo.Path,
+		KnownTypes: reg.KnownTypes(),
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	// Ensure backend is specified for each provider used by the graph.
+	// Use the handler registry to identify nodes that require an LLM provider
+	// instead of hardcoding shape checks.
 	usedProviders := map[string]bool{}
 	for _, n := range g.Nodes {
 		if n == nil {
 			continue
 		}
-		if n.Shape() != "box" {
+		if pr, ok := reg.Resolve(n).(ProviderRequiringHandler); !ok || !pr.RequiresProvider() {
 			continue
 		}
 		p := strings.TrimSpace(n.Attr("llm_provider", ""))
@@ -210,6 +219,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	sink := NewCXDBSink(cxdbClient, bin, opts.RunID, ci.ContextID, ci.HeadTurnID, bundleID)
 
 	eng := newBaseEngine(g, dotSource, opts)
+	eng.Registry = reg // reuse the registry from validation (avoids creating a duplicate)
 	eng.RunConfig = cfg
 	eng.Context = NewContextWithGraphAttrs(g)
 	eng.CodergenBackend = NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
@@ -245,10 +255,14 @@ func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRunt
 	if g == nil || catalog == nil {
 		return nil, nil
 	}
+	reg := NewDefaultRegistry()
 	var checks []providerPreflightCheck
 	warnedUncovered := map[string]bool{}
 	for _, n := range g.Nodes {
-		if n == nil || n.Shape() != "box" {
+		if n == nil {
+			continue
+		}
+		if pr, ok := reg.Resolve(n).(ProviderRequiringHandler); !ok || !pr.RequiresProvider() {
 			continue
 		}
 		provider := normalizeProviderKey(n.Attr("llm_provider", ""))

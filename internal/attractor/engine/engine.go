@@ -147,6 +147,10 @@ type Engine struct {
 	// Optional: normalized event sink (CXDB).
 	CXDB *CXDBSink
 
+	// Artifact store for the run (spec §5.5). Initialized once per run;
+	// handlers access it via Execution.Artifacts.
+	Artifacts *ArtifactStore
+
 	// Model catalog snapshot metadata (metaspec).
 	ModelCatalogSHA    string
 	ModelCatalogSource string
@@ -224,6 +228,10 @@ type PrepareOptions struct {
 	// RepoPath is the repository root directory. When set, prompt_file attributes
 	// on nodes are resolved relative to this path before other transforms run.
 	RepoPath string
+	// KnownTypes is an optional list of handler type strings. When non-empty,
+	// the TypeKnownRule lint rule is added to validation so that nodes with
+	// explicit type= attributes not in this set produce a warning.
+	KnownTypes []string
 }
 
 // Prepare parses/transforms/validates a graph.
@@ -276,11 +284,21 @@ func PrepareWithOptions(dotSource []byte, opts PrepareOptions) (*model.Graph, []
 		}
 	}
 
-	diags := validate.Validate(g)
+	// Spec §7.3: validate_or_raise collects ALL error-severity diagnostics
+	// and reports them together, rather than returning on the first error.
+	var extraRules []validate.LintRule
+	if len(opts.KnownTypes) > 0 {
+		extraRules = append(extraRules, validate.NewTypeKnownRule(opts.KnownTypes))
+	}
+	diags := validate.Validate(g, extraRules...)
+	var errs []string
 	for _, d := range diags {
 		if d.Severity == validate.SeverityError {
-			return g, diags, fmt.Errorf("validation error: %s: %s", d.Rule, d.Message)
+			errs = append(errs, d.Rule+": "+d.Message)
 		}
+	}
+	if len(errs) > 0 {
+		return g, diags, fmt.Errorf("validation failed: %s", strings.Join(errs, "; "))
 	}
 	return g, diags, nil
 }
@@ -290,12 +308,17 @@ func Run(ctx context.Context, dotSource []byte, opts RunOptions) (*Result, error
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err
 	}
-	g, _, err := PrepareWithOptions(dotSource, PrepareOptions{RepoPath: opts.RepoPath})
+	reg := NewDefaultRegistry()
+	g, _, err := PrepareWithOptions(dotSource, PrepareOptions{
+		RepoPath:   opts.RepoPath,
+		KnownTypes: reg.KnownTypes(),
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	eng := newBaseEngine(g, dotSource, opts)
+	eng.Registry = reg
 	eng.CodergenBackend = &SimulatedCodergenBackend{}
 
 	return eng.run(ctx)
@@ -448,8 +471,13 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		e.Context.Set("current_node", current)
 		e.Context.Set("completed_nodes", append([]string{}, completed...))
 
-		// Resolve fidelity/thread info for LLM nodes for checkpointing + resume semantics.
-		if resolvedHandlerType(node) == "codergen" {
+		// Spec §5.1: set built-in context key internal.retry_count.<node_id>.
+		// Initialize to current retry count (0 on first visit, or restored value on resume).
+		e.Context.Set(fmt.Sprintf("internal.retry_count.%s", current), nodeRetries[current])
+
+		// Resolve fidelity/thread info for handlers that declare fidelity awareness
+		// (e.g., LLM nodes) for checkpointing + resume semantics.
+		if fa, ok := e.Registry.Resolve(node).(FidelityAwareHandler); ok && fa.UsesFidelity() {
 			mode, threadKey := resolveFidelityAndThread(e.Graph, e.incomingEdge, node)
 			if strings.TrimSpace(e.forceNextFidelity) != "" && !e.forceNextFidelityUsed {
 				mode = strings.TrimSpace(e.forceNextFidelity)
@@ -619,6 +647,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 						LogsRoot:    e.LogsRoot,
 						WorktreeDir: e.WorktreeDir,
 						Engine:      e,
+						Artifacts:   e.Artifacts,
 					}
 					results, baseSHA, dispatchErr := dispatchParallelBranches(ctx, exec, node.ID, allEdges, joinID)
 					if dispatchErr != nil {
@@ -942,15 +971,19 @@ func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Out
 			LogsRoot:    e.LogsRoot,
 			WorktreeDir: e.WorktreeDir,
 			Engine:      e,
+			Artifacts:   e.Artifacts,
 		}, node)
 	}()
 	if err != nil {
 		// Preserve any metadata (failure_class, failure_signature) the handler
 		// attached to the outcome. Only override Status and FailureReason.
+		// Spec §4.12: handler exceptions are converted to FAIL, not RETRY.
+		// The failure classification safety net (shouldRetryOutcome) will still
+		// promote transient failures to retryable based on failure_class metadata.
 		if cause := context.Cause(ctx); cause != nil && cause != context.Canceled && cause != context.DeadlineExceeded {
 			err = cause
 		}
-		out.Status = runtime.StatusRetry
+		out.Status = runtime.StatusFail
 		out.FailureReason = err.Error()
 	}
 
@@ -1034,10 +1067,11 @@ func (e *Engine) harvestPartialStatus(stageDir string, node *model.Node) map[str
 }
 
 func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries map[string]int) (runtime.Outcome, error) {
-	// Spec: conditional nodes are pass-through routing points. Retrying them based on
-	// a prior stage's FAIL/RETRY just burns retry budget and can create misleading
-	// "max retries exceeded" failures. Execute exactly once.
-	if resolvedHandlerType(node) == "conditional" {
+	// Handlers that implement SingleExecutionHandler with SkipRetry()=true are
+	// pass-through routing points. Retrying them based on a prior stage's
+	// FAIL/RETRY just burns retry budget and can create misleading "max retries
+	// exceeded" failures. Execute exactly once.
+	if se, ok := e.Registry.Resolve(node).(SingleExecutionHandler); ok && se.SkipRetry() {
 		e.appendProgress(map[string]any{
 			"event":   "stage_attempt_start",
 			"node_id": node.ID,
@@ -1056,12 +1090,15 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		return out, nil
 	}
 
-	maxRetries := parseInt(node.Attr("max_retries", ""), 0)
-	if maxRetries == 0 {
-		maxRetries = parseInt(e.Graph.Attrs["default_max_retry"], 0)
+	// Spec §3.5: retry precedence is (1) node max_retries, (2) graph default_max_retry,
+	// (3) built-in default of 3. Use -1 sentinel to distinguish "not set" from "explicitly 0"
+	// so that max_retries=0 on a node genuinely means "no retries".
+	maxRetries := parseInt(node.Attr("max_retries", ""), -1)
+	if maxRetries < 0 {
+		maxRetries = parseInt(e.Graph.Attrs["default_max_retry"], -1)
 	}
 	if maxRetries < 0 {
-		maxRetries = 0
+		maxRetries = 3 // built-in default per spec §2.5
 	}
 	maxAttempts := maxRetries + 1
 
@@ -1119,6 +1156,8 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		}
 
 		failureClass := classifyFailureClass(out)
+		// Spec §9.6: emit StageFailed CXDB event on failure.
+		willRetry := false // updated below if retry is possible
 		canRetry := false
 		if attempt < maxAttempts {
 			// Tool command nodes (shape=parallelogram) always retry when
@@ -1157,8 +1196,17 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			}
 		}
 		if canRetry {
+			willRetry = true
+		}
+		// Spec §9.6: emit StageFailed CXDB event.
+		e.cxdbStageFailed(ctx, node, out.FailureReason, willRetry, attempt)
+		if canRetry {
 			retries[node.ID]++
+			// Spec §5.1: update built-in context key internal.retry_count.<node_id> on each retry.
+			e.Context.Set(fmt.Sprintf("internal.retry_count.%s", node.ID), retries[node.ID])
 			delay := backoffDelayForNode(e.Options.RunID, e.Graph, node, attempt)
+			// Spec §9.6: emit StageRetrying CXDB event.
+			e.cxdbStageRetrying(ctx, node, attempt+1, delay.Milliseconds())
 			e.appendProgress(map[string]any{
 				"event":     "stage_retry_sleep",
 				"node_id":   node.ID,
@@ -1737,17 +1785,25 @@ func hasMatchingOutgoingCondition(g *model.Graph, nodeID string, out runtime.Out
 // Preferred-label and suggested-next-ID narrowing still apply — if they narrow to a single edge,
 // only that edge is returned (no fan-out).
 func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context) ([]*model.Edge, error) {
-	edges := g.Outgoing(from)
+	rawEdges := g.Outgoing(from)
+	if len(rawEdges) == 0 {
+		return nil, nil
+	}
+
+	// Filter nil edges once for use in all subsequent steps.
+	var edges []*model.Edge
+	for _, e := range rawEdges {
+		if e != nil {
+			edges = append(edges, e)
+		}
+	}
 	if len(edges) == 0 {
 		return nil, nil
 	}
 
-	// Eligible conditional edges.
+	// Step 1: Eligible conditional edges.
 	var condMatched []*model.Edge
 	for _, e := range edges {
-		if e == nil {
-			continue
-		}
 		c := strings.TrimSpace(e.Condition())
 		if c == "" {
 			continue
@@ -1764,36 +1820,28 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		return condMatched, nil
 	}
 
-	// Unconditional edges are eligible when no condition matched.
-	var uncond []*model.Edge
-	for _, e := range edges {
-		if e == nil {
-			continue
-		}
-		if strings.TrimSpace(e.Condition()) == "" {
-			uncond = append(uncond, e)
-		}
-	}
-	if len(uncond) == 0 {
-		return nil, nil
-	}
-
-	// Preferred label match narrows to one.
+	// Step 2: Preferred label match narrows to one.
+	// Per spec §3.3, iterates ALL edges (not just unconditional).
 	if strings.TrimSpace(out.PreferredLabel) != "" {
 		want := normalizeLabel(out.PreferredLabel)
-		sort.SliceStable(uncond, func(i, j int) bool { return uncond[i].Order < uncond[j].Order })
-		for _, e := range uncond {
+		sorted := make([]*model.Edge, len(edges))
+		copy(sorted, edges)
+		sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Order < sorted[j].Order })
+		for _, e := range sorted {
 			if normalizeLabel(e.Label()) == want {
 				return []*model.Edge{e}, nil
 			}
 		}
 	}
 
-	// Suggested next IDs narrow to one.
+	// Step 3: Suggested next IDs narrow to one.
+	// Per spec §3.3, iterates ALL edges (not just unconditional).
 	if len(out.SuggestedNextIDs) > 0 {
-		sort.SliceStable(uncond, func(i, j int) bool { return uncond[i].Order < uncond[j].Order })
+		sorted := make([]*model.Edge, len(edges))
+		copy(sorted, edges)
+		sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Order < sorted[j].Order })
 		for _, suggested := range out.SuggestedNextIDs {
-			for _, e := range uncond {
+			for _, e := range sorted {
 				if e.To == suggested {
 					return []*model.Edge{e}, nil
 				}
@@ -1801,7 +1849,24 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		}
 	}
 
-	return uncond, nil
+	// Steps 4 & 5: Weight with lexical tiebreak (unconditional edges only).
+	var uncond []*model.Edge
+	for _, e := range edges {
+		if strings.TrimSpace(e.Condition()) == "" {
+			uncond = append(uncond, e)
+		}
+	}
+	if len(uncond) > 0 {
+		return uncond, nil
+	}
+
+	// No eligible edges: all edges have conditions and none matched, and no
+	// unconditional fallback edge exists. Return nil — the caller will treat
+	// this as a routing gap (the graph needs an unconditional edge or more
+	// complete condition coverage). This is safer than silently routing through
+	// condition-failed edges, which can cause surprising behavior (e.g., a
+	// failed node's output routed through a "success-only" edge).
+	return nil, nil
 }
 
 func bestEdge(edges []*model.Edge) *model.Edge {

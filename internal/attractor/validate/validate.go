@@ -29,7 +29,16 @@ type Diagnostic struct {
 	Fix      string   `json:"fix,omitempty"`
 }
 
-func Validate(g *model.Graph) []Diagnostic {
+// LintRule is the interface for custom lint rules that can be passed to
+// Validate via the extra_rules parameter (spec §7.4).
+type LintRule interface {
+	Name() string
+	Apply(g *model.Graph) []Diagnostic
+}
+
+// Validate runs all built-in lint rules and any extra rules against the graph.
+// Extra rules are appended after built-in rules (spec §7.3).
+func Validate(g *model.Graph, extraRules ...LintRule) []Diagnostic {
 	var diags []Diagnostic
 	if g == nil {
 		return []Diagnostic{{Rule: "graph_nil", Severity: SeverityError, Message: "graph is nil"}}
@@ -54,11 +63,19 @@ func Validate(g *model.Graph) []Diagnostic {
 	diags = append(diags, lintLLMProviderPresent(g)...)
 	diags = append(diags, lintLoopRestartFailureClassGuard(g)...)
 	diags = append(diags, lintEscalationModelsSyntax(g)...)
+	diags = append(diags, lintAllConditionalEdges(g)...)
+
+	// Run custom lint rules (spec §7.3: extra_rules appended after built-in rules).
+	for _, rule := range extraRules {
+		if rule != nil {
+			diags = append(diags, rule.Apply(g)...)
+		}
+	}
 	return diags
 }
 
-func ValidateOrError(g *model.Graph) error {
-	diags := Validate(g)
+func ValidateOrError(g *model.Graph, extraRules ...LintRule) error {
+	diags := Validate(g, extraRules...)
 	var errs []string
 	for _, d := range diags {
 		if d.Severity == SeverityError {
@@ -101,11 +118,12 @@ func lintExitNode(g *model.Graph) []Diagnostic {
 			ids = append(ids, id)
 		}
 	}
-	if len(ids) != 1 {
+	// Spec §7.2: pipeline must have at least one terminal node.
+	if len(ids) == 0 {
 		return []Diagnostic{{
 			Rule:     "terminal_node",
 			Severity: SeverityError,
-			Message:  fmt.Sprintf("pipeline must have exactly one exit node (found %d: %v)", len(ids), ids),
+			Message:  "pipeline must have at least one exit node (found 0)",
 		}}
 	}
 	return nil
@@ -153,18 +171,52 @@ func findStartNodeID(g *model.Graph) string {
 	return ""
 }
 
-func findExitNodeID(g *model.Graph) string {
+func findAllStartNodeIDs(g *model.Graph) []string {
+	var ids []string
+	seen := map[string]bool{}
 	for id, n := range g.Nodes {
-		if n != nil && (n.Shape() == "Msquare" || n.Shape() == "doublecircle") {
-			return id
+		if n != nil && (n.Shape() == "Mdiamond" || n.Shape() == "circle") {
+			if !seen[id] {
+				ids = append(ids, id)
+				seen[id] = true
+			}
 		}
 	}
 	for id := range g.Nodes {
-		if strings.EqualFold(id, "exit") || strings.EqualFold(id, "end") {
-			return id
+		if strings.EqualFold(id, "start") && !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
 		}
 	}
+	return ids
+}
+
+func findExitNodeID(g *model.Graph) string {
+	ids := findAllExitNodeIDs(g)
+	if len(ids) > 0 {
+		return ids[0]
+	}
 	return ""
+}
+
+func findAllExitNodeIDs(g *model.Graph) []string {
+	var ids []string
+	seen := map[string]bool{}
+	for id, n := range g.Nodes {
+		if n != nil && (n.Shape() == "Msquare" || n.Shape() == "doublecircle") {
+			if !seen[id] {
+				ids = append(ids, id)
+				seen[id] = true
+			}
+		}
+	}
+	for id := range g.Nodes {
+		if (strings.EqualFold(id, "exit") || strings.EqualFold(id, "end")) && !seen[id] {
+			ids = append(ids, id)
+			seen[id] = true
+		}
+	}
+	return ids
 }
 
 func lintStartNoIncoming(g *model.Graph) []Diagnostic {
@@ -184,19 +236,23 @@ func lintStartNoIncoming(g *model.Graph) []Diagnostic {
 }
 
 func lintExitNoOutgoing(g *model.Graph) []Diagnostic {
-	exit := findExitNodeID(g)
-	if exit == "" {
+	// Check ALL exit nodes, not just the first one (spec §7.2 allows multiple exit nodes).
+	exitIDs := findAllExitNodeIDs(g)
+	if len(exitIDs) == 0 {
 		return nil
 	}
-	if len(g.Outgoing(exit)) > 0 {
-		return []Diagnostic{{
-			Rule:     "exit_no_outgoing",
-			Severity: SeverityError,
-			Message:  "exit node must have no outgoing edges",
-			NodeID:   exit,
-		}}
+	var diags []Diagnostic
+	for _, exit := range exitIDs {
+		if len(g.Outgoing(exit)) > 0 {
+			diags = append(diags, Diagnostic{
+				Rule:     "exit_no_outgoing",
+				Severity: SeverityError,
+				Message:  "exit node must have no outgoing edges",
+				NodeID:   exit,
+			})
+		}
 	}
-	return nil
+	return diags
 }
 
 func lintReachability(g *model.Graph) []Diagnostic {
@@ -402,9 +458,13 @@ func lintGoalGateHasRetry(g *model.Graph) []Diagnostic {
 }
 
 func lintGoalGateExitStatusContract(g *model.Graph) []Diagnostic {
-	exitID := findExitNodeID(g)
-	if exitID == "" {
+	exitIDs := findAllExitNodeIDs(g)
+	if len(exitIDs) == 0 {
 		return nil
+	}
+	exitSet := map[string]bool{}
+	for _, id := range exitIDs {
+		exitSet[id] = true
 	}
 	var diags []Diagnostic
 	for id, n := range g.Nodes {
@@ -412,7 +472,7 @@ func lintGoalGateExitStatusContract(g *model.Graph) []Diagnostic {
 			continue
 		}
 		for _, e := range g.Outgoing(id) {
-			if e == nil || e.To != exitID {
+			if e == nil || !exitSet[e.To] {
 				continue
 			}
 			statuses := outcomeEqualsStatuses(strings.TrimSpace(e.Condition()))
@@ -784,6 +844,104 @@ func lintEscalationModelsSyntax(g *model.Graph) []Diagnostic {
 					NodeID:   id,
 				})
 			}
+		}
+	}
+	return diags
+}
+
+// TypeKnownRule implements LintRule for the spec §7.2 "type_known" rule.
+// It warns when a node's explicit type override is not in the set of known
+// handler types. The known types are provided at construction time so the
+// validate package does not depend on the engine's handler registry.
+type TypeKnownRule struct {
+	KnownTypes map[string]bool
+}
+
+func NewTypeKnownRule(knownTypes []string) *TypeKnownRule {
+	m := make(map[string]bool, len(knownTypes))
+	for _, t := range knownTypes {
+		m[t] = true
+	}
+	return &TypeKnownRule{KnownTypes: m}
+}
+
+func (r *TypeKnownRule) Name() string { return "type_known" }
+
+func (r *TypeKnownRule) Apply(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for id, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		t := strings.TrimSpace(n.Attr("type", ""))
+		if t == "" {
+			continue
+		}
+		if !r.KnownTypes[t] {
+			diags = append(diags, Diagnostic{
+				Rule:     "type_known",
+				Severity: SeverityWarning,
+				Message:  fmt.Sprintf("node type %q is not recognized by the handler registry", t),
+				NodeID:   id,
+			})
+		}
+	}
+	return diags
+}
+
+// lintAllConditionalEdges warns when a non-terminal node has outgoing edges but
+// all are conditional (no unconditional fallback). This creates a routing gap:
+// if no condition matches at runtime, the engine has no edge to follow.
+func lintAllConditionalEdges(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	exitIDs := make(map[string]bool)
+	for _, id := range findAllExitNodeIDs(g) {
+		exitIDs[id] = true
+	}
+	startIDs := make(map[string]bool)
+	for _, id := range findAllStartNodeIDs(g) {
+		startIDs[id] = true
+	}
+
+	// Build per-node outgoing edge lists.
+	outgoing := make(map[string][]*model.Edge)
+	for _, e := range g.Edges {
+		if e != nil {
+			outgoing[e.From] = append(outgoing[e.From], e)
+		}
+	}
+
+	for id, n := range g.Nodes {
+		if n == nil {
+			continue
+		}
+		// Skip terminal nodes (no outgoing edges expected).
+		if exitIDs[id] {
+			continue
+		}
+		// Skip start nodes (always have unconditional edges by convention).
+		if startIDs[id] {
+			continue
+		}
+		edges := outgoing[id]
+		if len(edges) == 0 {
+			continue // no outgoing edges — other lint rules handle this
+		}
+		allConditional := true
+		for _, e := range edges {
+			if strings.TrimSpace(e.Condition()) == "" {
+				allConditional = false
+				break
+			}
+		}
+		if allConditional {
+			diags = append(diags, Diagnostic{
+				Rule:     "all_conditional_edges",
+				Severity: SeverityWarning,
+				NodeID:   id,
+				Message:  fmt.Sprintf("node %q has %d outgoing edge(s) but all are conditional; add an unconditional fallback edge to avoid routing gaps", id, len(edges)),
+				Fix:      "Add an unconditional edge (no condition attribute) as a fallback route",
+			})
 		}
 	}
 	return diags

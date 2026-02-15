@@ -100,6 +100,19 @@ func (wi *WebInterviewer) Pending() []PendingQuestion {
 	return out
 }
 
+// AskMultiple implements engine.Interviewer. Asks each question sequentially.
+func (wi *WebInterviewer) AskMultiple(questions []engine.Question) []engine.Answer {
+	answers := make([]engine.Answer, len(questions))
+	for idx, q := range questions {
+		answers[idx] = wi.Ask(q)
+	}
+	return answers
+}
+
+// Inform implements engine.Interviewer. No-op for web interviewer — informational
+// messages are delivered via the SSE progress stream instead.
+func (wi *WebInterviewer) Inform(message string, stage string) {}
+
 // Cancel unblocks all in-flight Ask() calls, causing them to return TimedOut answers.
 // Safe to call multiple times.
 func (wi *WebInterviewer) Cancel() {

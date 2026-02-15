@@ -15,6 +15,7 @@ func newBaseEngine(g *model.Graph, dotSource []byte, opts RunOptions) *Engine {
 		Context:     runtime.NewContext(),
 		Registry:    NewDefaultRegistry(),
 		Interviewer: &AutoApproveInterviewer{},
+		Artifacts:   NewArtifactStore(opts.LogsRoot, DefaultFileBackingThreshold),
 	}
 	if opts.ProgressSink != nil {
 		e.progressSink = opts.ProgressSink

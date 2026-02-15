@@ -30,6 +30,7 @@ digraph G {
     shape=parallelogram,
     goal_gate=true,
     retry_target=gate,
+    max_retries=0,
     tool_command="test -f .attempt && echo ok || (touch .attempt; echo fail; exit 1)"
   ]
   start -> gate -> exit
