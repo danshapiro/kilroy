@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/strongdm/kilroy/internal/server"
+	"github.com/danshapiro/kilroy/internal/server"
 )
 
 func attractorServe(args []string) {

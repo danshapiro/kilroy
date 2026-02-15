@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/engine"
+	"github.com/danshapiro/kilroy/internal/attractor/engine"
 )
 
 // WebInterviewer satisfies engine.Interviewer by parking questions until an

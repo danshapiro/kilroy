@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/engine"
+	"github.com/danshapiro/kilroy/internal/attractor/engine"
 )
 
 // waitForPending polls until at least n questions are pending, returning them.

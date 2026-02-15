@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/engine"
+	"github.com/danshapiro/kilroy/internal/attractor/engine"
 )
 
 // newTestServer creates a Server and wraps its mux in httptest.Server.

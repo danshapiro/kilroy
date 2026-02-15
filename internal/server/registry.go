@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/strongdm/kilroy/internal/attractor/engine"
-	"github.com/strongdm/kilroy/internal/attractor/runtime"
+	"github.com/danshapiro/kilroy/internal/attractor/engine"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 // PipelineState tracks a single running or completed pipeline.
