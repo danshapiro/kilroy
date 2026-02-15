@@ -323,24 +323,30 @@ Write status.json: outcome=success if the game is complete and playable per spec
     start -> expand_spec -> impl_setup -> verify_setup -> check_setup
     check_setup -> impl_data_structures [condition="outcome=success"]
     check_setup -> impl_setup           [condition="outcome=fail", label="retry"]
+    check_setup -> impl_setup           [label="fallback"]
 
     impl_data_structures -> verify_data_structures -> check_data_structures
     check_data_structures -> impl_game_logic     [condition="outcome=success"]
     check_data_structures -> impl_data_structures [condition="outcome=fail", label="retry"]
+    check_data_structures -> impl_data_structures [label="fallback"]
 
     impl_game_logic -> verify_game_logic -> check_game_logic
     check_game_logic -> impl_terminal_ui    [condition="outcome=success"]
     check_game_logic -> impl_game_logic     [condition="outcome=fail", label="retry"]
+    check_game_logic -> impl_game_logic     [label="fallback"]
 
     impl_terminal_ui -> verify_terminal_ui -> check_terminal_ui
     check_terminal_ui -> impl_integration   [condition="outcome=success"]
     check_terminal_ui -> impl_terminal_ui   [condition="outcome=fail", label="retry"]
+    check_terminal_ui -> impl_terminal_ui   [label="fallback"]
 
     impl_integration -> verify_integration -> check_integration
     check_integration -> review             [condition="outcome=success"]
     check_integration -> impl_integration   [condition="outcome=fail", label="retry"]
+    check_integration -> impl_integration   [label="fallback"]
 
     review -> check_review
     check_review -> exit            [condition="outcome=success"]
     check_review -> impl_terminal_ui [condition="outcome=fail", label="fix"]
+    check_review -> impl_terminal_ui [label="fallback"]
 }
