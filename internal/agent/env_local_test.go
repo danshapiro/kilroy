@@ -66,7 +66,7 @@ func TestLocalExecutionEnvironment_ExecCommand_ContextCancel_KillsProcessGroup(t
 func TestFilteredEnv_ExcludesSensitiveVars(t *testing.T) {
 	t.Setenv("MY_API_KEY", "secret")
 	t.Setenv("MY_SECRET", "secret2")
-	env := filteredEnv(nil)
+	env := filteredEnv(nil, nil)
 	for _, kv := range env {
 		if strings.HasPrefix(kv, "MY_API_KEY=") || strings.HasPrefix(kv, "MY_SECRET=") {
 			t.Fatalf("sensitive env var leaked: %q", kv)
@@ -167,5 +167,24 @@ func TestLocalExecutionEnvironment_ExecCommand_MergesBaseEnvAndCallEnv(t *testin
 	}
 	if got, want := strings.TrimSpace(res.Stdout), "/tmp/base/status.json|/tmp/base/.ai/status.json|override"; got != want {
 		t.Fatalf("stdout: got %q want %q", got, want)
+	}
+}
+
+func TestLocalExecutionEnvironment_ExecCommand_StripsConfiguredEnvKeys(t *testing.T) {
+	t.Setenv("CLAUDECODE", "1")
+	env := NewLocalExecutionEnvironmentWithPolicy(
+		t.TempDir(),
+		map[string]string{"BASE_ONLY": "base"},
+		[]string{"CLAUDECODE"},
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	res, err := env.ExecCommand(ctx, "printf '%s' \"${CLAUDECODE:-}\"", 5_000, "", nil)
+	if err != nil {
+		t.Fatalf("ExecCommand: %v (res=%+v)", err, res)
+	}
+	if got := strings.TrimSpace(res.Stdout); got != "" {
+		t.Fatalf("CLAUDECODE leaked into child process: %q", got)
 	}
 }

@@ -126,6 +126,24 @@ func readFailureClassHint(out runtime.Outcome) string {
 	return ""
 }
 
+func readFailureSignatureHint(out runtime.Outcome) string {
+	if out.Meta != nil {
+		if raw, ok := out.Meta["failure_signature"]; ok {
+			if s := strings.TrimSpace(fmt.Sprint(raw)); s != "" && s != "<nil>" {
+				return s
+			}
+		}
+	}
+	if out.ContextUpdates != nil {
+		if raw, ok := out.ContextUpdates["failure_signature"]; ok {
+			if s := strings.TrimSpace(fmt.Sprint(raw)); s != "" && s != "<nil>" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
 func normalizedFailureClass(raw string) string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "", "<nil>":
@@ -189,7 +207,10 @@ func restartFailureSignature(nodeID string, out runtime.Outcome, failureClass st
 	if !isFailureLoopRestartOutcome(out) {
 		return ""
 	}
-	reason := normalizeFailureReason(out.FailureReason)
+	reason := normalizeFailureReason(readFailureSignatureHint(out))
+	if reason == "" {
+		reason = normalizeFailureReason(out.FailureReason)
+	}
 	if reason == "" {
 		reason = "status=" + strings.ToLower(strings.TrimSpace(string(out.Status)))
 	}

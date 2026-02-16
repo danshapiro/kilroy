@@ -34,3 +34,12 @@ func TestRuntimePolicy_DefaultsAndValidation(t *testing.T) {
 		t.Fatal("expected validation error for negative max_llm_retries")
 	}
 }
+
+func TestApplyConfigDefaults_CheckpointExcludeGlobs(t *testing.T) {
+	cfg := &RunConfigFile{}
+	applyConfigDefaults(cfg)
+
+	if len(cfg.Git.CheckpointExcludeGlobs) == 0 {
+		t.Fatal("expected non-empty default checkpoint_exclude_globs")
+	}
+}

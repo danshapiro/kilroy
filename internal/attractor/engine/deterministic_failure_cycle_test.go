@@ -8,6 +8,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
 // TestRun_DeterministicFailureCycle_AbortsInfiniteLoop verifies that when
@@ -281,4 +284,91 @@ digraph G {
 	if !strings.Contains(err.Error(), "deterministic failure cycle") {
 		t.Fatalf("expected deterministic failure cycle error from structural accumulation, got: %v", err)
 	}
+}
+
+func TestRestartFailureSignature_UsesFailureSignatureHint(t *testing.T) {
+	outA := runtime.Outcome{
+		Status:        runtime.StatusFail,
+		FailureReason: "verbose prose: wasm-pack permission denied in step A",
+		Meta: map[string]any{
+			"failure_signature": "environmental_tooling_blocks",
+		},
+	}
+	outB := runtime.Outcome{
+		Status:        runtime.StatusFail,
+		FailureReason: "different prose: cross-device link while moving artifacts",
+		Meta: map[string]any{
+			"failure_signature": "environmental_tooling_blocks",
+		},
+	}
+
+	sigA := restartFailureSignature("verify_impl", outA, failureClassDeterministic)
+	sigB := restartFailureSignature("verify_impl", outB, failureClassDeterministic)
+	if sigA != sigB {
+		t.Fatalf("signatures should match when failure_signature hint is stable: %q vs %q", sigA, sigB)
+	}
+	if !strings.Contains(sigA, "environmental_tooling_blocks") {
+		t.Fatalf("signature should include failure_signature hint, got: %q", sigA)
+	}
+}
+
+func TestRunSubgraphUntil_DeterministicCycleBreaker_UsesStableFailureSignatureHint(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+
+	dot := []byte(`
+digraph G {
+  graph [goal="signature-hint cycle fixture", loop_restart_signature_limit="2"]
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  a [shape=diamond, type="signature_hint_cycle_fixture"]
+  start -> a
+  a -> a [condition="outcome=fail"]
+  a -> exit [condition="outcome=success"]
+}
+`)
+	eng := newReliabilityFixtureEngine(t, repo, logsRoot, "signature-hint-cycle-fixture", dot)
+	eng.Registry.Register("signature_hint_cycle_fixture", &signatureHintCycleFixtureHandler{})
+
+	_, err := runSubgraphUntil(context.Background(), eng, "a", "")
+	if err == nil || !strings.Contains(err.Error(), "deterministic failure cycle") {
+		t.Fatalf("expected deterministic failure cycle error, got %v", err)
+	}
+
+	events := readFixtureProgressEvents(t, filepath.Join(logsRoot, "progress.ndjson"))
+	var sigs []string
+	for _, ev := range events {
+		if strings.TrimSpace(fmt.Sprint(ev["event"])) != "subgraph_deterministic_failure_cycle_check" {
+			continue
+		}
+		sigs = append(sigs, strings.TrimSpace(fmt.Sprint(ev["signature"])))
+	}
+	if len(sigs) < 2 {
+		t.Fatalf("expected at least 2 deterministic_failure_cycle_check events, got %d", len(sigs))
+	}
+	if sigs[0] == "" || sigs[0] != sigs[1] {
+		t.Fatalf("expected stable signature across varied prose, got %v", sigs[:2])
+	}
+}
+
+type signatureHintCycleFixtureHandler struct {
+	calls int
+}
+
+func (h *signatureHintCycleFixtureHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
+	_ = ctx
+	_ = exec
+	_ = node
+	h.calls++
+	return runtime.Outcome{
+		Status:        runtime.StatusFail,
+		FailureReason: fmt.Sprintf("attempt %d: verbose tooling failure text changed", h.calls),
+		Meta: map[string]any{
+			"failure_class":     failureClassDeterministic,
+			"failure_signature": "environmental_tooling_blocks",
+		},
+		ContextUpdates: map[string]any{
+			"failure_class": failureClassDeterministic,
+		},
+	}, nil
 }

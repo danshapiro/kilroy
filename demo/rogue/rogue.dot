@@ -118,14 +118,37 @@ digraph rogue {
     ]
 
     // =========================================================================
-    // Verify/check inner loop — catches build errors before expensive reviews
+    // Verify/check inner loop — deterministic tool gates first, then fidelity
     // =========================================================================
-    verify_impl [
+    verify_fmt [
+        shape=parallelogram,
+        tool_command="bash -lc 'set -euo pipefail; cd demo/rogue/rogue-wasm && cargo fmt --all -- --check'"
+    ]
+    check_fmt [shape=diamond, label="Fmt OK?"]
+
+    verify_build [
+        shape=parallelogram,
+        tool_command="bash -lc 'set -euo pipefail; cd demo/rogue/rogue-wasm && cargo check --target wasm32-unknown-unknown'"
+    ]
+    check_build [shape=diamond, label="Build OK?"]
+
+    verify_test [
+        shape=parallelogram,
+        tool_command="bash -lc 'set -euo pipefail; cd demo/rogue/rogue-wasm && cargo test && wasm-pack build --target web'"
+    ]
+    check_test [shape=diamond, label="Tests/WASM OK?"]
+
+    verify_artifacts [
+        shape=parallelogram,
+        tool_command="bash -lc 'set -euo pipefail; paths=$(git diff --name-only $base_sha -- || true); bad=$(printf \"%s\\n\" \"$paths\" | rg -n \"(^|/)(target|dist|build|pkg|node_modules|\\.cargo-target|\\.cargo_target)($|/)\" || true); test -f demo/rogue/rogue-wasm/www/index.html; if [ -n \"$bad\" ]; then echo \"artifact_pollution\" >&2; echo \"$bad\" >&2; exit 1; fi'"
+    ]
+    check_artifacts [shape=diamond, label="Artifacts OK?"]
+
+    verify_fidelity [
         shape=box,
         class="verify",
-        prompt="Verify the Rogue WASM port implementation.\n\nRun these checks in order:\n\n1. Build check:\n   cd demo/rogue/rogue-wasm && cargo check --target wasm32-unknown-unknown\n\n2. Unit tests:\n   cd demo/rogue/rogue-wasm && cargo test\n\n3. WASM pack build:\n   cd demo/rogue/rogue-wasm && wasm-pack build --target web\n\n4. Formatting check (changed Rust files only):\n   changed=$(git diff --name-only $base_sha -- '*.rs')\n   if [ -n \"$changed\" ]; then\n     cd demo/rogue/rogue-wasm && cargo fmt --all -- --check\n   fi\n\n5. HTML shell exists:\n   test -f demo/rogue/rogue-wasm/www/index.html\n\n6. Artifact hygiene: fail if git diff --name-only $base_sha -- contains paths under target/, dist/, build/, pkg/ (wasm-pack output), node_modules/, or backup/temp patterns. Only source files and www/ assets should be committed.\n\nIMPORTANT: Do NOT run project-wide lint outside demo/rogue/rogue-wasm/. Only check files in the rogue-wasm crate.\n\nWrite results to .ai/verify_impl.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if all pass, outcome=fail with failure_reason and details."
+        prompt="Perform semantic fidelity review after deterministic tooling gates pass.\n\nRead:\n- .ai/definition_of_done.md\n- .ai/spec.md\n- .ai/implementation_log.md\n- The implementation under demo/rogue/rogue-wasm/\n- The original C source at demo/rogue/original-rogue/\n\nConfirm algorithmic fidelity (RNG, dungeon generation, monster stats, combat math), gameplay completeness, and browser playability.\n\nWrite results to .ai/verify_fidelity.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if fidelity checks pass, outcome=fail with failure_reason and details."
     ]
-
     check_impl [shape=diamond, label="Impl OK?"]
 
     // =========================================================================
@@ -134,19 +157,19 @@ digraph rogue {
     review_a [
         shape=box,
         class="branch-a",
-        prompt="Goal: $goal\n\nReview the Rogue 5.4.4 C-to-Rust/WASM port implementation.\n\nRead:\n- .ai/definition_of_done.md (acceptance criteria)\n- .ai/spec.md (detailed specification)\n- .ai/implementation_log.md (what was done)\n- The implementation under demo/rogue/rogue-wasm/\n- The original C source at demo/rogue/original-rogue/ for fidelity comparison\n\nCheck each category:\n1. BUILD: Does cargo check --target wasm32-unknown-unknown pass? Does wasm-pack build --target web succeed?\n2. FIDELITY: Compare key algorithms against the C originals. Is the RNG identical? Are monster stats, item tables, and combat math faithfully ported? Spot-check at least 5 C functions against their Rust equivalents.\n3. COMPLETENESS: Are all game systems ported? (dungeon gen, monsters, items, combat, movement, inventory, save/load, I/O bridge) Check against the module list in .ai/spec.md.\n4. RENDERING: Does www/index.html exist with an 80x24 terminal renderer? Are all glyphs correct (@ player, # corridors, A-Z monsters)?\n5. TESTS: Do unit tests exist and pass for RNG, dungeon generation, combat math?\n\nWrite review to .ai/review_a.md with a PASS or FAIL verdict and specific evidence for each category.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=pass if meets DoD, outcome=fail with failure_reason and specific gaps."
+        prompt="Goal: $goal\n\nReview the Rogue 5.4.4 C-to-Rust/WASM port implementation.\n\nRead:\n- .ai/definition_of_done.md (acceptance criteria)\n- .ai/spec.md (detailed specification)\n- .ai/implementation_log.md (what was done)\n- The implementation under demo/rogue/rogue-wasm/\n- The original C source at demo/rogue/original-rogue/ for fidelity comparison\n\nCheck each category:\n1. BUILD: Does cargo check --target wasm32-unknown-unknown pass? Does wasm-pack build --target web succeed?\n2. FIDELITY: Compare key algorithms against the C originals. Is the RNG identical? Are monster stats, item tables, and combat math faithfully ported? Spot-check at least 5 C functions against their Rust equivalents.\n3. COMPLETENESS: Are all game systems ported? (dungeon gen, monsters, items, combat, movement, inventory, save/load, I/O bridge) Check against the module list in .ai/spec.md.\n4. RENDERING: Does www/index.html exist with an 80x24 terminal renderer? Are all glyphs correct (@ player, # corridors, A-Z monsters)?\n5. TESTS: Do unit tests exist and pass for RNG, dungeon generation, combat math?\n\nWrite review to .ai/review_a.md with a PASS or FAIL verdict and specific evidence for each category.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
     ]
 
     review_b [
         shape=box,
         class="branch-b",
-        prompt="Goal: $goal\n\nReview the Rogue 5.4.4 C-to-Rust/WASM port implementation.\n\nRead:\n- .ai/definition_of_done.md (acceptance criteria)\n- .ai/spec.md (detailed specification)\n- .ai/implementation_log.md (what was done)\n- The implementation under demo/rogue/rogue-wasm/\n- The original C source at demo/rogue/original-rogue/ for fidelity comparison\n\nCheck each category:\n1. BUILD: Does cargo check --target wasm32-unknown-unknown pass? Does wasm-pack build --target web succeed?\n2. FIDELITY: Compare key algorithms against the C originals. Is the RNG identical? Are monster stats, item tables, and combat math faithfully ported? Spot-check at least 5 C functions against their Rust equivalents.\n3. COMPLETENESS: Are all game systems ported? (dungeon gen, monsters, items, combat, movement, inventory, save/load, I/O bridge) Check against the module list in .ai/spec.md.\n4. RENDERING: Does www/index.html exist with an 80x24 terminal renderer? Are all glyphs correct (@ player, # corridors, A-Z monsters)?\n5. TESTS: Do unit tests exist and pass for RNG, dungeon generation, combat math?\n\nWrite review to .ai/review_b.md with a PASS or FAIL verdict and specific evidence for each category.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=pass if meets DoD, outcome=fail with failure_reason and specific gaps."
+        prompt="Goal: $goal\n\nReview the Rogue 5.4.4 C-to-Rust/WASM port implementation.\n\nRead:\n- .ai/definition_of_done.md (acceptance criteria)\n- .ai/spec.md (detailed specification)\n- .ai/implementation_log.md (what was done)\n- The implementation under demo/rogue/rogue-wasm/\n- The original C source at demo/rogue/original-rogue/ for fidelity comparison\n\nCheck each category:\n1. BUILD: Does cargo check --target wasm32-unknown-unknown pass? Does wasm-pack build --target web succeed?\n2. FIDELITY: Compare key algorithms against the C originals. Is the RNG identical? Are monster stats, item tables, and combat math faithfully ported? Spot-check at least 5 C functions against their Rust equivalents.\n3. COMPLETENESS: Are all game systems ported? (dungeon gen, monsters, items, combat, movement, inventory, save/load, I/O bridge) Check against the module list in .ai/spec.md.\n4. RENDERING: Does www/index.html exist with an 80x24 terminal renderer? Are all glyphs correct (@ player, # corridors, A-Z monsters)?\n5. TESTS: Do unit tests exist and pass for RNG, dungeon generation, combat math?\n\nWrite review to .ai/review_b.md with a PASS or FAIL verdict and specific evidence for each category.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
     ]
 
     review_c [
         shape=box,
         class="branch-c",
-        prompt="Goal: $goal\n\nReview the Rogue 5.4.4 C-to-Rust/WASM port implementation.\n\nRead:\n- .ai/definition_of_done.md (acceptance criteria)\n- .ai/spec.md (detailed specification)\n- .ai/implementation_log.md (what was done)\n- The implementation under demo/rogue/rogue-wasm/\n- The original C source at demo/rogue/original-rogue/ for fidelity comparison\n\nCheck each category:\n1. BUILD: Does cargo check --target wasm32-unknown-unknown pass? Does wasm-pack build --target web succeed?\n2. FIDELITY: Compare key algorithms against the C originals. Is the RNG identical? Are monster stats, item tables, and combat math faithfully ported? Spot-check at least 5 C functions against their Rust equivalents.\n3. COMPLETENESS: Are all game systems ported? (dungeon gen, monsters, items, combat, movement, inventory, save/load, I/O bridge) Check against the module list in .ai/spec.md.\n4. RENDERING: Does www/index.html exist with an 80x24 terminal renderer? Are all glyphs correct (@ player, # corridors, A-Z monsters)?\n5. TESTS: Do unit tests exist and pass for RNG, dungeon generation, combat math?\n\nWrite review to .ai/review_c.md with a PASS or FAIL verdict and specific evidence for each category.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=pass if meets DoD, outcome=fail with failure_reason and specific gaps."
+        prompt="Goal: $goal\n\nReview the Rogue 5.4.4 C-to-Rust/WASM port implementation.\n\nRead:\n- .ai/definition_of_done.md (acceptance criteria)\n- .ai/spec.md (detailed specification)\n- .ai/implementation_log.md (what was done)\n- The implementation under demo/rogue/rogue-wasm/\n- The original C source at demo/rogue/original-rogue/ for fidelity comparison\n\nCheck each category:\n1. BUILD: Does cargo check --target wasm32-unknown-unknown pass? Does wasm-pack build --target web succeed?\n2. FIDELITY: Compare key algorithms against the C originals. Is the RNG identical? Are monster stats, item tables, and combat math faithfully ported? Spot-check at least 5 C functions against their Rust equivalents.\n3. COMPLETENESS: Are all game systems ported? (dungeon gen, monsters, items, combat, movement, inventory, save/load, I/O bridge) Check against the module list in .ai/spec.md.\n4. RENDERING: Does www/index.html exist with an 80x24 terminal renderer? Are all glyphs correct (@ player, # corridors, A-Z monsters)?\n5. TESTS: Do unit tests exist and pass for RNG, dungeon generation, combat math?\n\nWrite review to .ai/review_c.md with a PASS or FAIL verdict and specific evidence for each category.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success if meets DoD, outcome=fail with failure_reason and specific gaps."
     ]
 
     // =========================================================================
@@ -155,7 +178,7 @@ digraph rogue {
     review_consensus [
         shape=box,
         goal_gate=true,
-        prompt="Goal: $goal\n\nSynthesize .ai/review_a.md, .ai/review_b.md, .ai/review_c.md into a consensus verdict.\nRead .ai/definition_of_done.md for the full criteria list.\n\nRules:\n- If 2+ reviewers PASS and no critical gaps are identified: outcome=pass.\n- If any reviewer identifies a critical gap (build failure, missing game system, broken rendering): outcome=retry with failure_reason listing every specific issue.\n- Weight fidelity issues (wrong algorithms, mismatched stats) as critical.\n\nWrite consensus to .ai/review_consensus.md with:\n- Summary of each reviewer's verdict\n- List of agreed issues (if any)\n- Final verdict with justification\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=pass or outcome=retry with failure_reason and details."
+        prompt="Goal: $goal\n\nSynthesize .ai/review_a.md, .ai/review_b.md, .ai/review_c.md into a consensus verdict.\nRead .ai/definition_of_done.md for the full criteria list.\n\nRules:\n- If 2+ reviewers PASS and no critical gaps are identified: outcome=success.\n- If any reviewer identifies a critical gap (build failure, missing game system, broken rendering): outcome=retry with failure_reason listing every specific issue.\n- Weight fidelity issues (wrong algorithms, mismatched stats) as critical.\n\nWrite consensus to .ai/review_consensus.md with:\n- Summary of each reviewer's verdict\n- List of agreed issues (if any)\n- Final verdict with justification\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH (absolute path), fallback to $KILROY_STAGE_STATUS_FALLBACK_PATH, and do not write nested status.json files.\nWrite status JSON: outcome=success or outcome=retry with failure_reason and details."
     ]
 
     // =========================================================================
@@ -195,20 +218,40 @@ digraph rogue {
     plan_c -> debate_consolidate
     debate_consolidate -> implement
 
-    // Verify/check inner loop (catches build errors before reviews)
-    implement -> verify_impl -> check_impl
-    check_impl -> review_a   [condition="outcome=success"]
-    check_impl -> review_b   [condition="outcome=success"]
-    check_impl -> review_c   [condition="outcome=success"]
-    check_impl -> implement  [condition="outcome=fail", label="retry"]
+    // Verify/check inner loop (tool gates first, semantic fidelity last)
+    implement -> verify_fmt -> check_fmt
+    check_fmt -> verify_build [condition="outcome=success"]
+    check_fmt -> implement    [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_fmt -> postmortem   [condition="outcome=fail && context.failure_class!=transient_infra"]
+
+    verify_build -> check_build
+    check_build -> verify_test [condition="outcome=success"]
+    check_build -> implement   [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_build -> postmortem  [condition="outcome=fail && context.failure_class!=transient_infra"]
+
+    verify_test -> check_test
+    check_test -> verify_artifacts [condition="outcome=success"]
+    check_test -> implement        [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_test -> postmortem       [condition="outcome=fail && context.failure_class!=transient_infra"]
+
+    verify_artifacts -> check_artifacts
+    check_artifacts -> verify_fidelity [condition="outcome=success"]
+    check_artifacts -> implement       [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_artifacts -> postmortem      [condition="outcome=fail && context.failure_class!=transient_infra"]
+
+    verify_fidelity -> check_impl
+    check_impl -> review_a [condition="outcome=success"]
+    check_impl -> review_b [condition="outcome=success"]
+    check_impl -> review_c [condition="outcome=success"]
+    check_impl -> postmortem [condition="outcome=fail"]
 
     // Review fan-in -> consensus
     review_a -> review_consensus
     review_b -> review_consensus
     review_c -> review_consensus
 
-    // Consensus routing: pass -> exit, anything else -> postmortem
-    review_consensus -> exit [condition="outcome=pass"]
+    // Consensus routing: success -> exit, anything else -> postmortem
+    review_consensus -> exit [condition="outcome=success"]
     review_consensus -> postmortem
 
     // Hill-climbing loop: postmortem -> re-plan -> re-implement -> re-review

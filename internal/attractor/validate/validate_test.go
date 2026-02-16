@@ -182,6 +182,50 @@ digraph G {
 	}
 }
 
+func TestValidate_FailLoopFailureClassGuard_WarnsWhenBackEdgeUnguarded(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  impl [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  check [shape=diamond]
+  start -> impl -> check
+  check -> impl [condition="outcome=fail"]
+  check -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "fail_loop_failure_class_guard", SeverityWarning)
+}
+
+func TestValidate_FailLoopFailureClassGuard_NoWarningWhenFailureClassGuarded(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  impl [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="x"]
+  check [shape=diamond]
+  start -> impl -> check
+  check -> impl [condition="outcome=fail && context.failure_class=transient_infra"]
+  check -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+  postmortem [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="p"]
+  check -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	for _, d := range diags {
+		if d.Rule == "fail_loop_failure_class_guard" {
+			t.Fatalf("unexpected fail_loop_failure_class_guard warning: %+v", d)
+		}
+	}
+}
+
 func TestValidate_EscalationModelsSyntax_Valid_NoWarning(t *testing.T) {
 	g, err := dot.Parse([]byte(`
 digraph G {
@@ -454,7 +498,7 @@ type testLintRule struct {
 	diag Diagnostic
 }
 
-func (r *testLintRule) Name() string                     { return r.name }
+func (r *testLintRule) Name() string                      { return r.name }
 func (r *testLintRule) Apply(g *model.Graph) []Diagnostic { return []Diagnostic{r.diag} }
 
 func TestValidate_ExtraRules_AreAppendedToBuiltInRules(t *testing.T) {

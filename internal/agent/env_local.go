@@ -17,16 +17,32 @@ import (
 )
 
 type LocalExecutionEnvironment struct {
-	RootDir string
-	BaseEnv map[string]string
+	RootDir      string
+	BaseEnv      map[string]string
+	StripEnvKeys []string
+}
+
+func NewLocalExecutionEnvironmentWithPolicy(rootDir string, baseEnv map[string]string, stripKeys []string) *LocalExecutionEnvironment {
+	baseCopy := map[string]string{}
+	for k, v := range baseEnv {
+		baseCopy[k] = v
+	}
+	stripCopy := make([]string, 0, len(stripKeys))
+	for _, k := range stripKeys {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		stripCopy = append(stripCopy, k)
+	}
+	return &LocalExecutionEnvironment{
+		RootDir:      rootDir,
+		BaseEnv:      baseCopy,
+		StripEnvKeys: stripCopy,
+	}
 }
 
 func NewLocalExecutionEnvironmentWithBaseEnv(rootDir string, baseEnv map[string]string) *LocalExecutionEnvironment {
-	cp := map[string]string{}
-	for k, v := range baseEnv {
-		cp[k] = v
-	}
-	return &LocalExecutionEnvironment{RootDir: rootDir, BaseEnv: cp}
+	return NewLocalExecutionEnvironmentWithPolicy(rootDir, baseEnv, nil)
 }
 
 func NewLocalExecutionEnvironment(rootDir string) *LocalExecutionEnvironment {
@@ -262,7 +278,7 @@ func (e *LocalExecutionEnvironment) ExecCommand(ctx context.Context, command str
 	for k, v := range envVars {
 		mergedEnv[k] = v
 	}
-	cmd.Env = filteredEnv(mergedEnv)
+	cmd.Env = filteredEnv(mergedEnv, e.StripEnvKeys)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -348,7 +364,22 @@ func killProcessGroup(pid int) {
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
 }
 
-func filteredEnv(extra map[string]string) []string {
+func filteredEnv(extra map[string]string, stripKeys []string) []string {
+	stripped := map[string]bool{}
+	for _, k := range stripKeys {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		stripped[k] = true
+		stripped[strings.ToUpper(k)] = true
+	}
+	isStripped := func(k string) bool {
+		if stripped[k] {
+			return true
+		}
+		return stripped[strings.ToUpper(k)]
+	}
 	deny := func(k string) bool {
 		uk := strings.ToUpper(k)
 		if strings.Contains(uk, "API_KEY") || strings.Contains(uk, "SECRET") || strings.Contains(uk, "TOKEN") || strings.Contains(uk, "PASSWORD") || strings.Contains(uk, "CREDENTIAL") {
@@ -373,6 +404,9 @@ func filteredEnv(extra map[string]string) []string {
 		if !ok {
 			continue
 		}
+		if isStripped(k) {
+			continue
+		}
 		if allow[k] && !deny(k) {
 			out = append(out, kv)
 			continue
@@ -384,6 +418,9 @@ func filteredEnv(extra map[string]string) []string {
 		out = append(out, kv)
 	}
 	for k, v := range extra {
+		if isStripped(k) {
+			continue
+		}
 		if deny(k) {
 			continue
 		}

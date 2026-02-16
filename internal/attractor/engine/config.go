@@ -92,10 +92,11 @@ type RunConfigFile struct {
 	} `json:"modeldb" yaml:"modeldb"`
 
 	Git struct {
-		RequireClean    *bool  `json:"require_clean,omitempty" yaml:"require_clean,omitempty"`
-		RunBranchPrefix string `json:"run_branch_prefix" yaml:"run_branch_prefix"`
-		CommitPerNode   bool   `json:"commit_per_node" yaml:"commit_per_node"`
-		PushRemote      string `json:"push_remote,omitempty" yaml:"push_remote,omitempty"`
+		RequireClean           *bool    `json:"require_clean,omitempty" yaml:"require_clean,omitempty"`
+		RunBranchPrefix        string   `json:"run_branch_prefix" yaml:"run_branch_prefix"`
+		CommitPerNode          bool     `json:"commit_per_node" yaml:"commit_per_node"`
+		PushRemote             string   `json:"push_remote,omitempty" yaml:"push_remote,omitempty"`
+		CheckpointExcludeGlobs []string `json:"checkpoint_exclude_globs,omitempty" yaml:"checkpoint_exclude_globs,omitempty"`
 	} `json:"git" yaml:"git"`
 
 	Setup struct {
@@ -149,6 +150,15 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	if cfg.Git.RequireClean == nil {
 		t := true
 		cfg.Git.RequireClean = &t
+	}
+	cfg.Git.CheckpointExcludeGlobs = trimNonEmpty(cfg.Git.CheckpointExcludeGlobs)
+	if len(cfg.Git.CheckpointExcludeGlobs) == 0 {
+		cfg.Git.CheckpointExcludeGlobs = []string{
+			"**/.cargo-target*/**",
+			"**/.cargo_target*/**",
+			"**/.wasm-pack/**",
+			"**/.tmpbuild/**",
+		}
 	}
 	if cfg.LLM.Providers == nil {
 		cfg.LLM.Providers = map[string]ProviderConfig{}

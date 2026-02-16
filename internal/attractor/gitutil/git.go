@@ -107,10 +107,37 @@ func AddAll(worktreeDir string) error {
 	return err
 }
 
+// AddAllWithExcludes stages all changes except paths matching provided git
+// pathspec globs via :(exclude)<glob>.
+func AddAllWithExcludes(worktreeDir string, excludes []string) error {
+	args := []string{"add", "-A", "--", "."}
+	for _, p := range excludes {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		if strings.HasPrefix(p, ":(") {
+			args = append(args, p)
+			continue
+		}
+		args = append(args, ":(glob,exclude)"+p)
+	}
+	_, _, err := runGit(worktreeDir, args...)
+	return err
+}
+
 func CommitAllowEmpty(worktreeDir, message string) (string, error) {
-	if err := AddAll(worktreeDir); err != nil {
+	return CommitAllowEmptyWithExcludes(worktreeDir, message, nil)
+}
+
+func CommitAllowEmptyWithExcludes(worktreeDir, message string, excludes []string) (string, error) {
+	if err := AddAllWithExcludes(worktreeDir, excludes); err != nil {
 		return "", err
 	}
+	return commitAllowEmpty(worktreeDir, message)
+}
+
+func commitAllowEmpty(worktreeDir, message string) (string, error) {
 	_, _, err := runGit(worktreeDir, "commit", "--allow-empty", "-m", message)
 	if err != nil {
 		// If identity is missing, retry once with an explicit fallback committer identity

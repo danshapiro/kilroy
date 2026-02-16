@@ -119,14 +119,37 @@ digraph reference_template {
     ]
 
     // =========================================================================
-    // Verify/check inner loop — catches build errors before expensive reviews
+    // Deterministic verification gates — tool nodes first, then semantic review
     // =========================================================================
-    verify_impl [
+    verify_fmt [
+        shape=parallelogram,
+        tool_command="echo 'Replace with project-specific formatter check'; exit 0"
+    ]
+    check_fmt [shape=diamond, label="Fmt OK?"]
+
+    verify_build [
+        shape=parallelogram,
+        tool_command="echo 'Replace with project-specific build check'; exit 0"
+    ]
+    check_build [shape=diamond, label="Build OK?"]
+
+    verify_test [
+        shape=parallelogram,
+        tool_command="echo 'Replace with project-specific test check'; exit 0"
+    ]
+    check_test [shape=diamond, label="Tests OK?"]
+
+    verify_artifacts [
+        shape=parallelogram,
+        tool_command="echo 'Replace with artifact hygiene check (include both .cargo-target* and .cargo_target* patterns)'; exit 0"
+    ]
+    check_artifacts [shape=diamond, label="Artifacts OK?"]
+
+    verify_fidelity [
         shape=box,
         class="verify",
-        prompt="Verify implementation.\n\nRun build and test commands.\nCheck artifact hygiene: fail if git diff contains build outputs.\nCheck formatting: fail if source files have formatting violations.\n\nWrite results to .ai/verify_impl.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if all pass, outcome=fail with failure_reason and details."
+        prompt="Perform semantic fidelity review after deterministic checks pass.\n\nRead implementation outputs and verify behavior matches .ai/definition_of_done.md and .ai/spec.md.\nIf semantic gaps exist, outcome=fail with stable failure_reason code (for example semantic_fidelity_gap) and details.\n\nWrite results to .ai/verify_fidelity.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if semantic review passes, outcome=fail with failure_reason and details."
     ]
-
     check_impl [shape=diamond, label="Impl OK?"]
 
     // =========================================================================
@@ -196,12 +219,32 @@ digraph reference_template {
     plan_c -> debate_consolidate
     debate_consolidate -> implement
 
-    // Verify/check inner loop (catches build errors before reviews)
-    implement -> verify_impl -> check_impl
-    check_impl -> review_a   [condition="outcome=success"]
-    check_impl -> review_b   [condition="outcome=success"]
-    check_impl -> review_c   [condition="outcome=success"]
-    check_impl -> implement  [condition="outcome=fail", label="retry"]
+    // Verify/check inner loop (tool gates first, semantic review last)
+    implement -> verify_fmt -> check_fmt
+    check_fmt -> verify_build [condition="outcome=success"]
+    check_fmt -> implement    [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_fmt -> postmortem   [condition="outcome=fail && context.failure_class!=transient_infra"]
+
+    verify_build -> check_build
+    check_build -> verify_test  [condition="outcome=success"]
+    check_build -> implement    [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_build -> postmortem   [condition="outcome=fail && context.failure_class!=transient_infra"]
+
+    verify_test -> check_test
+    check_test -> verify_artifacts [condition="outcome=success"]
+    check_test -> implement        [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_test -> postmortem       [condition="outcome=fail && context.failure_class!=transient_infra"]
+
+    verify_artifacts -> check_artifacts
+    check_artifacts -> verify_fidelity [condition="outcome=success"]
+    check_artifacts -> implement       [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    check_artifacts -> postmortem      [condition="outcome=fail && context.failure_class!=transient_infra"]
+
+    verify_fidelity -> check_impl
+    check_impl -> review_a [condition="outcome=success"]
+    check_impl -> review_b [condition="outcome=success"]
+    check_impl -> review_c [condition="outcome=success"]
+    check_impl -> postmortem [condition="outcome=fail"]
 
     // Review fan-in -> consensus
     review_a -> review_consensus

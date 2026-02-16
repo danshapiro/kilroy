@@ -560,6 +560,7 @@ Key elements:
 Failure-edge restart policy:
 - Use `loop_restart=true` on failure edges only when the condition includes `context.failure_class=transient_infra`.
 - Always pair that restart edge with a non-restart deterministic fail edge, e.g. `context.failure_class!=transient_infra`.
+- Model deterministic checks as explicit `shape=parallelogram` tool nodes (`verify_fmt`, `verify_build`, `verify_test`, `verify_artifacts`), then use a final `shape=box` semantic review node for fidelity/analysis.
 
 Example:
 ```
@@ -694,6 +695,7 @@ Workspace artifact hygiene:
 - Guideline: Build/test artifacts are expected locally but should not be treated as feature output.
 - Requirement: Verify prompts MUST fail when feature diffs include artifact/output paths unless explicitly required by spec.
 - Check changed files vs `$base_sha` and block paths such as `target/`, `dist/`, `build/`, `.pytest_cache/`, `node_modules/`, coverage outputs, temp files, or backup files.
+- Include both cargo target naming variants in artifact checks: `.cargo-target*` and `.cargo_target*`.
 - Use `failure_reason=artifact_pollution` and list offending paths in `details`.
 
 #### Mandatory status-file contract
@@ -716,6 +718,10 @@ Requirement:
 - For `outcome=fail` or `outcome=retry`, status JSON MUST include both:
   - `failure_reason` (short stable reason code)
   - `details` (human-readable explanation)
+- For deterministic verify/check nodes, include:
+  - `failure_class` (`deterministic` or `transient_infra`)
+  - canonical `failure_reason` enums where applicable (for example `environmental_tooling_blocks`, `artifact_pollution`, `compile_failed`)
+  - optional `failure_signature` when prose may vary across retries.
 - Do not emit non-canonical fail payloads like `{"outcome":"fail","gaps":[...]}` without `failure_reason`.
 - If structured diagnostics are needed, place them inside `details` (text or serialized JSON) while still including `failure_reason`.
 

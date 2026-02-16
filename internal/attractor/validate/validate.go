@@ -62,6 +62,7 @@ func Validate(g *model.Graph, extraRules ...LintRule) []Diagnostic {
 	diags = append(diags, lintPromptFileConflict(g)...)
 	diags = append(diags, lintLLMProviderPresent(g)...)
 	diags = append(diags, lintLoopRestartFailureClassGuard(g)...)
+	diags = append(diags, lintFailLoopFailureClassGuard(g)...)
 	diags = append(diags, lintEscalationModelsSyntax(g)...)
 	diags = append(diags, lintAllConditionalEdges(g)...)
 
@@ -715,6 +716,39 @@ func lintLoopRestartFailureClassGuard(g *model.Graph) []Diagnostic {
 	return diags
 }
 
+func lintFailLoopFailureClassGuard(g *model.Graph) []Diagnostic {
+	var diags []Diagnostic
+	for _, e := range g.Edges {
+		if e == nil {
+			continue
+		}
+		fromNode := g.Nodes[e.From]
+		if fromNode == nil || fromNode.Shape() != "diamond" {
+			continue
+		}
+		condExpr := strings.TrimSpace(e.Condition())
+		if !conditionMentionsFailureOutcome(condExpr) {
+			continue
+		}
+		// Only warn for back-edges into nodes that can reach this diamond.
+		if !graphReachable(g, e.To, e.From) {
+			continue
+		}
+		if conditionReferencesFailureClass(condExpr) {
+			continue
+		}
+		diags = append(diags, Diagnostic{
+			Rule:     "fail_loop_failure_class_guard",
+			Severity: SeverityWarning,
+			Message:  "failure back-edge from conditional node should guard retry path with context.failure_class and provide deterministic fallback routing",
+			EdgeFrom: e.From,
+			EdgeTo:   e.To,
+			Fix:      "split fail loop edge into failure_class-aware routes",
+		})
+	}
+	return diags
+}
+
 func conditionMentionsFailureOutcome(condExpr string) bool {
 	for _, clause := range strings.Split(condExpr, "&&") {
 		clause = strings.TrimSpace(clause)
@@ -767,6 +801,76 @@ func conditionHasTransientInfraGuard(condExpr string) bool {
 		if key == "context.failure_class" || key == "failure_class" {
 			if val == "transient_infra" {
 				return true
+			}
+		}
+	}
+	return false
+}
+
+func conditionReferencesFailureClass(condExpr string) bool {
+	for _, clause := range strings.Split(condExpr, "&&") {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		var key string
+		if strings.Contains(clause, "!=") {
+			parts := strings.SplitN(clause, "!=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key = strings.TrimSpace(parts[0])
+		} else if strings.Contains(clause, "=") {
+			parts := strings.SplitN(clause, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key = strings.TrimSpace(parts[0])
+		} else {
+			continue
+		}
+		if key == "context.failure_class" || key == "failure_class" {
+			return true
+		}
+	}
+	return false
+}
+
+func graphReachable(g *model.Graph, fromID string, targetID string) bool {
+	if g == nil {
+		return false
+	}
+	fromID = strings.TrimSpace(fromID)
+	targetID = strings.TrimSpace(targetID)
+	if fromID == "" || targetID == "" {
+		return false
+	}
+	if fromID == targetID {
+		return true
+	}
+	type void struct{}
+	seen := map[string]void{}
+	queue := []string{fromID}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if _, ok := seen[cur]; ok {
+			continue
+		}
+		seen[cur] = void{}
+		for _, e := range g.Outgoing(cur) {
+			if e == nil {
+				continue
+			}
+			next := strings.TrimSpace(e.To)
+			if next == "" {
+				continue
+			}
+			if next == targetID {
+				return true
+			}
+			if _, ok := seen[next]; !ok {
+				queue = append(queue, next)
 			}
 		}
 	}

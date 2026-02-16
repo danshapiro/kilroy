@@ -100,3 +100,31 @@ func stripEnvKey(env []string, key string) []string {
 	}
 	return out
 }
+
+// buildAgentLoopOverrides extracts the subset of base-node environment
+// invariants needed by the API agent_loop path and merges contract env vars.
+// It bridges buildBaseNodeEnv's []string format to agent.BaseEnv's map format.
+func buildAgentLoopOverrides(worktreeDir string, contractEnv map[string]string) map[string]string {
+	base := buildBaseNodeEnv(worktreeDir)
+	keep := map[string]bool{
+		"CARGO_HOME":       true,
+		"RUSTUP_HOME":      true,
+		"GOPATH":           true,
+		"GOMODCACHE":       true,
+		"CARGO_TARGET_DIR": true,
+	}
+	out := make(map[string]string, len(contractEnv)+len(keep))
+	for _, kv := range base {
+		k, v, ok := strings.Cut(kv, "=")
+		if !ok {
+			continue
+		}
+		if keep[k] {
+			out[k] = v
+		}
+	}
+	for k, v := range contractEnv {
+		out[k] = v
+	}
+	return out
+}
