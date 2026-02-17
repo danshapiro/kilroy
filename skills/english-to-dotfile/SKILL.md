@@ -190,6 +190,11 @@ After the table, ask:
 
 STOP (interactive mode). Do not emit `.dot` until the user replies.
 
+Programmatic hard rule:
+- In non-interactive contexts (especially `kilroy attractor ingest`), NEVER ask this question and NEVER emit the options table as final output.
+- Assume programmatic mode by default when unsure, pick `medium`, and continue directly to DOT generation.
+- If model/provider discovery is partial, proceed with best-available concrete defaults instead of asking for clarification.
+
 #### Step 0.9: After Selection, Generate DOT
 
 Once the choice/overrides are known:
@@ -205,6 +210,12 @@ Once the choice/overrides are known:
   - Parallelize implementation unless the user explicitly asks for it and the graph includes clear isolation and merge steps.
 - Encode the chosen models via `model_stylesheet` and/or explicit node attrs.
 - For Medium, all fan-out branches use the same model (session-level variance). For High, assign different providers to `branch-a`/`branch-b`/`branch-c` in the stylesheet (cross-provider diversity).
+
+Constraint fast-path (required when applicable):
+- If the user explicitly requests `no fanout`, `single path`, or equivalent, produce a single-path topology and do not emit fan-out/fan-in branches (`plan_a/b/c`, `review_a/b/c`, `component`, `tripleoctagon`).
+- In this mode, keep the graph compact and reference-template-consistent: `check_toolchain` (when needed) -> `expand_spec`/spec-read -> DoD/plan -> `implement` -> `check_implement` -> deterministic verify/check chain -> semantic verify/review -> `postmortem` restart.
+- Do not add extra planning/review subloops that were not requested. Overbuilding graph structure is a common cause of ingest turn exhaustion.
+- If the user gives a concrete spec path (for example `demo/rogue/rogue-prompt.txt`), treat it as the primary source of truth and avoid broad repo reinterpretation.
 
 #### Reference Looping Profile
 
@@ -520,7 +531,9 @@ Near the end, after all implementation, add a review stage with `goal_gate=true`
 
 The reference template uses the hill-climbing pattern for review failure: review consensus → postmortem → re-plan with `loop_restart=true`. The postmortem produces actionable "what to do next" guidance and feeds it into the next planning stage (via `.ai/` artifacts), so the planner is not restarting cold. Do NOT reset the worktree/code between loops; the next plan must assume the existing partially-complete codebase and focus on the remaining gaps.
 
-For the inner repair loop (verify failure), route back to the implementation node directly (no restart, accumulate context).
+For inner verify/check failures, follow the chosen profile consistently:
+- Reference hill-climbing template: route deterministic failures to `postmortem`; only transient infrastructure failures should restart implementation with `context.failure_class=transient_infra`.
+- Direct inner-retry profiles (when intentionally chosen): route fail edges back to implementation without `loop_restart`.
 
 #### Advanced Graph Patterns
 
@@ -545,7 +558,8 @@ analyze -> fetch_next [condition="outcome=skip", label="skip", loop_restart=true
 ```
 
 When using custom outcomes, the prompt MUST tell the agent exactly which outcome values to write and when.
-For multi-outcome nodes, prefer making the non-happy-path edge unconditional (no `condition=`) so it catches any outcome the LLM writes.
+For multi-outcome **box steering nodes**, you may use an unconditional non-happy-path edge.
+Do NOT use unconditional fallback edges on `check_*` diamond nodes in iterative repair loops; those edges must stay explicitly conditioned.
 
 ##### Looping/cyclic workflows
 
@@ -669,6 +683,14 @@ review [
 ```
 
 This pattern is mandatory because each node runs in a fresh agent session with no memory of prior nodes. The filesystem is the only shared state.
+
+##### Artifact handoff integrity (required)
+
+Before emitting the final DOT, verify file handoffs are closed:
+- Every file path read by a node prompt must be produced by an earlier node or exist as an explicit repo input.
+- Avoid invented/mismatched verify artifact names. If a node writes `.ai/verify_fidelity.md`, downstream nodes must read that exact file (not `.ai/verify_impl.md`).
+- For verify nodes, prefer deterministic naming tied to node IDs (for example `.ai/verify_<node_id>.md`) and keep reads consistent with those names.
+- If any read path has no producer, repair the graph before output.
 
 ### Phase 4: Write Prompts
 
@@ -869,6 +891,16 @@ For the Low option, omit `escalation_models` (single model, minimal cost).
 
 Before emitting the final output, you MUST validate the candidate DOT locally and repair any issues, iterating until it passes or you hit the attempt cap (10).
 
+Required pre-emit integrity checks (before validator loop):
+1. Ensure no unresolved template placeholders remain (`DEFAULT_MODEL`, `HARD_MODEL`, `VERIFY_MODEL`, etc.) in generated production DOT output.
+2. Ensure constrained-intent requirements are honored:
+   - if user asked for no fanout, assert no fan-out/fan-in branch patterns are present.
+3. Ensure file handoff integrity:
+   - each `.ai/*` input in prompts has a known producer or explicit repo-source justification.
+4. Ensure failure routing is explicit on check nodes:
+   - avoid unconditional failure back-edges from `check_*` nodes in iterative workflows.
+   - when retrying implementation, use failure-class-aware edges (`context.failure_class=transient_infra` restart + deterministic companion route).
+
 Run these validators (both when available):
 
 1. Graphviz parser check (if `dot` is installed):
@@ -900,6 +932,7 @@ Common repairs (use validator output; do not guess blindly):
 - Fix missing semicolons / commas / brackets in node/edge attribute lists.
 - Replace edge `label="success"` style routing with proper `condition="outcome=..."`.
 - For looped workflows, verify reference loop structure still exists: inner fail-retry loop, postmortem restart loop, and explicit outcome-based routing.
+- If validator reports `fail_loop_failure_class_guard`, remove unconditional failure back-edges from `check_*` nodes and keep only explicit failure-class routes (transient restart + deterministic non-restart companion edge).
 
 ## Kilroy DSL Quick Reference
 
@@ -1017,12 +1050,17 @@ The scaffold prompt should:
 Each fan-out branch prompt should include:
 - "Read [SHARED_TYPE_FILES] — these are your interface contract. Do NOT modify these shared files."
 - "Implement ONLY your assigned module files."
-28. **`reasoning_effort` on Cerebras GLM 4.7.** Do NOT set `reasoning_effort` on GLM 4.7 nodes expecting it to control reasoning depth — that parameter only works on Cerebras `gpt-oss-120b`. GLM 4.7 reasoning is always on. The engine automatically sets `clear_thinking: false` for Cerebras agent-loop nodes to preserve reasoning context across turns.
-29. **Parallel code-writing in a shared worktree (default disallowed).** Do NOT run multiple programming/implementation nodes in parallel that touch the same codebase state. If implementation fan-out is required, enforce strict isolation (disjoint write scopes, shared files read-only) and converge via an explicit integration/merge node.
-30. **Generating DOTs from scratch when a validated template exists.** For production-quality runs, start from `skills/english-to-dotfile/reference_template.dot` and make minimal, validated edits. New topologies are allowed, but they are higher-risk and must be validated early/cheap to avoid expensive runaway loops.
-31. **Ad-hoc turn budgets.** Do not add `max_agent_turns` by default. The reference template omits turn limits intentionally. Add them only with clear production evidence that a node runs away or finishes well under budget.
-32. **Putting prompts on diamond (conditional) nodes.** Diamond nodes are pure pass-through routers handled by `ConditionalHandler` — they forward the previous node's outcome to edge conditions and never execute prompts. A `prompt` attribute on a diamond node is dead code. If the node needs to run an LLM prompt and write its own outcome, use `shape=box`. The Kilroy validator warns on this (`prompt_on_conditional_node`).
-33. **Defaulting to visit-count loop breakers.** Do not add visit-count controls (for example `max_node_visits`) as the default loop guardrail profile.
+29. **`reasoning_effort` on Cerebras GLM 4.7.** Do NOT set `reasoning_effort` on GLM 4.7 nodes expecting it to control reasoning depth — that parameter only works on Cerebras `gpt-oss-120b`. GLM 4.7 reasoning is always on. The engine automatically sets `clear_thinking: false` for Cerebras agent-loop nodes to preserve reasoning context across turns.
+30. **Parallel code-writing in a shared worktree (default disallowed).** Do NOT run multiple programming/implementation nodes in parallel that touch the same codebase state. If implementation fan-out is required, enforce strict isolation (disjoint write scopes, shared files read-only) and converge via an explicit integration/merge node.
+31. **Generating DOTs from scratch when a validated template exists.** For production-quality runs, start from `skills/english-to-dotfile/reference_template.dot` and make minimal, validated edits. New topologies are allowed, but they are higher-risk and must be validated early/cheap to avoid expensive runaway loops.
+32. **Ad-hoc turn budgets.** Do not add `max_agent_turns` by default. The reference template omits turn limits intentionally. Add them only with clear production evidence that a node runs away or finishes well under budget.
+33. **Putting prompts on diamond (conditional) nodes.** Diamond nodes are pure pass-through routers handled by `ConditionalHandler` — they forward the previous node's outcome to edge conditions and never execute prompts. A `prompt` attribute on a diamond node is dead code. If the node needs to run an LLM prompt and write its own outcome, use `shape=box`. The Kilroy validator warns on this (`prompt_on_conditional_node`).
+34. **Defaulting to visit-count loop breakers.** Do not add visit-count controls (for example `max_node_visits`) as the default loop guardrail profile.
+35. **Unresolved model placeholders in final DOT output.** Do NOT emit `DEFAULT_MODEL`, `HARD_MODEL`, `VERIFY_MODEL`, or similar placeholders in generated production dotfiles; resolve concrete provider/model assignments from the chosen option.
+36. **Dangling artifact reads.** Do NOT reference `.ai/*` artifacts (for example `.ai/verify_impl.md`) unless a prior node writes that exact path.
+37. **Unconditional failure edges from `check_*` nodes in iterative workflows.** Do NOT rely on bare fallback fail edges that bypass failure-class policy; use explicit conditioned routes.
+38. **Ignoring explicit no-fanout constraints.** If the user requests no fanout/single-path, do not emit parallel branch families or fan-in nodes.
+39. **Interactive option prompts in programmatic mode.** During `kilroy attractor ingest` or other non-interactive generation, do NOT emit "pick low/medium/high" tables or wait for user choices; default to medium and output DOT.
 
 ## Notes on Reference Dotfile Conventions
 
