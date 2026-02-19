@@ -527,7 +527,7 @@ digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
   t [shape=parallelogram, tool_command="exit 1"]
-  start -> t -> exit [condition="outcome=success"]
+  start -> t
 }
 `), 0o644)
 	logsRoot2 := filepath.Join(t.TempDir(), "logs-fail")

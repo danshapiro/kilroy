@@ -1,7 +1,6 @@
 package engine
 
 import (
-	"fmt"
 	"path/filepath"
 	"strings"
 )
@@ -30,22 +29,12 @@ func buildStageStatusContract(worktreeDir string) stageStatusContract {
 	}
 	primary := filepath.Join(wtAbs, "status.json")
 	fallback := filepath.Join(wtAbs, ".ai", "status.json")
+	promptPreamble := mustRenderStageStatusContractPromptPreamble(primary, fallback)
 
 	return stageStatusContract{
-		PrimaryPath:  primary,
-		FallbackPath: fallback,
-		PromptPreamble: fmt.Sprintf(
-			"Execution status contract:\n"+
-				"- Write status JSON to $%s (absolute path).\n"+
-				"- Primary path: %s\n"+
-				"- If primary write fails, write to $%s.\n"+
-				"- Fallback path: %s\n"+
-				"- Do not write status.json to nested module directories.\n",
-			stageStatusPathEnvKey,
-			primary,
-			stageStatusFallbackPathEnvKey,
-			fallback,
-		),
+		PrimaryPath:    primary,
+		FallbackPath:   fallback,
+		PromptPreamble: promptPreamble,
 		EnvVars: map[string]string{
 			stageStatusPathEnvKey:         primary,
 			stageStatusFallbackPathEnvKey: fallback,

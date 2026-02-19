@@ -1,0 +1,1 @@
+Loop detection: you are repeating the same tool calls. Stop and change approach.

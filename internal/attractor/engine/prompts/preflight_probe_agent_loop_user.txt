@@ -1,0 +1,1 @@
+Preflight tool-path probe. Create a compact 10-step implementation checklist covering architecture, files, tests, and rollout. Reply with exactly OK.

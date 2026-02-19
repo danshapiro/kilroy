@@ -20,7 +20,6 @@ import (
 
 const (
 	skipCLIHeadlessWarningFlag = "--skip-cli-headless-warning"
-	cliHeadlessWarningPrompt   = "Some providers, notably Anthropic, have unclear guidance about using the CLI headlessly like this, There is a risk that your account could be suspended. Proceed? Y/n: "
 )
 
 func signalCancelContext() (context.Context, func()) {

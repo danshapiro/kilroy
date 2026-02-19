@@ -1,0 +1,1 @@
+You are Kilroy preflight probe. This request validates tool-enabled runtime compatibility for agent-loop mode.

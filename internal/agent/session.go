@@ -531,8 +531,8 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 			if repeats >= s.cfg.LoopDetectionWindow {
 				loopWarned = true
 				s.emit(EventLoopDetection, map[string]any{"fingerprint": fp, "repeats": repeats})
-				s.appendTurn(TurnSteering, llm.User("Loop detection: you are repeating the same tool calls. Stop and change approach."))
-				s.emit(EventSteeringInjected, map[string]any{"text": "Loop detection: you are repeating the same tool calls. Stop and change approach."})
+				s.appendTurn(TurnSteering, llm.User(loopDetectionSteeringPrompt))
+				s.emit(EventSteeringInjected, map[string]any{"text": loopDetectionSteeringPrompt})
 			}
 		}
 

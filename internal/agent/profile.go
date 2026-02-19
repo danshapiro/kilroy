@@ -122,7 +122,7 @@ func NewOpenAIProfile(model string) ProviderProfile {
 		model:         strings.TrimSpace(model),
 		parallel:      false,
 		contextWindow: 128_000,
-		basePrompt:    "You are Kilroy (OpenAI profile). Use apply_patch (v4a) for edits whenever possible. Read files before editing and run tests after changes.",
+		basePrompt:    openAIProfileBasePrompt,
 		docFiles:      []string{"AGENTS.md", ".codex/instructions.md"},
 		toolDefs: []llm.ToolDefinition{
 			defReadFile(),
@@ -145,7 +145,7 @@ func NewAnthropicProfile(model string) ProviderProfile {
 		model:         strings.TrimSpace(model),
 		parallel:      true,
 		contextWindow: 200_000,
-		basePrompt:    "You are Kilroy (Anthropic profile). Prefer edit_file with old_string/new_string edits. Read files before editing and keep diffs minimal and safe.",
+		basePrompt:    anthropicProfileBasePrompt,
 		docFiles:      []string{"CLAUDE.md", "AGENTS.md"},
 		toolDefs: []llm.ToolDefinition{
 			defReadFile(),
@@ -168,7 +168,7 @@ func NewGeminiProfile(model string) ProviderProfile {
 		model:         strings.TrimSpace(model),
 		parallel:      true,
 		contextWindow: 128_000,
-		basePrompt:    "You are Kilroy (Gemini profile). Prefer edit_file with old_string/new_string edits. Use tools to inspect before changing code and validate by running tests.",
+		basePrompt:    geminiProfileBasePrompt,
 		docFiles:      []string{"GEMINI.md", "AGENTS.md"},
 		toolDefs: []llm.ToolDefinition{
 			defReadFile(),

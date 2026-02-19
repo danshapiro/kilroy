@@ -1,0 +1,6 @@
+Execution status contract:
+- Write status JSON to ${{.StageStatusPathEnvKey}} (absolute path).
+- Primary path: {{.PrimaryPath}}
+- If primary write fails, write to ${{.StageStatusFallbackPathEnvKey}}.
+- Fallback path: {{.FallbackPath}}
+- Do not write status.json to nested module directories.

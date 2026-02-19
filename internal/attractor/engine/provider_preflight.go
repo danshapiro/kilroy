@@ -20,12 +20,9 @@ import (
 )
 
 const (
-	preflightStatusPass                 = "pass"
-	preflightStatusWarn                 = "warn"
-	preflightStatusFail                 = "fail"
-	preflightPromptProbeText            = "This is a test. Reply with just 'OK'."
-	preflightPromptProbeAgentLoopText   = "Preflight tool-path probe. Create a compact 10-step implementation checklist covering architecture, files, tests, and rollout. Reply with exactly OK."
-	preflightPromptProbeAgentLoopSystem = "You are Kilroy preflight probe. This request validates tool-enabled runtime compatibility for agent-loop mode."
+	preflightStatusPass = "pass"
+	preflightStatusWarn = "warn"
+	preflightStatusFail = "fail"
 
 	preflightAPIPromptProbeTransportComplete = "complete"
 	preflightAPIPromptProbeTransportStream   = "stream"
@@ -892,7 +889,7 @@ func runProviderCLIPromptProbePreflight(ctx context.Context, provider string, mo
 			Status:   preflightStatusWarn,
 			Message:  "prompt probe skipped: codex cli detected without OPENAI_API_KEY (likely using chatgpt browser auth which cannot be tested in isolated probe)",
 			Details: map[string]any{
-				"backend":    "cli",
+				"backend":     "cli",
 				"skip_reason": "codex_chatgpt_auth",
 			},
 		})
