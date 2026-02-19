@@ -59,6 +59,19 @@ Do not use this skill when:
 - Do not summarize, rephrase, or “clean up” the user’s input in this verbatim block (DOT-escape only).
 - If the user explicitly provides a spec/DoD as a repo file path, `expand_spec` should read the file as the authoritative source; still include the original user message verbatim so the spec derivation is auditable.
 
+8. Treat prerequisite/tool gates as real gates.
+- If a `shape=parallelogram` node can fail (toolchain, build, format, file checks), route on `outcome=success` and route failures explicitly.
+- Do not wire prerequisite checks with unconditional pass-through that bypasses their outcome.
+
+9. Do not bypass actionable node outcomes.
+- For `shape=box` and `shape=parallelogram` nodes, avoid unconditional "next stage" edges that ignore success/fail status.
+- Use check/conditional nodes (or explicit conditioned edges) so progress depends on outcome.
+
+10. Keep status/handoff contracts exact across stages.
+- Every `shape=box` prompt must mention both `$KILROY_STAGE_STATUS_PATH` and `$KILROY_STAGE_STATUS_FALLBACK_PATH`.
+- Every `shape=box` prompt must define success and failure/retry outcome behavior.
+- If a node reads `.ai/<name>.md`, an upstream node must write that exact same path (no filename drift).
+
 ## Workflow
 
 ### Phase 0: Determine Execution Mode and Constraints
@@ -108,9 +121,13 @@ Spec source rule:
 
 Loop and routing rules:
 - Keep explicit outcome-based conditions (`outcome=...`).
+- Condition expressions support `=`, `!=`, and `&&`. Do not use `||`, `<`, or `>`.
 - Inner retry restarts (`loop_restart=true`) are only for transient infra failures (`context.failure_class=transient_infra`).
 - Deterministic failures should route to repair/postmortem, not blind restarts.
 - For `goal_gate=true` nodes routing to terminal, use `condition="outcome=success"` or `condition="outcome=partial_success"`.
+- If a node has conditional outgoing edges, add one unconditional fallback edge (no `condition`) to avoid routing gaps.
+- For prerequisite/tool gates and implementation stages, route success/failure explicitly before advancing; do not rely on unconditional edges to progress.
+- For failure back-edges from `shape=diamond` nodes, include `context.failure_class` in the failure condition and keep deterministic fallback routing explicit.
 
 #### Deterministic vs Transient Failures (Failure Classification)
 
@@ -208,6 +225,7 @@ Mandatory status contract text (or equivalent) in generated prompts:
 - Do not write nested `status.json` files after `cd`.
 - Use the canonical schema: `{"status":"..."}`
 - Routing conditions use `condition="outcome=..."` on edges; `outcome` is set to the stage's `status` value.
+- Require both variable names to appear verbatim in each codergen prompt.
 
 Failure payload contract:
 - For `status=fail` or `status=retry`, include both `failure_reason` and `details`.
@@ -216,6 +234,7 @@ Failure payload contract:
 Handoff rules:
 - Use `.ai/*` files for substantial inter-node artifacts (plans, reviews, postmortems).
 - Keep file reads/writes consistent: every read path must have an upstream producer or explicit repo-source justification.
+- Use exact file identity for handoffs (same basename/path), not "similar" names.
 
 ### Goal (`graph.goal` / `$goal`) Contract (Required)
 
@@ -331,6 +350,10 @@ Verification scoping rules:
 Artifact hygiene:
 - Fail verification if feature diffs include build/cache/temp artifact paths unless explicitly required by spec.
 
+Deliverable verification rule:
+- If user requirements name concrete deliverable paths (for example `demo/.../index.html`), include deterministic `shape=parallelogram` checks that assert those files exist (and key invariants if known).
+- Do not rely only on narrative review prompts for deliverable existence.
+
 ### Phase 5: Validate and Repair (Required)
 
 Before final output:
@@ -338,6 +361,11 @@ Before final output:
 2. Re-check explicit user constraints (especially `no fanout`).
 3. Re-check file handoff integrity.
 4. Re-check failure routing guards on check nodes.
+5. Re-check condition syntax and fallback edges.
+6. Re-check that prerequisite/tool gates cannot be bypassed via unconditional edges.
+7. Re-check that all explicit deliverable paths have deterministic verification nodes.
+8. Re-check every codergen prompt includes both status-path variables and explicit fail/retry payload guidance.
+9. Re-check `.ai/*` producers/consumers use exact same filenames.
 
 Validation loop (max 10 attempts):
 - Run Graphviz syntax check when available:
@@ -390,10 +418,13 @@ digraph project_pipeline {
   check_implement -> verify_build [condition="outcome=success"]
   check_implement -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
   check_implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+  check_implement -> postmortem
   verify_build -> check_build
   check_build -> review_consensus [condition="outcome=success"]
   check_build -> postmortem [condition="outcome=fail"]
+  check_build -> postmortem
   review_consensus -> exit [condition="outcome=success"]
+  review_consensus -> postmortem [condition="outcome=retry"]
   review_consensus -> postmortem
   postmortem -> implement [loop_restart=true]
 }
@@ -472,10 +503,18 @@ Custom outcomes are allowed if prompts define them explicitly and edges route wi
 34. **Defaulting to visit-count loop breakers.** Do not add visit-count controls as the default loop guardrail.
 35. **Unresolved model placeholders in final DOT output.** Do not emit placeholders like `DEFAULT_MODEL` in production DOT.
 36. **Dangling artifact reads.** Do not reference `.ai/*` paths unless produced earlier or explicitly provided by repo input.
-37. **Unconditional failure edges from `check_*` nodes in iterative workflows.** Keep explicit failure-class-conditioned routes.
+37. **Missing explicit failure-class-conditioned routes before fallback in `check_*` nodes.** Keep explicit failure-class-conditioned routes, then add one unconditional fallback edge.
 38. **Ignoring explicit no-fanout constraints.** If user requests no fanout/single-path, do not emit branch families/fan-in nodes.
 39. **Interactive option prompts in programmatic mode.** In `kilroy attractor ingest` and other non-interactive generation, do not ask for low/medium/high; default to medium and output DOT.
 40. **Encoding executor/backend strategy in DOT.** Do not alter graph topology or attributes to force CLI vs API execution; backend policy lives in run config (`llm.providers.*.backend`, `llm.cli_profile`).
+41. **Using unsupported condition operators.** Do not use `||`, `<`, or `>` in edge conditions; split alternatives into separate edges.
+42. **All outgoing edges conditional.** Do not leave a node with only conditional outgoing edges; add one unconditional fallback edge.
+43. **Bypassed prerequisite/tool gates.** Do not wire toolchain/build/file-check gates with unconditional pass-through edges that advance on failure.
+44. **Outcome-blind stage chaining.** Do not connect actionable nodes to next stages with unconditional edges that skip success/fail routing.
+45. **Missing deterministic deliverable checks.** If requirements include concrete output paths, add explicit `shape=parallelogram` checks for file existence (and key invariants when specified).
+46. **Status contract drift across prompts.** Do not omit `$KILROY_STAGE_STATUS_FALLBACK_PATH` or failure/retry payload guidance on any codergen node.
+47. **Handoff filename drift.** Do not write `.ai/foo_log.md` and later read `.ai/implementation_log.md`; producers and consumers must reference the exact same path.
+48. **Unclassified failure back-edges from diamonds.** Do not use `condition="outcome=fail"` alone on back-edges from `shape=diamond`; add `context.failure_class` guards and explicit deterministic fallback.
 
 ## Final Pre-Emit Checklist
 
@@ -484,4 +523,10 @@ Custom outcomes are allowed if prompts define them explicitly and edges route wi
 - `model_stylesheet` resolved with concrete providers/models.
 - All codergen prompts include full status contract.
 - File handoffs are closed (no dangling reads).
+- Condition syntax uses only supported operators (`=`, `!=`, `&&`).
+- Nodes with conditional routes include an unconditional fallback edge.
+- Prerequisite/tool gates route failures explicitly and cannot be bypassed by unconditional pass-through.
+- Explicit deliverable paths are verified by deterministic tool-check nodes.
+- Every codergen prompt includes both `$KILROY_STAGE_STATUS_PATH` and `$KILROY_STAGE_STATUS_FALLBACK_PATH`, plus fail/retry payload guidance.
+- `.ai/*` handoff paths match exactly between producer and consumer nodes.
 - Validation loop passed, or best-repaired DOT emitted per mode rules.
