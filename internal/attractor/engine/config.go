@@ -29,9 +29,16 @@ type ProviderAPIConfig struct {
 	Headers            map[string]string `json:"headers,omitempty" yaml:"headers,omitempty"`
 }
 
+type ProviderCLIConfig struct {
+	// Sandbox is an optional codex sandbox mode override for openai backend=cli
+	// providers (for example: "workspace-write", "danger-full-access").
+	Sandbox string `json:"sandbox,omitempty" yaml:"sandbox,omitempty"`
+}
+
 type ProviderConfig struct {
 	Backend    BackendKind       `json:"backend" yaml:"backend"`
 	Executable string            `json:"executable,omitempty" yaml:"executable,omitempty"`
+	CLI        ProviderCLIConfig `json:"cli,omitempty" yaml:"cli,omitempty"`
 	API        ProviderAPIConfig `json:"api,omitempty" yaml:"api,omitempty"`
 	Failover   []string          `json:"failover,omitempty" yaml:"failover,omitempty"`
 }
@@ -257,6 +264,18 @@ func validateConfig(cfg *RunConfigFile) error {
 	for prov, pc := range cfg.LLM.Providers {
 		canonical := providerspec.CanonicalProviderKey(prov)
 		builtin, hasBuiltin := providerspec.Builtin(canonical)
+		sandboxMode := strings.TrimSpace(pc.CLI.Sandbox)
+		if sandboxMode != "" {
+			if strings.ContainsAny(sandboxMode, " \t\n\r") {
+				return fmt.Errorf("llm.providers.%s.cli.sandbox must be a single token (got %q)", prov, sandboxMode)
+			}
+			if pc.Backend != BackendCLI {
+				return fmt.Errorf("llm.providers.%s.cli.sandbox requires backend=cli", prov)
+			}
+			if canonical != "openai" {
+				return fmt.Errorf("llm.providers.%s.cli.sandbox is only supported for openai backend=cli", prov)
+			}
+		}
 		switch pc.Backend {
 		case BackendAPI:
 			protocol := strings.TrimSpace(pc.API.Protocol)

@@ -295,6 +295,20 @@ CLI backend command mappings:
 - `anthropic` -> `claude -p --output-format stream-json ...`
 - `google` -> `gemini -p --output-format stream-json --yolo ...`
 
+Codex sandbox tuning (openai CLI backend):
+
+- Default is `workspace-write`.
+- You can override per run config with `llm.providers.openai.cli.sandbox`.
+
+```yaml
+llm:
+  providers:
+    openai:
+      backend: cli
+      cli:
+        sandbox: danger-full-access
+```
+
 Execution policy:
 
 - `llm.cli_profile` defaults to `real`.

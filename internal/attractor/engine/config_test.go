@@ -237,6 +237,47 @@ modeldb:
 	}
 }
 
+func TestLoadRunConfig_OpenAICLISandboxAccepted(t *testing.T) {
+	yml := []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+llm:
+  providers:
+    openai:
+      backend: cli
+      cli:
+        sandbox: danger-full-access
+`)
+	cfg, err := loadRunConfigFromBytesForTest(t, yml)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := cfg.LLM.Providers["openai"].CLI.Sandbox; got != "danger-full-access" {
+		t.Fatalf("sandbox=%q want danger-full-access", got)
+	}
+}
+
+func TestLoadRunConfig_OpenAICLISandboxRejectedForNonOpenAI(t *testing.T) {
+	yml := []byte(`
+version: 1
+repo: { path: /tmp/repo }
+cxdb: { binary_addr: 127.0.0.1:9009, http_base_url: http://127.0.0.1:9010 }
+modeldb: { openrouter_model_info_path: /tmp/catalog.json }
+llm:
+  providers:
+    anthropic:
+      backend: cli
+      cli:
+        sandbox: danger-full-access
+`)
+	_, err := loadRunConfigFromBytesForTest(t, yml)
+	if err == nil || !strings.Contains(err.Error(), "cli.sandbox is only supported for openai") {
+		t.Fatalf("expected openai-only sandbox validation error, got %v", err)
+	}
+}
+
 func loadRunConfigFromBytesForTest(t *testing.T, yml []byte) (*RunConfigFile, error) {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "run.yaml")

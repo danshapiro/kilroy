@@ -117,6 +117,52 @@ func TestDefaultCLIInvocation_OpenAI_DoesNotUseDeprecatedAskForApproval(t *testi
 	}
 }
 
+func TestSetFlagValue_ReplacesSandboxMode(t *testing.T) {
+	args := []string{"exec", "--json", "--sandbox", "workspace-write", "-m", "gpt-5"}
+	got := setFlagValue(args, "--sandbox", "danger-full-access")
+	if value := argValue(got, "--sandbox"); value != "danger-full-access" {
+		t.Fatalf("sandbox value=%q want danger-full-access (args=%v)", value, got)
+	}
+}
+
+func TestSetFlagValue_AppendsWhenMissing(t *testing.T) {
+	args := []string{"exec", "--json", "-m", "gpt-5"}
+	got := setFlagValue(args, "--sandbox", "workspace-write")
+	if value := argValue(got, "--sandbox"); value != "workspace-write" {
+		t.Fatalf("sandbox value=%q want workspace-write (args=%v)", value, got)
+	}
+}
+
+func TestCodexSandboxModeForProvider_FromConfig(t *testing.T) {
+	cfg := &RunConfigFile{}
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {
+			Backend: BackendCLI,
+			CLI: ProviderCLIConfig{
+				Sandbox: "danger-full-access",
+			},
+		},
+	}
+	if got := codexSandboxModeForProvider(cfg, "openai"); got != "danger-full-access" {
+		t.Fatalf("sandbox=%q want danger-full-access", got)
+	}
+}
+
+func TestCodexSandboxModeForProvider_EmptyForNonOpenAI(t *testing.T) {
+	cfg := &RunConfigFile{}
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"anthropic": {
+			Backend: BackendCLI,
+			CLI: ProviderCLIConfig{
+				Sandbox: "danger-full-access",
+			},
+		},
+	}
+	if got := codexSandboxModeForProvider(cfg, "anthropic"); got != "" {
+		t.Fatalf("sandbox=%q want empty", got)
+	}
+}
+
 func TestBuildCodexIsolatedEnv_ConfiguresCodexScopedOverrides(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {

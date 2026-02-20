@@ -18,6 +18,7 @@ Although bringing your own agentic loop and unified LLM SDK is not required to b
   - Legacy worktree payloads that only provide `outcome` + `details` are normalized by the runtime decoder, but emitters should still write canonical `failure_reason` directly.
 - OpenAI codex CLI invocation:
   - Default args use `codex exec --json --sandbox workspace-write ...`.
+  - Sandbox mode is tunable via `llm.providers.openai.cli.sandbox` (for example `danger-full-access`).
   - Deprecated `--ask-for-approval` is intentionally not used.
   - Attractor isolates Codex runtime state per stage (`env_mode=isolated`, `env_scope=codex`, stage-local `state_root`).
   - Sensitive Codex state roots (`codex-home*`, `.codex/auth.json`, `.codex/config.toml`) are excluded from `stage.tgz` and `run.tgz`.

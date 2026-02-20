@@ -929,6 +929,11 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		return "", classifiedFailure(err, ""), nil
 	}
 	codexSemantics := usesCodexCLISemantics(providerKey, exe)
+	if codexSemantics {
+		if sandboxMode := codexSandboxModeForProvider(r.cfg, providerKey); sandboxMode != "" {
+			args = setFlagValue(args, "--sandbox", sandboxMode)
+		}
+	}
 
 	// Build the base env once — used by codex initial + retries and non-codex paths.
 	baseEnv := buildBaseNodeEnv(execCtx.WorktreeDir)
@@ -989,6 +994,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	if codexSemantics {
 		inv["env_mode"] = "isolated"
 		inv["env_scope"] = "codex"
+		inv["codex_sandbox"] = argValue(args, "--sandbox")
 		for k, v := range isolatedMeta {
 			inv[k] = v
 		}
@@ -1796,6 +1802,52 @@ func defaultCLIInvocation(provider string, modelID string, worktreeDir string) (
 	}
 	exe, args = materializeCLIInvocation(*spec, modelID, worktreeDir, "")
 	return exe, args
+}
+
+func codexSandboxModeForProvider(cfg *RunConfigFile, provider string) string {
+	pc, _, ok := providerConfigFor(cfg, provider)
+	if !ok {
+		return ""
+	}
+	if normalizeProviderKey(provider) != "openai" {
+		return ""
+	}
+	return strings.TrimSpace(pc.CLI.Sandbox)
+}
+
+func setFlagValue(args []string, flag string, value string) []string {
+	if strings.TrimSpace(flag) == "" || strings.TrimSpace(value) == "" {
+		return append([]string{}, args...)
+	}
+	out := make([]string, 0, len(args)+2)
+	replaced := false
+	for i := 0; i < len(args); i++ {
+		if args[i] == flag {
+			replaced = true
+			out = append(out, flag, value)
+			if i+1 < len(args) {
+				i++
+			}
+			continue
+		}
+		out = append(out, args[i])
+	}
+	if !replaced {
+		out = append(out, flag, value)
+	}
+	return out
+}
+
+func argValue(args []string, flag string) string {
+	for i := 0; i < len(args); i++ {
+		if args[i] == flag {
+			if i+1 < len(args) {
+				return strings.TrimSpace(args[i+1])
+			}
+			return ""
+		}
+	}
+	return ""
 }
 
 func hasArg(args []string, want string) bool {
