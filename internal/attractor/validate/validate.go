@@ -730,6 +730,8 @@ func nodeResolvesToTool(n *model.Node) bool {
 
 func lintLoopRestartFailureClassGuard(g *model.Graph) []Diagnostic {
 	var diags []Diagnostic
+	// Track nodes that have a properly-guarded transient restart edge.
+	guardedRestartSources := map[string]bool{}
 	for _, e := range g.Edges {
 		if e == nil {
 			continue
@@ -738,20 +740,48 @@ func lintLoopRestartFailureClassGuard(g *model.Graph) []Diagnostic {
 			continue
 		}
 		condExpr := strings.TrimSpace(e.Condition())
-		if !conditionMentionsFailureOutcome(condExpr) {
+		// Skip edges exclusively conditioned on success (not a failure path).
+		if condExpr != "" && !conditionMentionsFailureOutcome(condExpr) {
 			continue
 		}
 		if conditionHasTransientInfraGuard(condExpr) {
+			guardedRestartSources[e.From] = true
 			continue
 		}
 		diags = append(diags, Diagnostic{
 			Rule:     "loop_restart_failure_class_guard",
 			Severity: SeverityWarning,
-			Message:  "loop_restart on failure edge should be guarded by context.failure_class=transient_infra and paired with a non-restart deterministic fail edge",
+			Message:  "loop_restart=true requires condition guarded by context.failure_class=transient_infra",
 			EdgeFrom: e.From,
 			EdgeTo:   e.To,
-			Fix:      "split edge into transient-infra restart + non-transient retry edges",
+			Fix:      "add condition with context.failure_class=transient_infra or remove loop_restart=true",
 		})
+	}
+	// Second pass: nodes with a guarded transient restart must also have a
+	// companion non-restart edge for deterministic failures.
+	for from := range guardedRestartSources {
+		hasDeterministicFallback := false
+		for _, e := range g.Edges {
+			if e == nil || e.From != from {
+				continue
+			}
+			if strings.EqualFold(strings.TrimSpace(e.Attr("loop_restart", "false")), "true") {
+				continue
+			}
+			if conditionMentionsFailureOutcome(strings.TrimSpace(e.Condition())) {
+				hasDeterministicFallback = true
+				break
+			}
+		}
+		if !hasDeterministicFallback {
+			diags = append(diags, Diagnostic{
+				Rule:     "loop_restart_failure_class_guard",
+				Severity: SeverityWarning,
+				Message:  "node with transient-infra loop_restart must also have a non-restart edge for deterministic failures",
+				EdgeFrom: from,
+				Fix:      "add an edge for outcome=fail && context.failure_class!=transient_infra without loop_restart",
+			})
+		}
 	}
 	return diags
 }
