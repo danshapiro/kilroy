@@ -276,6 +276,64 @@ digraph G {
 	t.Logf("stall watchdog fired as expected: %v", err)
 }
 
+// TestRunWithConfig_CLIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine verifies
+// that the stall watchdog still fires when the CLI codergen process is truly
+// stalled (no stdout/stderr output) even though the heartbeat goroutine is running.
+// The conditional heartbeat should NOT emit progress when file sizes are static.
+func TestRunWithConfig_CLIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+
+	pinned := writePinnedCatalog(t)
+	cxdbSrv := newCXDBTestServer(t)
+
+	// Create a mock codex CLI that hangs without producing any output.
+	cli := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(cli, []byte("#!/usr/bin/env bash\nsleep 60\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL", "100ms")
+	t.Setenv("KILROY_CODEX_IDLE_TIMEOUT", "60s")
+
+	stallTimeout := 500
+	stallCheck := 50
+	cfg := &RunConfigFile{Version: 1}
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
+	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
+	cfg.LLM.CLIProfile = "test_shim"
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendCLI, Executable: cli},
+	}
+	cfg.ModelDB.OpenRouterModelInfoPath = pinned
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+	cfg.Git.RunBranchPrefix = "attractor/run"
+	cfg.RuntimePolicy.StallTimeoutMS = &stallTimeout
+	cfg.RuntimePolicy.StallCheckIntervalMS = &stallCheck
+
+	dot := []byte(`
+digraph G {
+  graph [goal="test cli stall detection with heartbeat"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do something"]
+  start -> a -> exit
+}
+`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "cli-stall-test", LogsRoot: logsRoot, AllowTestShim: true})
+	if err == nil {
+		t.Fatal("expected stall watchdog timeout error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "stall watchdog") {
+		t.Fatalf("expected stall watchdog error, got: %v", err)
+	}
+	t.Logf("stall watchdog fired as expected: %v", err)
+}
+
 func TestRunWithConfig_HeartbeatStopsAfterProcessExit(t *testing.T) {
 	events := runHeartbeatFixture(t)
 	endIdx := findEventIndex(events, "stage_attempt_end", "a")
