@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -513,6 +514,8 @@ func (h *WaitHumanHandler) Execute(ctx context.Context, exec *Execution, node *m
 	}, nil
 }
 
+var toolCommandAbsPathRE = regexp.MustCompile(`cd\s+/`)
+
 type ToolHandler struct{}
 
 func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *model.Node) (runtime.Outcome, error) {
@@ -520,6 +523,9 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	cmdStr := strings.TrimSpace(node.Attr("tool_command", ""))
 	if cmdStr == "" {
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: "no tool_command specified"}, nil
+	}
+	if toolCommandAbsPathRE.MatchString(cmdStr) {
+		warnEngine(execCtx, fmt.Sprintf("tool_command for node %q contains 'cd /…' which overrides worktree CWD %q", node.ID, execCtx.WorktreeDir))
 	}
 	timeout := parseDuration(node.Attr("timeout", ""), 0)
 	if timeout <= 0 {
