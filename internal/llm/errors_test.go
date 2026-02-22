@@ -119,6 +119,20 @@ func TestQuotaExceededError_ImplementsErrorInterface(t *testing.T) {
 	}
 }
 
+func TestErrorFromHTTPStatus_ToolUseMismatch_IsRetryable(t *testing.T) {
+	err := ErrorFromHTTPStatus("anthropic", 400, "tool_use ids were found without tool_result blocks immediately after", nil, nil)
+	e, ok := err.(Error)
+	if !ok {
+		t.Fatalf("not an llm.Error: %T", err)
+	}
+	if !e.Retryable() {
+		t.Fatalf("expected retryable, got non-retryable")
+	}
+	if _, ok := err.(*ServerError); !ok {
+		t.Fatalf("expected *ServerError, got %T", err)
+	}
+}
+
 func TestErrorFromHTTPStatus_MessageBasedClassification(t *testing.T) {
 	cases := []struct {
 		name    string

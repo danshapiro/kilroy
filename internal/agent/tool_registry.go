@@ -50,12 +50,16 @@ type RegisteredTool struct {
 }
 
 type ToolRegistry struct {
-	mu    sync.RWMutex
-	tools map[string]RegisteredTool
+	mu                 sync.RWMutex
+	tools              map[string]RegisteredTool
+	validationFailures map[string]int // consecutive validation failures per tool
 }
 
 func NewToolRegistry() *ToolRegistry {
-	return &ToolRegistry{tools: map[string]RegisteredTool{}}
+	return &ToolRegistry{
+		tools:              map[string]RegisteredTool{},
+		validationFailures: map[string]int{},
+	}
 }
 
 func (r *ToolRegistry) Register(t RegisteredTool) error {
@@ -113,6 +117,7 @@ func (r *ToolRegistry) ExecuteCall(ctx context.Context, env ExecutionEnvironment
 	if len(call.Arguments) > 0 {
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			msg := fmt.Sprintf("invalid tool arguments JSON: %v", err)
+			msg = r.recordValidationFailure(name, msg, t)
 			return truncateResult(name, callID, msg, true, t.Limit)
 		}
 	}
@@ -122,8 +127,11 @@ func (r *ToolRegistry) ExecuteCall(ctx context.Context, env ExecutionEnvironment
 
 	if err := t.Schema.Validate(args); err != nil {
 		msg := fmt.Sprintf("tool args schema validation failed: %v", err)
+		msg = r.recordValidationFailure(name, msg, t)
 		return truncateResult(name, callID, msg, true, t.Limit)
 	}
+
+	r.resetValidationFailures(name)
 
 	v, err := t.Exec(ctx, env, args)
 	if err != nil {
@@ -139,6 +147,57 @@ func (r *ToolRegistry) ExecuteCall(ctx context.Context, env ExecutionEnvironment
 
 	full := toolValueToString(v)
 	return truncateResult(name, callID, full, false, t.Limit)
+}
+
+const circuitBreakerThreshold = 3
+
+// recordValidationFailure increments the consecutive validation failure counter
+// for the given tool and returns the error message, potentially with an escalation
+// suffix if the threshold has been reached.
+func (r *ToolRegistry) recordValidationFailure(name, msg string, t RegisteredTool) string {
+	r.mu.Lock()
+	if r.validationFailures == nil {
+		r.validationFailures = map[string]int{}
+	}
+	r.validationFailures[name]++
+	count := r.validationFailures[name]
+	r.mu.Unlock()
+
+	if count >= circuitBreakerThreshold {
+		fields := requiredFields(t.Definition.Parameters)
+		msg += fmt.Sprintf("\nCIRCUIT BREAKER: Tool '%s' has failed validation %d times consecutively. Required fields: %s. Do NOT call this tool again without providing all required fields.", name, count, strings.Join(fields, ", "))
+	}
+	return msg
+}
+
+func (r *ToolRegistry) resetValidationFailures(name string) {
+	r.mu.Lock()
+	delete(r.validationFailures, name)
+	r.mu.Unlock()
+}
+
+// requiredFields extracts the "required" array from a tool's parameter schema.
+func requiredFields(params map[string]any) []string {
+	if params == nil {
+		return nil
+	}
+	req, ok := params["required"]
+	if !ok {
+		return nil
+	}
+	switch v := req.(type) {
+	case []string:
+		return v
+	case []any:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
 }
 
 func truncateResult(toolName, callID, full string, isErr bool, lim ToolOutputLimit) ToolExecResult {

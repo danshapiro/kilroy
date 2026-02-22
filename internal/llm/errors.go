@@ -122,6 +122,9 @@ func classifyByMessage(base httpErrorBase) error {
 		return &NotFoundError{base}
 	case strings.Contains(lower, "unauthorized") || strings.Contains(lower, "invalid key"):
 		return &AuthenticationError{base}
+	case strings.Contains(lower, "tool_use ids were found without tool_result"):
+		base.retryable = true
+		return &ServerError{base}
 	}
 	return nil
 }

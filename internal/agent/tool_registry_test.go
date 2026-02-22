@@ -306,6 +306,83 @@ func TestDefaultToolLimit_MatchesSpecTable(t *testing.T) {
 	}
 }
 
+func TestToolRegistry_CircuitBreaker_EscalatesAfterConsecutiveFailures(t *testing.T) {
+	r := NewToolRegistry()
+	if err := r.Register(RegisteredTool{
+		Definition: llm.ToolDefinition{
+			Name: "t",
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":    map[string]any{"type": "string"},
+					"content": map[string]any{"type": "string"},
+				},
+				"required": []any{"path", "content"},
+			},
+		},
+		Exec: func(ctx context.Context, env ExecutionEnvironment, args map[string]any) (any, error) {
+			return "ok", nil
+		},
+	}); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	env := NewLocalExecutionEnvironment(t.TempDir())
+
+	// First two failures: no circuit breaker message.
+	for i := 0; i < 2; i++ {
+		res := r.ExecuteCall(context.Background(), env, llm.ToolCallData{
+			ID:        fmt.Sprintf("c%d", i),
+			Name:      "t",
+			Arguments: json.RawMessage(`{}`),
+		})
+		if !res.IsError {
+			t.Fatalf("call %d: expected error", i)
+		}
+		if strings.Contains(res.Output, "CIRCUIT BREAKER") {
+			t.Fatalf("call %d: unexpected circuit breaker message", i)
+		}
+	}
+
+	// Third failure: should trigger circuit breaker.
+	res := r.ExecuteCall(context.Background(), env, llm.ToolCallData{
+		ID:        "c2",
+		Name:      "t",
+		Arguments: json.RawMessage(`{}`),
+	})
+	if !res.IsError {
+		t.Fatalf("call 2: expected error")
+	}
+	if !strings.Contains(res.Output, "CIRCUIT BREAKER") {
+		t.Fatalf("expected CIRCUIT BREAKER in output, got: %q", res.Output)
+	}
+	if !strings.Contains(res.Output, "path") || !strings.Contains(res.Output, "content") {
+		t.Fatalf("expected required fields in output, got: %q", res.Output)
+	}
+
+	// Successful call resets the counter.
+	res = r.ExecuteCall(context.Background(), env, llm.ToolCallData{
+		ID:        "c3",
+		Name:      "t",
+		Arguments: json.RawMessage(`{"path":"a","content":"b"}`),
+	})
+	if res.IsError {
+		t.Fatalf("expected success, got error: %q", res.Output)
+	}
+
+	// Next failure should NOT trigger circuit breaker (counter was reset).
+	res = r.ExecuteCall(context.Background(), env, llm.ToolCallData{
+		ID:        "c4",
+		Name:      "t",
+		Arguments: json.RawMessage(`{}`),
+	})
+	if !res.IsError {
+		t.Fatalf("expected error")
+	}
+	if strings.Contains(res.Output, "CIRCUIT BREAKER") {
+		t.Fatalf("unexpected CIRCUIT BREAKER after reset, got: %q", res.Output)
+	}
+}
+
 func TestCompileSchema_DoesNotDependOnGetwd(t *testing.T) {
 	temp := t.TempDir()
 	oldWD, err := os.Getwd()
