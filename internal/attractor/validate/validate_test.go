@@ -572,6 +572,40 @@ func assertNoRule(t *testing.T, diags []Diagnostic, rule string) {
 	}
 }
 
+// --- Tests for tool_command_abs_path lint rule ---
+
+func TestValidate_ToolCommandAbsPath_WarnsOnCdAbsolutePath(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  t [shape=parallelogram, tool_command="cd /tmp && echo hello"]
+  start -> t -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertHasRule(t, diags, "tool_command_abs_path", SeverityWarning)
+}
+
+func TestValidate_ToolCommandAbsPath_NoWarningOnRelativeCommand(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  t [shape=parallelogram, tool_command="cargo test"]
+  start -> t -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := Validate(g)
+	assertNoRule(t, diags, "tool_command_abs_path")
+}
+
 // --- Tests for V7.2: type_known lint rule ---
 
 func TestValidate_TypeKnownRule_RecognizedType_NoWarning(t *testing.T) {
