@@ -1583,7 +1583,7 @@ func TestAdapter_UsageCacheTokens_Mapped(t *testing.T) {
 	}
 }
 
-func TestAdapter_Complete_DefaultMaxTokens_Is4096(t *testing.T) {
+func TestAdapter_Complete_DefaultMaxTokens_Is65536(t *testing.T) {
 	var gotBody map[string]any
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1620,8 +1620,8 @@ func TestAdapter_Complete_DefaultMaxTokens_Is4096(t *testing.T) {
 	if !ok {
 		t.Fatalf("max_tokens not found or not a number: %#v", gotBody["max_tokens"])
 	}
-	if int(mt) != 4096 {
-		t.Fatalf("max_tokens: got %d want 4096", int(mt))
+	if int(mt) != 65536 {
+		t.Fatalf("max_tokens: got %d want 65536", int(mt))
 	}
 }
 

@@ -175,6 +175,14 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		reasoningPtr = &reasoning
 	}
 
+	maxTokensStr := strings.TrimSpace(node.Attr("max_tokens", ""))
+	var maxTokensPtr *int
+	if maxTokensStr != "" {
+		if v, err := strconv.Atoi(maxTokensStr); err == nil && v > 0 {
+			maxTokensPtr = &v
+		}
+	}
+
 	switch mode {
 	case "one_shot":
 		text, used, err := r.withFailoverText(ctx, execCtx, node, client, provider, modelID, func(prov string, mid string) (string, error) {
@@ -183,6 +191,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 				Model:           mid,
 				Messages:        []llm.Message{llm.User(prompt)},
 				ReasoningEffort: reasoningPtr,
+				MaxTokens:       maxTokensPtr,
 			}
 			if err := writeJSON(filepath.Join(stageDir, "api_request.json"), req); err != nil {
 				warnEngine(execCtx, fmt.Sprintf("write api_request.json: %v", err))
@@ -233,6 +242,9 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			sessCfg := agent.SessionConfig{}
 			if reasoning != "" {
 				sessCfg.ReasoningEffort = reasoning
+			}
+			if maxTokensPtr != nil {
+				sessCfg.MaxTokens = maxTokensPtr
 			}
 			// Cerebras GLM 4.7: preserve reasoning across agent-loop turns.
 			// clear_thinking defaults to true on the API, which strips prior
