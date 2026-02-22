@@ -56,4 +56,3 @@ func applyMiddlewareStream(base StreamFunc, mw []Middleware) StreamFunc {
 	}
 	return h
 }
-

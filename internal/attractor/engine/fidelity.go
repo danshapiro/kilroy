@@ -85,4 +85,3 @@ func resolveThreadKey(g *model.Graph, incoming *model.Edge, node *model.Node) st
 	}
 	return ""
 }
-

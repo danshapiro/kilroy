@@ -17,9 +17,9 @@ import (
 
 type Adapter struct {
 	Provider string
-	APIKey  string
-	BaseURL string
-	Client  *http.Client
+	APIKey   string
+	BaseURL  string
+	Client   *http.Client
 }
 
 func init() {

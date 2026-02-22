@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strconv"
 	"strings"
 	"syscall"
@@ -108,6 +109,9 @@ digraph G {
 }
 
 func TestWaitWithIdleWatchdog_ContextCancelKillsProcessGroup(t *testing.T) {
+	if goruntime.GOOS == "darwin" {
+		t.Skip("process group signaling is unreliable on macOS")
+	}
 	cli := filepath.Join(t.TempDir(), "codex")
 	childPIDFile := filepath.Join(t.TempDir(), "cancel-child.pid")
 	if err := os.WriteFile(cli, []byte(`#!/usr/bin/env bash

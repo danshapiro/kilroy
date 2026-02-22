@@ -22,8 +22,8 @@ func TestParseJoinPolicy(t *testing.T) {
 		{"K_OF_N", joinKOfN},
 		{"quorum", joinQuorum},
 		{"QUORUM", joinQuorum},
-		{"", joinWaitAll},           // default
-		{"unknown", joinWaitAll},    // default
+		{"", joinWaitAll},             // default
+		{"unknown", joinWaitAll},      // default
 		{"  wait_all  ", joinWaitAll}, // trimmed
 	}
 	for _, tc := range tests {
@@ -45,8 +45,8 @@ func TestParseErrorPolicy(t *testing.T) {
 		{"Fail_Fast", errPolicyFailFast},
 		{"ignore", errPolicyIgnore},
 		{"IGNORE", errPolicyIgnore},
-		{"", errPolicyContinue},           // default
-		{"unknown", errPolicyContinue},    // default
+		{"", errPolicyContinue},              // default
+		{"unknown", errPolicyContinue},       // default
 		{"  fail_fast  ", errPolicyFailFast}, // trimmed
 	}
 	for _, tc := range tests {
@@ -300,9 +300,9 @@ func TestParseFloat(t *testing.T) {
 	}{
 		{"0.5", 0.0, 0.5},
 		{"0.75", 0.0, 0.75},
-		{"", 0.5, 0.5},          // default
-		{"invalid", 0.5, 0.5},   // default on error
-		{"  1.0  ", 0.0, 1.0},   // trimmed
+		{"", 0.5, 0.5},        // default
+		{"invalid", 0.5, 0.5}, // default on error
+		{"  1.0  ", 0.0, 1.0}, // trimmed
 	}
 	for _, tc := range tests {
 		got := parseFloat(tc.input, tc.def)

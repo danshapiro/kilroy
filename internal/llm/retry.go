@@ -31,4 +31,3 @@ func DefaultRetryPolicy() RetryPolicy {
 		Jitter:            true,
 	}
 }
-

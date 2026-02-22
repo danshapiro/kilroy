@@ -68,4 +68,3 @@ digraph G {
 		t.Fatalf("expandBaseSHA with empty SHA changed prompt: %q", got)
 	}
 }
-

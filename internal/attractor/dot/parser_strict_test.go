@@ -18,4 +18,3 @@ func TestParse_AllowsOptionalTrailingSemicolon(t *testing.T) {
 		t.Fatalf("expected success, got error: %v", err)
 	}
 }
-

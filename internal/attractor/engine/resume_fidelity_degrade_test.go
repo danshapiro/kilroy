@@ -104,4 +104,3 @@ digraph G {
 		t.Fatalf("expected c to use full fidelity (no synthesized preamble); prompt:\n%s", string(cPrompt))
 	}
 }
-

@@ -491,7 +491,7 @@ func TestSession_SystemPrompt_IncludesGitSnapshot_WhenInGitRepo(t *testing.T) {
 
 	// Make the repo dirty before session start so the snapshot reflects it.
 	_ = os.WriteFile(filepath.Join(dir, "README.md"), []byte("hi\nmore\n"), 0o644) // modified tracked file
-	_ = os.WriteFile(filepath.Join(dir, "UNTRACKED.txt"), []byte("u\n"), 0o644)   // untracked file
+	_ = os.WriteFile(filepath.Join(dir, "UNTRACKED.txt"), []byte("u\n"), 0o644)    // untracked file
 
 	c := llm.NewClient()
 	f := &fakeAdapter{
@@ -643,25 +643,25 @@ func TestSession_LoopDetection_EmitsEventAndInjectsSteering(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-		_, err = sess.ProcessInput(ctx, "loop")
-		if err != nil {
-			t.Fatalf("ProcessInput: %v", err)
-		}
+	_, err = sess.ProcessInput(ctx, "loop")
+	if err != nil {
+		t.Fatalf("ProcessInput: %v", err)
+	}
 
-		// Spec: loop detection warning is recorded as a SteeringTurn in history.
-		sess.mu.Lock()
-		turns := append([]Turn{}, sess.history...)
-		sess.mu.Unlock()
-		foundSteering := false
-		for _, tr := range turns {
-			if tr.Kind == TurnSteering && tr.Message.Role == llm.RoleUser && strings.Contains(tr.Message.Text(), "Loop detection:") {
-				foundSteering = true
-			}
+	// Spec: loop detection warning is recorded as a SteeringTurn in history.
+	sess.mu.Lock()
+	turns := append([]Turn{}, sess.history...)
+	sess.mu.Unlock()
+	foundSteering := false
+	for _, tr := range turns {
+		if tr.Kind == TurnSteering && tr.Message.Role == llm.RoleUser && strings.Contains(tr.Message.Text(), "Loop detection:") {
+			foundSteering = true
 		}
-		if !foundSteering {
-			t.Fatalf("expected loop detection steering turn in history; got %+v", turns)
-		}
-		sess.Close()
+	}
+	if !foundSteering {
+		t.Fatalf("expected loop detection steering turn in history; got %+v", turns)
+	}
+	sess.Close()
 
 	// Verify loop detection event was emitted.
 	loopEv := false

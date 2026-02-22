@@ -9,7 +9,10 @@ import (
 )
 
 func TestLoadProjectDocs_WalksFromGitRootToWorkingDir_InDepthOrder(t *testing.T) {
-	root := t.TempDir()
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
 	initGitRepo(t, root)
 
 	// Working directory is nested inside the repo.
@@ -83,4 +86,3 @@ func initGitRepo(t *testing.T, dir string) {
 	run("add", "README.md")
 	run("commit", "-m", "init")
 }
-

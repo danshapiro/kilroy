@@ -121,4 +121,3 @@ func retryDelay(policy RetryPolicy, randFloat func() float64, err error, n int) 
 	}
 	return d, true
 }
-

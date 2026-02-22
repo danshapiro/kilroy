@@ -38,4 +38,3 @@ func TestCheckpoint_SaveLoad_RoundTripsAndFillsDefaults(t *testing.T) {
 		t.Fatalf("expected non-nil collections: %+v", loaded)
 	}
 }
-

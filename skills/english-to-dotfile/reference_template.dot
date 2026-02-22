@@ -279,7 +279,7 @@ digraph reference_template {
         //   - Must NOT direct from-scratch restart — preserve working code
         // Writes: .ai/postmortem_latest.md (overwrite previous)
         // Note: status reflects analysis completion, not implementation state
-        postmortem []
+        postmortem [prompt="Report whether you completed the analysis of the failure, not whether the implementation is fixed."]
     }
 
     // =========================================================================

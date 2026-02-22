@@ -51,9 +51,9 @@ func TestRestoreLoopFailureSignatures(t *testing.T) {
 		cp := &runtime.Checkpoint{
 			Extra: map[string]any{
 				"loop_failure_signatures": map[string]any{
-					"":           float64(5),
-					"  ":         float64(3),
-					"valid|sig":  float64(1),
+					"":          float64(5),
+					"  ":        float64(3),
+					"valid|sig": float64(1),
 				},
 			},
 		}

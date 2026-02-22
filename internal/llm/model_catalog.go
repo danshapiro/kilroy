@@ -200,8 +200,6 @@ func LoadModelCatalogFromOpenRouterJSON(path string) (*ModelCatalog, error) {
 	return &ModelCatalog{Models: models}, nil
 }
 
-
-
 func scalePerMillion(perToken *float64) *float64 {
 	if perToken == nil {
 		return nil

@@ -17,4 +17,3 @@ type Turn struct {
 	Kind    TurnKind
 	Message llm.Message
 }
-

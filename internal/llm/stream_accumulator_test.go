@@ -52,4 +52,3 @@ func TestStreamAccumulator_NoFinishResponse_BuildsFromText(t *testing.T) {
 		t.Fatalf("usage: %+v", got.Usage)
 	}
 }
-

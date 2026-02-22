@@ -168,4 +168,3 @@ digraph P {
 		t.Fatalf("missing expected branch keys; seenA=%v seenB=%v results=%+v", seenA, seenB, results)
 	}
 }
-

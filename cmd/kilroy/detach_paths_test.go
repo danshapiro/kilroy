@@ -7,7 +7,10 @@ import (
 )
 
 func TestResolveDetachedPaths_ConvertsRelativeToAbsolute(t *testing.T) {
-	tempDir := t.TempDir()
+	tempDir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
 	oldWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)

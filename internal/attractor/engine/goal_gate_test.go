@@ -98,4 +98,3 @@ digraph G {
 		t.Fatalf("error: %v", err)
 	}
 }
-

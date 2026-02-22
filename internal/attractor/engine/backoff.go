@@ -134,4 +134,3 @@ func backoffDelayForNode(runID string, g *model.Graph, n *model.Node, attempt in
 	}(), attempt)
 	return DelayForAttempt(attempt, backoffConfigFor(g, n), seed)
 }
-

@@ -148,4 +148,3 @@ func TestContext_Clone_NilValue(t *testing.T) {
 		t.Fatalf("clone nil_val=%v, want nil", v)
 	}
 }
-

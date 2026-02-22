@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -156,6 +157,9 @@ echo second-line
 }
 
 func TestEnsureCXDBReady_AutostartProcessTerminatedOnContextCancel(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("process group signaling is unreliable on macOS")
+	}
 	logsRoot := t.TempDir()
 	pidPath := filepath.Join(logsRoot, "cxdb-autostart.pid")
 	cmdPath := filepath.Join(logsRoot, "cxdb-autostart.sh")

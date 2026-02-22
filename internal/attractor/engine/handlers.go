@@ -742,10 +742,10 @@ type Question struct {
 	Type           QuestionType
 	Text           string
 	Options        []Option
-	Default        *Answer            // default answer if timeout/skip (nil = no default)
-	TimeoutSeconds float64            // max wait time; 0 means no timeout
+	Default        *Answer // default answer if timeout/skip (nil = no default)
+	TimeoutSeconds float64 // max wait time; 0 means no timeout
 	Stage          string
-	Metadata       map[string]any     // arbitrary key-value pairs for frontend use
+	Metadata       map[string]any // arbitrary key-value pairs for frontend use
 }
 
 type Option struct {

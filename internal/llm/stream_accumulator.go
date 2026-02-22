@@ -5,12 +5,12 @@ import "strings"
 // StreamAccumulator collects StreamEvent values and produces a complete Response.
 // It primarily exists to bridge streaming mode back to code that expects a Response.
 type StreamAccumulator struct {
-	textByID   map[string]*strings.Builder
-	textOrder  []string
-	finish     *FinishReason
-	usage      *Usage
-	final      *Response
-	partial    *Response
+	textByID  map[string]*strings.Builder
+	textOrder []string
+	finish    *FinishReason
+	usage     *Usage
+	final     *Response
+	partial   *Response
 }
 
 func NewStreamAccumulator() *StreamAccumulator {
@@ -107,4 +107,3 @@ func (a *StreamAccumulator) buildResponse() *Response {
 	}
 	return r
 }
-

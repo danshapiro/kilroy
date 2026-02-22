@@ -88,4 +88,3 @@ func expandPromptFiles(g *model.Graph, repoPath string) error {
 	}
 	return nil
 }
-

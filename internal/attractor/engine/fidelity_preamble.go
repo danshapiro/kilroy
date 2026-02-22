@@ -76,4 +76,3 @@ func decodeCompletedNodes(ctx *runtime.Context) []string {
 		return nil
 	}
 }
-

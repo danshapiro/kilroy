@@ -147,7 +147,7 @@ func TestAdapter_Complete_NormalizesDotsTodashesInModelID(t *testing.T) {
 		{"claude-sonnet-4.5", "claude-sonnet-4-5"},
 		{"claude-opus-4.6", "claude-opus-4-6"},
 		{"claude-3.7-sonnet", "claude-3-7-sonnet"},
-		{"claude-sonnet-4-5", "claude-sonnet-4-5"},             // already dashes
+		{"claude-sonnet-4-5", "claude-sonnet-4-5"},                   // already dashes
 		{"claude-sonnet-4-5-20250929", "claude-sonnet-4-5-20250929"}, // already native format
 	} {
 		t.Run(tc.input, func(t *testing.T) {

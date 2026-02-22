@@ -187,4 +187,3 @@ digraph G {
 		t.Fatalf("t outcome: got %q want %q", out.Status, runtime.StatusPartialSuccess)
 	}
 }
-
