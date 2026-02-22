@@ -33,6 +33,10 @@ type SessionConfig struct {
 	// Valid values are provider-dependent but typically include: low|medium|high.
 	ReasoningEffort string
 
+	// MaxTokens overrides the provider adapter's default max_tokens when non-nil.
+	// Use this to allow larger outputs (e.g., large write_file tool calls).
+	MaxTokens *int
+
 	// ProviderOptions is merged into every LLM request as provider_options.
 	// Use this for provider-specific parameters (e.g., Cerebras clear_thinking).
 	ProviderOptions map[string]any
@@ -472,6 +476,9 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 		if strings.TrimSpace(s.cfg.ReasoningEffort) != "" {
 			v := strings.TrimSpace(s.cfg.ReasoningEffort)
 			req.ReasoningEffort = &v
+		}
+		if s.cfg.MaxTokens != nil {
+			req.MaxTokens = s.cfg.MaxTokens
 		}
 		if len(s.cfg.ProviderOptions) > 0 {
 			req.ProviderOptions = s.cfg.ProviderOptions

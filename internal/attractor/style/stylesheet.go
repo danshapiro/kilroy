@@ -48,7 +48,7 @@ func ApplyStylesheet(g *model.Graph, rules []Rule) error {
 
 func applyToNode(g *model.Graph, n *model.Node, rules []Rule) {
 	// Only set properties that are missing.
-	props := []string{"llm_model", "llm_provider", "reasoning_effort"}
+	props := []string{"llm_model", "llm_provider", "reasoning_effort", "max_tokens"}
 	for _, prop := range props {
 		if _, ok := n.Attrs[prop]; ok {
 			continue
@@ -145,7 +145,7 @@ func (p *ssParser) parseRule() (Rule, error) {
 		if err != nil {
 			return Rule{}, err
 		}
-		if prop != "llm_model" && prop != "llm_provider" && prop != "reasoning_effort" {
+		if prop != "llm_model" && prop != "llm_provider" && prop != "reasoning_effort" && prop != "max_tokens" {
 			return Rule{}, p.errf("unknown property %q", prop)
 		}
 		p.skipSpace()
