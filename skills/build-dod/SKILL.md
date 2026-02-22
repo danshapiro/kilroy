@@ -56,15 +56,33 @@ For each primary way the deliverable is used, write a scenario with:
 
 Scenarios should cross multiple AC groups. A browser app scenario might cover loading (AC-2), display (AC-3), input (AC-4), and state persistence (AC-11) in one flow. A library scenario might cover import, configuration, processing, and output in one sequence.
 
+Each scenario is **self-contained** — it sets up its own preconditions within the test rather than depending on externally pre-computed inputs or manual preparation.
+
 Each scenario becomes a named automated test in the DoD, with `test exits 0` as its verification.
+
+### Scenario sanity checks
+
+Before finalizing each scenario, confirm:
+- **Automatable** — the test can set up its own state, run, and assert without human intervention or external artifacts
+- **Bounded** — the scenario has a finite, predictable number of steps (a test that must "play until winning" is unbounded; a test that exercises 5 specific levels via setup commands is bounded)
+- **Proportional** — effort to implement the test is proportional to the confidence it provides (testing 3 representative cases from a category provides nearly as much confidence as testing all 50)
+- **Independent** — the scenario produces the same result regardless of execution order or environment state
 
 ## The Crosscheck
 
-After writing all AC/verification pairs, review each row:
+After writing all AC/verification pairs and integration scenarios, review each:
 
+**Per AC/verification pair:**
 1. Confirm the verification catches the failure mode the AC guards against
 2. Confirm the verification tests the delivered artifact
 3. Look for semantic checks that can become deterministic — convert them
+
+**Per integration scenario:**
+4. Confirm the scenario is automatable, bounded, proportional, and independent (see sanity checks above)
+5. Confirm the scenario crosses multiple AC groups
+
+**Overall:**
+6. Confirm the scenarios collectively cover every AC group at least once
 
 ## Output Format
 
