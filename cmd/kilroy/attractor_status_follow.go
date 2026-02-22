@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/danshapiro/kilroy/internal/attractor/procutil"
+	"github.com/danshapiro/kilroy/internal/attractor/runstate"
 )
 
 // runFollowProgress tails progress.ndjson with formatted output until the run
@@ -352,7 +353,7 @@ func latestRunLogsRoot() (string, error) {
 
 // runWatchStatus polls the snapshot every interval and reprints it with
 // screen clearing. Exits when the run reaches a terminal state.
-func runWatchStatus(logsRoot string, stdout io.Writer, stderr io.Writer, asJSON bool, intervalSec int) int {
+func runWatchStatus(logsRoot string, stdout io.Writer, stderr io.Writer, asJSON bool, verbose bool, intervalSec int) int {
 	if intervalSec <= 0 {
 		intervalSec = 2
 	}
@@ -362,7 +363,7 @@ func runWatchStatus(logsRoot string, stdout io.Writer, stderr io.Writer, asJSON 
 		// Clear screen (ANSI escape).
 		fmt.Fprint(stdout, "\033[2J\033[H")
 
-		code := printSnapshot(logsRoot, stdout, stderr, asJSON)
+		code := printSnapshot(logsRoot, stdout, stderr, asJSON, verbose)
 		if code != 0 {
 			return code
 		}
@@ -381,11 +382,18 @@ func runWatchStatus(logsRoot string, stdout io.Writer, stderr io.Writer, asJSON 
 
 // printSnapshot loads and prints the current snapshot. Same as the one-shot
 // path in runAttractorStatus but extracted for reuse.
-func printSnapshot(logsRoot string, stdout io.Writer, stderr io.Writer, asJSON bool) int {
+func printSnapshot(logsRoot string, stdout io.Writer, stderr io.Writer, asJSON bool, verbose bool) int {
 	snapshot, err := loadSnapshot(logsRoot)
 	if err != nil {
 		fmt.Fprintln(stderr, err)
 		return 1
+	}
+
+	if verbose {
+		if err := runstate.ApplyVerbose(snapshot); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
 	}
 
 	if asJSON {
@@ -410,5 +418,71 @@ func printSnapshot(logsRoot string, stdout io.Writer, stderr io.Writer, asJSON b
 	if snapshot.FailureReason != "" {
 		fmt.Fprintf(stdout, "failure_reason=%s\n", snapshot.FailureReason)
 	}
+
+	if verbose {
+		printVerboseSnapshot(stdout, snapshot)
+	}
 	return 0
+}
+
+func printVerboseSnapshot(w io.Writer, s *runstate.Snapshot) {
+	if len(s.CompletedNodes) > 0 {
+		fmt.Fprintf(w, "completed_nodes=%s\n", strings.Join(s.CompletedNodes, ","))
+	}
+	if len(s.RetryCounts) > 0 {
+		parts := make([]string, 0, len(s.RetryCounts))
+		for node, count := range s.RetryCounts {
+			parts = append(parts, fmt.Sprintf("%s:%d", node, count))
+		}
+		sort.Strings(parts)
+		fmt.Fprintf(w, "retry_counts=%s\n", strings.Join(parts, ","))
+	}
+	if s.FinalCommitSHA != "" {
+		fmt.Fprintf(w, "final_commit_sha=%s\n", s.FinalCommitSHA)
+	}
+	if s.CXDBContextID != "" {
+		fmt.Fprintf(w, "cxdb_context_id=%s\n", s.CXDBContextID)
+	}
+
+	if len(s.StageTrace) > 0 || len(s.EdgeTrace) > 0 {
+		fmt.Fprintln(w, "\n--- stage trace ---")
+		si, ei := 0, 0
+		for si < len(s.StageTrace) || ei < len(s.EdgeTrace) {
+			if si < len(s.StageTrace) {
+				sa := s.StageTrace[si]
+				line := fmt.Sprintf("  %-24s %-8s attempt %d/%d", sa.NodeID, sa.Status, sa.Attempt, sa.MaxAttempts)
+				if sa.FailureReason != "" {
+					line += "  " + sa.FailureReason
+				}
+				fmt.Fprintln(w, line)
+				si++
+				// Print any edges that follow this stage
+				for ei < len(s.EdgeTrace) && s.EdgeTrace[ei].From == sa.NodeID {
+					et := s.EdgeTrace[ei]
+					cond := ""
+					if et.Condition != "" {
+						cond = " (" + et.Condition + ")"
+					}
+					fmt.Fprintf(w, "    → %-20s%s\n", et.To, cond)
+					ei++
+				}
+			} else {
+				// Remaining edges
+				et := s.EdgeTrace[ei]
+				cond := ""
+				if et.Condition != "" {
+					cond = " (" + et.Condition + ")"
+				}
+				fmt.Fprintf(w, "    → %-20s%s\n", et.To, cond)
+				ei++
+			}
+		}
+	}
+
+	if s.PostmortemText != "" {
+		fmt.Fprintf(w, "\n--- postmortem (worktree/.ai/postmortem_latest.md) ---\n%s\n", s.PostmortemText)
+	}
+	if s.ReviewText != "" {
+		fmt.Fprintf(w, "\n--- review (worktree/.ai/review_final.md) ---\n%s\n", s.ReviewText)
+	}
 }

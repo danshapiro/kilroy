@@ -26,6 +26,7 @@ func runAttractorStatus(args []string, stdout io.Writer, stderr io.Writer) int {
 	var watch bool
 	var latest bool
 	var useCXDB bool
+	var verbose bool
 	intervalSec := 2
 
 	for i := 0; i < len(args); i++ {
@@ -49,6 +50,8 @@ func runAttractorStatus(args []string, stdout io.Writer, stderr io.Writer) int {
 			latest = true
 		case "--cxdb":
 			useCXDB = true
+		case "--verbose", "-v":
+			verbose = true
 		case "--interval":
 			i++
 			if i >= len(args) {
@@ -105,9 +108,9 @@ func runAttractorStatus(args []string, stdout io.Writer, stderr io.Writer) int {
 	}
 
 	if watch {
-		return runWatchStatus(logsRoot, stdout, stderr, asJSON, intervalSec)
+		return runWatchStatus(logsRoot, stdout, stderr, asJSON, verbose, intervalSec)
 	}
 
 	// Default: one-shot snapshot.
-	return printSnapshot(logsRoot, stdout, stderr, asJSON)
+	return printSnapshot(logsRoot, stdout, stderr, asJSON, verbose)
 }

@@ -195,6 +195,136 @@ func readLastProgressEvent(path string) (map[string]any, bool, error) {
 	return ev, true, nil
 }
 
+// ApplyVerbose enriches a Snapshot with data from checkpoint, final, progress,
+// and worktree artifact files. Missing files are silently skipped.
+func ApplyVerbose(s *Snapshot) error {
+	if err := applyCheckpointVerbose(s); err != nil {
+		return err
+	}
+	if err := applyFinalVerbose(s); err != nil {
+		return err
+	}
+	if err := applyStageTrace(s); err != nil {
+		return err
+	}
+	applyWorktreeArtifacts(s)
+	return nil
+}
+
+type checkpointDoc struct {
+	CompletedNodes []string       `json:"completed_nodes"`
+	NodeRetries    map[string]int `json:"node_retries"`
+}
+
+func applyCheckpointVerbose(s *Snapshot) error {
+	path := filepath.Join(s.LogsRoot, "checkpoint.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var doc checkpointDoc
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	s.CompletedNodes = doc.CompletedNodes
+	s.RetryCounts = doc.NodeRetries
+	return nil
+}
+
+type finalVerboseDoc struct {
+	FinalCommitSHA string `json:"final_git_commit_sha"`
+	CXDBContextID  string `json:"cxdb_context_id"`
+}
+
+func applyFinalVerbose(s *Snapshot) error {
+	path := filepath.Join(s.LogsRoot, "final.json")
+	b, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var doc finalVerboseDoc
+	if err := json.Unmarshal(b, &doc); err != nil {
+		return fmt.Errorf("decode %s: %w", path, err)
+	}
+	s.FinalCommitSHA = strings.TrimSpace(doc.FinalCommitSHA)
+	s.CXDBContextID = strings.TrimSpace(doc.CXDBContextID)
+	return nil
+}
+
+func applyStageTrace(s *Snapshot) error {
+	path := filepath.Join(s.LogsRoot, "progress.ndjson")
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	defer func() { _ = f.Close() }()
+
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 2*1024*1024)
+
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		switch eventString(ev["event"]) {
+		case "stage_attempt_end":
+			sa := StageAttempt{
+				NodeID:        eventString(ev["node_id"]),
+				Status:        eventString(ev["status"]),
+				Attempt:       eventInt(ev["attempt"]),
+				MaxAttempts:   eventInt(ev["max"]),
+				FailureReason: eventString(ev["failure_reason"]),
+			}
+			s.StageTrace = append(s.StageTrace, sa)
+		case "edge_selected":
+			et := EdgeTransition{
+				From:      eventString(ev["from_node"]),
+				To:        eventString(ev["to_node"]),
+				Condition: eventString(ev["condition"]),
+			}
+			s.EdgeTrace = append(s.EdgeTrace, et)
+		}
+	}
+	return sc.Err()
+}
+
+func applyWorktreeArtifacts(s *Snapshot) {
+	if b, err := os.ReadFile(filepath.Join(s.LogsRoot, "worktree", ".ai", "postmortem_latest.md")); err == nil {
+		s.PostmortemText = string(b)
+	}
+	if b, err := os.ReadFile(filepath.Join(s.LogsRoot, "worktree", ".ai", "review_final.md")); err == nil {
+		s.ReviewText = string(b)
+	}
+}
+
+func eventInt(v any) int {
+	switch t := v.(type) {
+	case nil:
+		return 0
+	case float64:
+		return int(t)
+	case string:
+		n, _ := strconv.Atoi(t)
+		return n
+	default:
+		return 0
+	}
+}
+
 func eventString(v any) string {
 	switch t := v.(type) {
 	case nil:
