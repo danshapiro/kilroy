@@ -16,39 +16,69 @@ digraph reference_template {
         "
     ]
 
-    // NOTE: Prompts in this template are abbreviated structural stubs.
-    // Generated pipelines must use the full status-file contract from
-    // Phase 4 (fallback path + nested-directory warning).
+    // =======================================================================
+    // TEMPLATE USAGE
     //
-    // Status JSON schema note:
-    // - Prefer the canonical metaspec schema: {"status":"success|fail|retry|..."}.
-    // - The engine still accepts legacy {"outcome":"..."} shapes, but templates should
-    //   steer agents/tools toward canonical "status".
+    // This template defines TOPOLOGY ONLY: node shapes, edges, routing,
+    // and structural patterns. It contains NO prompt text.
+    //
+    // The ingestor must compose every prompt from scratch based on the
+    // actual project spec, DoD, and repo contents. Prompt requirements
+    // are listed in comments above each shape=box node. See Phase 4 of
+    // the english-to-dotfile skill for the full prompt contract.
+    //
+    // Common requirements for ALL shape=box prompts (do not repeat per node):
+    //   - Reference $goal
+    //   - Full status contract: write to $KILROY_STAGE_STATUS_PATH,
+    //     fall back to $KILROY_STAGE_STATUS_FALLBACK_PATH, do not write
+    //     nested status.json after cd, use schema {"status":"..."}
+    //   - For status=fail or status=retry: include failure_reason, details,
+    //     and failure_class
+    // =======================================================================
+
     exit  [shape=Msquare, label="Exit"]
 
     subgraph cluster_bootstrap {
         label="Bootstrap"
         start [shape=Mdiamond, label="Start"]
 
-        // Toolchain gate - fail fast before LLM stages
+        // Toolchain gate — fail fast before LLM stages.
+        // Replace tool_command with project-specific checks.
         check_toolchain [
             shape=parallelogram,
             max_retries=0,
-            tool_command="echo 'Replace with project-specific toolchain checks. Enumerate every tool that will be required and check it thoroughly; we strongly prefer a fast failure.'; exit 0"
+            tool_command="echo 'Replace with project-specific toolchain checks'; exit 0"
         ]
 
-        // Spec expansion - bootstraps .ai/spec.md from vague input. If the input is already a fully detailed specification, this node may be omitted. Only node allowed to use auto_status=true (skip verify).
+        // PROMPT: expand_spec
+        // Role: create or reuse canonical spec at .ai/spec.md
+        // Must address:
+        //   - Reuse existing .ai/spec.md or repo spec if adequate
+        //   - Copy user-declared verbatim specs without rewriting
+        //   - Expand from $goal only when no adequate spec exists
+        //   - Spec must include: scope, constraints, assumptions, acceptance
+        //     criteria, verification approach, non-goals
+        // Reads: $goal, existing .ai/spec.md (if any), repo docs
+        // Writes: .ai/spec.md
+        // Note: auto_status=true — no explicit status write needed
         expand_spec [
             shape=box,
-            auto_status=true,
-            prompt="Goal: $goal\n\nCreate or reuse a canonical spec at .ai/spec.md.\n\nStep 1 (reuse first): If .ai/spec.md already exists and is a real spec (not a placeholder), keep its meaning. You may do form-only cleanup (headings/whitespace) if needed.\n\nStep 2 (reuse repo spec): If the repo already contains an adequate spec/requirements doc (for example under docs/, a requirements/spec file, or a detailed README section), prefer reusing it. If downstream nodes expect .ai/spec.md, copy that content verbatim into .ai/spec.md (form-only formatting allowed).\n\nStep 3 (expand): Otherwise, expand $goal into a spec with sections:\n- Overview\n- Scope (in/out)\n- Constraints\n- Assumptions\n- Acceptance Criteria\n- Verification\n- Non-goals/Deferrals\n\nWrite the result to .ai/spec.md."
+            auto_status=true
         ]
 
-        // DoD routing - skip DoD generation on loop iterations
+        // PROMPT: check_dod
+        // Role: determine if .ai/definition_of_done.md is adequate
+        // Must address:
+        //   - Check file existence and content (not placeholder)
+        //   - Apply DoD rubric: scope, deliverables, AC, verification,
+        //     quality/safety gates, non-goals
+        //   - Apply coverage checklist: build, tests, lint, docs,
+        //     compatibility, security, ops, perf
+        // Reads: .ai/definition_of_done.md
+        // Outcomes: has_dod or needs_dod
         check_dod [
             shape=box,
-            label="DoD exists?",
-            prompt="Goal: $goal\n\nCheck whether .ai/definition_of_done.md exists AND is a real project Definition of Done (not a placeholder).\n\nDoD rubric (must be specific, verifiable, and not over-prescriptive):\n- Scope: defines what is in-scope and what is out-of-scope.\n- Deliverables: names concrete outputs/outcomes (artifacts, behaviors, docs), not implementation steps.\n- Acceptance criteria: includes observable pass/fail criteria a reviewer can verify.\n- Verification: includes how to verify (commands or steps) appropriate for the project, without forcing a particular tool unless required.\n- Quality/safety: includes project-appropriate quality expectations stated as outcomes/evidence.\n- Non-goals/deferrals: explicitly calls out what is intentionally not being done in this iteration.\n\nCoverage checklist: the DoD must explicitly address each item (either include criteria, or mark N/A with a short reason):\n- Build/package/install correctness (or equivalent)\n- Automated tests (or explicit manual verification steps)\n- Lint/format/static analysis (or N/A)\n- Documentation/user guidance (or N/A)\n- Compatibility/breaking changes/migrations (or N/A)\n- Security/privacy considerations (or N/A)\n- Operational readiness when relevant (logging, error handling, observability, rollback safety)\n- Performance/reliability when relevant\n\nClassify:\n- Set `status` to `has_dod` if the file meets the rubric AND covers the checklist.\n- Set `status` to `needs_dod` otherwise.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\nDo not write nested status.json files after cd.\n\nNote: routing edges use condition=\"outcome=<status>\" (outcome mirrors the status.json `status` value)."
+            label="DoD exists?"
         ]
     }
 
@@ -56,79 +86,100 @@ digraph reference_template {
         label="DoD Fanout"
         node [shape=box]
 
-        // Explicit fan-out
         dod_fanout [shape=component, label="DoD Fan-Out"]
 
-        // DoD fan-out: 3 branches, each a DIFFERENT provider via class
-        dod_a [
-            class="branch-a",
-            prompt="Goal: $goal\n\nPropose a project Definition of Done (DoD). Read .ai/spec.md.\n\nRequirements:\n- DoD must be a checklist of outcomes/evidence, not a plan.\n- Each item must be verifiable (someone can check it and say pass/fail).\n- Avoid prescribing the implementation approach unless the spec explicitly requires it.\n- Include scope, deliverables, acceptance criteria, verification approach, and explicit non-goals/deferrals.\n- Keep it general enough for the project type while still preventing obvious 'done-but-not-really' loopholes.\n\nCoverage checklist: explicitly address each item (include criteria, or mark N/A with a short reason):\n- Build/package/install correctness (or equivalent)\n- Automated tests (or explicit manual verification steps)\n- Lint/format/static analysis (or N/A)\n- Documentation/user guidance (or N/A)\n- Compatibility/breaking changes/migrations (or N/A)\n- Security/privacy considerations (or N/A)\n- Operational readiness when relevant (logging, error handling, observability, rollback safety)\n- Performance/reliability when relevant\n\nWrite to .ai/dod_a.md.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\nSet `status` to `success`."
-        ]
-        dod_b [
-            class="branch-b",
-            prompt="Goal: $goal\n\nPropose a project Definition of Done (DoD). Read .ai/spec.md.\n\nRequirements:\n- DoD must be a checklist of outcomes/evidence, not a plan.\n- Each item must be verifiable (someone can check it and say pass/fail).\n- Avoid prescribing the implementation approach unless the spec explicitly requires it.\n- Include scope, deliverables, acceptance criteria, verification approach, and explicit non-goals/deferrals.\n- Keep it general enough for the project type while still preventing obvious 'done-but-not-really' loopholes.\n\nCoverage checklist: explicitly address each item (include criteria, or mark N/A with a short reason):\n- Build/package/install correctness (or equivalent)\n- Automated tests (or explicit manual verification steps)\n- Lint/format/static analysis (or N/A)\n- Documentation/user guidance (or N/A)\n- Compatibility/breaking changes/migrations (or N/A)\n- Security/privacy considerations (or N/A)\n- Operational readiness when relevant (logging, error handling, observability, rollback safety)\n- Performance/reliability when relevant\n\nWrite to .ai/dod_b.md.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\nSet `status` to `success`."
-        ]
-        dod_c [
-            class="branch-c",
-            prompt="Goal: $goal\n\nPropose a project Definition of Done (DoD). Read .ai/spec.md.\n\nRequirements:\n- DoD must be a checklist of outcomes/evidence, not a plan.\n- Each item must be verifiable (someone can check it and say pass/fail).\n- Avoid prescribing the implementation approach unless the spec explicitly requires it.\n- Include scope, deliverables, acceptance criteria, verification approach, and explicit non-goals/deferrals.\n- Keep it general enough for the project type while still preventing obvious 'done-but-not-really' loopholes.\n\nCoverage checklist: explicitly address each item (include criteria, or mark N/A with a short reason):\n- Build/package/install correctness (or equivalent)\n- Automated tests (or explicit manual verification steps)\n- Lint/format/static analysis (or N/A)\n- Documentation/user guidance (or N/A)\n- Compatibility/breaking changes/migrations (or N/A)\n- Security/privacy considerations (or N/A)\n- Operational readiness when relevant (logging, error handling, observability, rollback safety)\n- Performance/reliability when relevant\n\nWrite to .ai/dod_c.md.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\nSet `status` to `success`."
-        ]
-        consolidate_dod [
-            prompt="Goal: $goal\n\nSynthesize the DoD proposals into a single consensus DoD. Read .ai/spec.md.\n\nImportant: The DoD branches run in isolated worktrees when triggered via dod_fanout (shape=component).\nTo gather inputs:\n1) Read $KILROY_LOGS_ROOT/dod_fanout/parallel_results.json.\n2) From each branch worktree_dir, read any of:\n- .ai/dod_a.md\n- .ai/dod_b.md\n- .ai/dod_c.md\nIf parallel_results.json is missing, fall back to reading those files from the current worktree.\n\nOutput requirements:\n- Produce a single DoD that meets the DoD rubric (scope, deliverables, acceptance criteria, verification, quality/safety outcomes, non-goals).\n- Coverage checklist: explicitly address each item (include criteria, or mark N/A with a short reason):\n  - Build/package/install correctness (or equivalent)\n  - Automated tests (or explicit manual verification steps)\n  - Lint/format/static analysis (or N/A)\n  - Documentation/user guidance (or N/A)\n  - Compatibility/breaking changes/migrations (or N/A)\n  - Security/privacy considerations (or N/A)\n  - Operational readiness when relevant (logging, error handling, observability, rollback safety)\n  - Performance/reliability when relevant\n- Prefer 'what' and 'evidence' over 'how'.\n- Remove contradictions; keep it realistically checkable.\n\nWrite the final DoD to .ai/definition_of_done.md.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\nSet `status` to `success`."
-        ]
+        // PROMPT: dod_a, dod_b, dod_c
+        // (identical prompt — diversity comes from different models)
+        // Role: propose a project DoD from the spec
+        // Must address:
+        //   - Read .ai/spec.md
+        //   - DoD is outcomes/evidence, not a plan
+        //   - Each item verifiable (pass/fail)
+        //   - Don't prescribe implementation approach
+        //   - Include: scope, deliverables, AC, verification, non-goals
+        //   - Apply coverage checklist
+        // Writes: .ai/dod_a.md (or _b, _c)
+        dod_a [class="branch-a"]
+        dod_b [class="branch-b"]
+        dod_c [class="branch-c"]
+
+        // PROMPT: consolidate_dod
+        // Role: synthesize dod_a/b/c into consensus DoD
+        // Must address:
+        //   - Read branch outputs via parallel_results.json + worktree_dir
+        //   - Fall back to current worktree if parallel_results.json missing
+        //   - Read .ai/spec.md for context
+        //   - Resolve contradictions, apply DoD rubric + coverage checklist
+        // Writes: .ai/definition_of_done.md
+        consolidate_dod []
     }
 
     subgraph cluster_planning {
         label="Planning Fanout"
         node [shape=box]
 
-        // Explicit fan-out
         plan_fanout [shape=component, label="Plan Fan-Out"]
 
-        // Planning fan-out: 3 branches with different providers
-        // Each planner reads postmortem (if exists) to incorporate lessons.
-        plan_a [
-            class="branch-a",
-            prompt="Goal: $goal\n\nCreate an implementation plan.\nRead .ai/spec.md, .ai/definition_of_done.md.\nIf .ai/postmortem_latest.md exists, incorporate its lessons.\nWrite to .ai/plan_a.md.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\nSet `status` to `success`."
-        ]
-        plan_b [
-            class="branch-b",
-            prompt="Goal: $goal\n\nCreate an implementation plan.\nRead .ai/spec.md, .ai/definition_of_done.md.\nIf .ai/postmortem_latest.md exists, incorporate its lessons.\nWrite to .ai/plan_b.md.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\nSet `status` to `success`."
-        ]
-        plan_c [
-            class="branch-c",
-            prompt="Goal: $goal\n\nCreate an implementation plan.\nRead .ai/spec.md, .ai/definition_of_done.md.\nIf .ai/postmortem_latest.md exists, incorporate its lessons.\nWrite to .ai/plan_c.md.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\nSet `status` to `success`."
-        ]
-        debate_consolidate [
-            prompt="Goal: $goal\n\nSynthesize the planning branches into a best-of-breed final plan.\n\nImportant: The planning branches run in isolated worktrees when triggered via plan_fanout (shape=component).\nTo gather inputs:\n1) Read $KILROY_LOGS_ROOT/plan_fanout/parallel_results.json.\n2) From each branch worktree_dir, read any of:\n- .ai/plan_a.md\n- .ai/plan_b.md\n- .ai/plan_c.md\nIf parallel_results.json is missing, fall back to reading those files from the current worktree.\n\nResolve conflicts. Ensure dependency order.\nIf .ai/postmortem_latest.md exists, verify the plan addresses every issue.\nWrite to .ai/plan_final.md.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\nSet `status` to `success`."
-        ]
+        // PROMPT: plan_a, plan_b, plan_c
+        // (identical prompt — diversity comes from different models)
+        // Role: create implementation plan from spec + DoD
+        // Must address:
+        //   - Read .ai/spec.md and .ai/definition_of_done.md
+        //   - If .ai/postmortem_latest.md exists, incorporate its lessons
+        //   - Plan must cover all deliverables and acceptance criteria
+        //     from the DoD, with project-specific implementation detail
+        //   - Plan must be grounded in the actual project domain,
+        //     technology stack, and repo structure
+        // Writes: .ai/plan_a.md (or _b, _c)
+        plan_a [class="branch-a"]
+        plan_b [class="branch-b"]
+        plan_c [class="branch-c"]
+
+        // PROMPT: debate_consolidate
+        // Role: synthesize plan_a/b/c into best-of-breed final plan
+        // Must address:
+        //   - Read branch outputs via parallel_results.json + worktree_dir
+        //   - Fall back to current worktree if parallel_results.json missing
+        //   - If .ai/postmortem_latest.md exists, verify plan addresses
+        //     every identified issue
+        //   - Resolve conflicts, ensure dependency order
+        // Writes: .ai/plan_final.md
+        debate_consolidate []
     }
 
     subgraph cluster_implement_verify {
         label="Implement And Verify"
 
-        // Single-writer implementation - the only code-writing node
+        // PROMPT: implement
+        // Role: single-writer code implementation (fresh or repair)
+        // Must address:
+        //   - REPAIR FIRST: if .ai/postmortem_latest.md exists, read it
+        //     FIRST, fix ONLY identified gaps, do NOT regenerate working
+        //     systems, preserve all passing code and tests
+        //   - FRESH: if no postmortem, execute .ai/plan_final.md
+        //   - Read .ai/spec.md and .ai/definition_of_done.md
+        //   - Implementation instructions must be specific to the project's
+        //     deliverables, domain, technology, and constraints — derived
+        //     from the ingestor's reading of the spec and DoD
+        //   - Progressive compilation: each module compiling before next
+        //   - Log progress to .ai/implementation_log.md
+        // Failure: also include failure_signature in meta
         implement [
             shape=box,
             class="hard",
-            max_retries=2,
-            prompt="Goal: $goal\n\nCheck first: if .ai/postmortem_latest.md exists, this is a REPAIR iteration.\n- Read .ai/postmortem_latest.md FIRST.\n- Fix ONLY the gaps it identifies.\n- Do NOT regenerate or rewrite systems already marked as working.\n- Preserve all passing code and tests.\nOtherwise, this is a fresh implementation: execute .ai/plan_final.md.\n\nIn both cases:\n- Read .ai/definition_of_done.md for acceptance criteria.\n- Use progressive compilation: get each module compiling before starting the next.\n- Log progress to .ai/implementation_log.md.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\n\nIf `status` is `fail`, include failure_reason, details, failure_class, and failure_signature.\n\nSet `status` to `success` if build passes; otherwise set `status` to `fail`."
+            max_retries=2
         ]
         check_implement [shape=diamond, label="Implement OK?"]
 
-        // Auto-fix formatting before verification. Replace placeholder with
-        // the project's canonical formatter (e.g. gofmt -w ., cargo fmt,
-        // black ., prettier --write .). Runs unconditionally so verify_fmt
-        // is a pure assertion.
+        // Auto-fix formatting before verify gate.
+        // Replace tool_command with project-specific auto-formatter.
         fix_fmt [
             shape=parallelogram,
             max_retries=0,
-            tool_command="echo 'Replace with project-specific auto-formatter (e.g. gofmt -w ., cargo fmt, black ., prettier --write .)'; exit 0"
+            tool_command="echo 'Replace with project-specific auto-formatter'; exit 0"
         ]
 
-        // Deterministic verification gates - tool nodes first, then semantic review
-        // max_retries=0: format checks are deterministic — re-running on unchanged
-        // code always produces the same result. Route to postmortem immediately
-        // rather than wasting retries.
+        // Replace tool_command with project-specific formatter check.
         verify_fmt [
             shape=parallelogram,
             max_retries=0,
@@ -136,30 +187,43 @@ digraph reference_template {
         ]
         check_fmt [shape=diamond, label="Fmt OK?"]
 
+        // Replace tool_command with project-specific build command.
         verify_build [
             shape=parallelogram,
             tool_command="echo 'Replace with project-specific build check'; exit 0"
         ]
         check_build [shape=diamond, label="Build OK?"]
 
+        // Replace tool_command with project-specific test command.
         verify_test [
             shape=parallelogram,
             tool_command="echo 'Replace with project-specific test check'; exit 0"
         ]
         check_test [shape=diamond, label="Tests OK?"]
 
-        // max_retries=0: artifact hygiene checks are deterministic.
+        // Replace tool_command with artifact hygiene check.
+        // Include both .cargo-target* and .cargo_target* patterns if Rust.
         verify_artifacts [
             shape=parallelogram,
             max_retries=0,
-            tool_command="echo 'Replace with artifact hygiene check (include both .cargo-target* and .cargo_target* patterns)'; exit 0"
+            tool_command="echo 'Replace with artifact hygiene check'; exit 0"
         ]
         check_artifacts [shape=diamond, label="Artifacts OK?"]
 
+        // PROMPT: verify_fidelity
+        // Role: semantic review after all deterministic checks pass
+        // Must address:
+        //   - Read implementation outputs and verify against
+        //     .ai/definition_of_done.md and .ai/spec.md
+        //   - Verification must be specific to the project's acceptance
+        //     criteria — enumerate the actual areas to check, derived from
+        //     the ingestor's reading of the DoD
+        //   - Write results to .ai/verify_fidelity.md
+        // Failure: also include failure_signature in meta — sorted
+        //   comma-separated list of specific failed criteria identifiers
         verify_fidelity [
             shape=box,
-            class="verify",
-            prompt="Perform semantic fidelity review after deterministic checks pass.\n\nRead implementation outputs and verify behavior matches .ai/definition_of_done.md and .ai/spec.md.\nIf semantic gaps exist, set `status` to `fail` with a stable failure_reason code (for example semantic_fidelity_gap) and include details listing each specific gap.\n\nWrite results to .ai/verify_fidelity.md.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\n\nIf `status` is `fail`, include failure_reason and details.\nAlso set failure_signature in meta to a sorted comma-separated list of the specific failed criteria identifiers.\n\nSet `status` to `success` if semantic review passes; otherwise set `status` to `fail`."
+            class="verify"
         ]
         check_impl [shape=diamond, label="Impl OK?"]
     }
@@ -168,36 +232,54 @@ digraph reference_template {
         label="Review Fanout"
         node [shape=box]
 
-        // Explicit fan-out; convergence remains edge-based at review_consensus.
         review_fanout [shape=component, label="Review Fan-Out"]
 
-        // Review fan-out: 3 branches with different providers
-        review_a [
-            class="branch-a",
-            prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_a.md with APPROVED or REJECTED verdict.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\n\nIf `status` is `fail`, include failure_reason and details listing specific gaps.\n\nSet `status` to `success` if the implementation meets the DoD; otherwise set `status` to `fail`."
-        ]
-        review_b [
-            class="branch-b",
-            prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_b.md with APPROVED or REJECTED verdict.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\n\nIf `status` is `fail`, include failure_reason and details listing specific gaps.\n\nSet `status` to `success` if the implementation meets the DoD; otherwise set `status` to `fail`."
-        ]
-        review_c [
-            class="branch-c",
-            prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck build, completeness, correctness, tests.\nWrite review to .ai/review_c.md with APPROVED or REJECTED verdict.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\n\nIf `status` is `fail`, include failure_reason and details listing specific gaps.\n\nSet `status` to `success` if the implementation meets the DoD; otherwise set `status` to `fail`."
-        ]
-        review_consensus [
-            goal_gate=true,
-            prompt="Goal: $goal\n\nSynthesize the review branches into a single consensus.\nRead .ai/definition_of_done.md for criteria.\n\nImportant: The review branches run in isolated worktrees when triggered via review_fanout (shape=component).\nTo gather inputs:\n1) Read $KILROY_LOGS_ROOT/review_fanout/parallel_results.json.\n2) From each branch worktree_dir, read any of:\n- .ai/review_a.md\n- .ai/review_b.md\n- .ai/review_c.md\nIf parallel_results.json is missing, fall back to reading those files from the current worktree.\n\nConsensus policy:\n- If 2+ reviewers APPROVED and no critical gaps: set `status` to `success`.\n- Otherwise: set `status` to `retry` with failure_reason and details listing specific issues.\n\nWrite consensus to .ai/review_consensus.md.\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\n\nIf `status` is `retry`, include failure_reason and details.\n\nSet `status` to `success` or `retry`."
-        ]
+        // PROMPT: review_a, review_b, review_c
+        // (identical prompt — diversity comes from different models)
+        // Role: review implementation against DoD
+        // Must address:
+        //   - Read .ai/definition_of_done.md for acceptance criteria
+        //   - Read implementation outputs
+        //   - Check build, completeness, correctness, tests against all
+        //     DoD criteria — enumerate what to check, derived from the
+        //     ingestor's reading of the DoD
+        //   - Verdict: APPROVED or REJECTED with specific evidence
+        // Failure: include specific gaps with criteria identifiers
+        // Writes: .ai/review_a.md (or _b, _c)
+        review_a [class="branch-a"]
+        review_b [class="branch-b"]
+        review_c [class="branch-c"]
+
+        // PROMPT: review_consensus
+        // Role: synthesize reviews into consensus verdict
+        // Must address:
+        //   - Read branch outputs via parallel_results.json + worktree_dir
+        //   - Fall back to current worktree if parallel_results.json missing
+        //   - Read .ai/definition_of_done.md for criteria
+        //   - Consensus: 2+ APPROVED with no critical gaps -> success;
+        //     otherwise -> retry with specific issues
+        // Writes: .ai/review_consensus.md
+        review_consensus [goal_gate=true]
     }
 
     subgraph cluster_postmortem {
         label="Postmortem"
         node [shape=box]
 
-        // Postmortem - analyze failure, guide next iteration
-        postmortem [
-            prompt="Goal: $goal\n\nAnalyze why the implementation failed.\nRead .ai/review_consensus.md.\n\nImportant: The review branches run in isolated worktrees when triggered via review_fanout (shape=component).\nTo gather review inputs:\n1) Read $KILROY_LOGS_ROOT/review_fanout/parallel_results.json.\n2) From each branch worktree_dir, read any of:\n- .ai/review_a.md\n- .ai/review_b.md\n- .ai/review_c.md\nIf parallel_results.json is missing, fall back to reading those files from the current worktree.\n\nRead .ai/implementation_log.md.\n\nProduce actionable guidance: root causes, what worked, what failed, specific fixes.\nThe next iteration must NOT start from scratch - preserve working code and fix gaps.\n\nWrite to .ai/postmortem_latest.md (overwrite previous).\n\nWrite canonical status JSON per the engine-provided \"Execution status contract\" preamble.\nYour status reflects whether you completed the analysis, not the state of the implementation.\nSet `status` to `success` when .ai/postmortem_latest.md is written."
-        ]
+        // PROMPT: postmortem
+        // Role: analyze failure and guide next repair iteration
+        // Must address:
+        //   - Read .ai/review_consensus.md (if review stage reached)
+        //   - Read .ai/verify_fidelity.md (if semantic verify ran)
+        //   - Read branch review outputs via parallel_results.json +
+        //     worktree_dir if available
+        //   - Read .ai/implementation_log.md
+        //   - Output: root causes, what worked (preserve), what failed
+        //     (fix), concrete next changes
+        //   - Must NOT direct from-scratch restart — preserve working code
+        // Writes: .ai/postmortem_latest.md (overwrite previous)
+        // Note: status reflects analysis completion, not implementation state
+        postmortem []
     }
 
     // =========================================================================

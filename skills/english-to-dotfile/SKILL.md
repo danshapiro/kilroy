@@ -10,7 +10,8 @@ description: Use when turning English requirements into a runnable Kilroy Attrac
 This skill converts English requirements into a valid Attractor `.dot` graph.
 
 Core principle:
-- Prefer a validated template that has extensive and detailed instructions in an idiomatic default template graph, over novel graph design.
+- Prefer a validated template for topology (node shapes, edges, routing), over novel graph design.
+- The template defines structure only — it contains no prompt text. Every prompt must be composed from scratch based on the actual project materials.
 - Optimize for a graph that runs reliably, not a graph that looks clever.
 
 Primary references for behavior:
@@ -107,7 +108,8 @@ Programmatic ambiguity rule:
 ### Phase 2: Select Topology (Template-First)
 
 Default strategy:
-- Start from `skills/english-to-dotfile/reference_template.dot`.
+- Start from `skills/english-to-dotfile/reference_template.dot` for topology: node shapes, edges, routing patterns, subgraph structure.
+- The template contains no prompt text — only structural comments listing what each prompt must address. You must compose every prompt from scratch based on the project's spec, DoD, and repo contents.
 - Keep one code-writing implementation node.
 - Use parallelism for planning/review thinking stages, not code writes.
 
@@ -217,12 +219,24 @@ Encoding rule:
 
 ### Phase 4: Write Node Prompts and File Handoffs
 
+The reference template contains NO prompt text — only structural comments listing what each prompt must address. You must compose every prompt from scratch based on the project's spec, DoD, and repo contents. The template's comments are minimum requirements, not starting text.
+
 Every generated codergen prompt must include:
-1. What to do.
-2. What files to read.
+1. What to do — specific to the project's domain, deliverables, and constraints, derived from reading the spec and DoD.
+2. What files to read — both `.ai/` artifacts and specific repo files relevant to the node's task.
 3. What files to write.
-4. Acceptance checks.
+4. Acceptance checks — specific to the project's acceptance criteria, not generic references to "the DoD."
 5. Explicit status/outcome contract.
+
+Prompt content rule — orient, don't duplicate:
+
+Every codergen prompt lists files for the runtime LLM to read, and the runtime LLM reads those files in full. This means anything you write in the prompt that also appears in those files is redundant — the LLM already has it. Worse, after a repair iteration the files may have changed but the prompt hasn't, so the prompt's copy is now stale and misleading.
+
+The value a prompt adds is context the files can't provide on their own: why this node exists in the pipeline, what to prioritize, where projects like this one tend to go wrong, and what to do differently on a repair iteration vs a fresh run. A developer reading a spec knows what to build, but a good tech lead adds "watch out for X, do Y before Z, and if you're fixing a bug don't rewrite the module." That's what a prompt should be.
+
+A practical test: if a prompt approaches the length of the files it references, it's almost certainly restating their content rather than orienting the reader. A good prompt for a 600-line spec is 30-50 lines.
+
+Exception: `expand_spec` must include the user's full input verbatim (per the verbatim input requirement below), because no spec file exists yet.
 
 Mandatory status contract text (or equivalent) in generated prompts:
 - Write status JSON to `$KILROY_STAGE_STATUS_PATH` (absolute path).
@@ -514,7 +528,7 @@ Custom outcomes are allowed if prompts define them explicitly and edges route wi
 28. **Using `outcome=pass` as goal-gate terminal success.** For `goal_gate=true`, route terminal success via `outcome=success` or `outcome=partial_success`.
 29. **`reasoning_effort` on Cerebras GLM 4.7.** Do not expect `reasoning_effort` to control GLM 4.7 reasoning depth.
 30. **Parallel code-writing in a shared worktree (default disallowed).** Keep implementation single-writer unless explicit isolated fan-out is requested.
-31. **Generating DOTs from scratch when a validated template exists.** Start from `skills/english-to-dotfile/reference_template.dot` and make minimal edits.
+31. **Generating topology from scratch when a validated template exists.** Start from `skills/english-to-dotfile/reference_template.dot` for node shapes, edges, and routing. "Minimal edits" applies to topology — prompts are always composed from scratch per project.
 32. **Ad-hoc turn budgets.** Do not add `max_agent_turns` by default.
 33. **Putting prompts on diamond nodes.** `shape=diamond` nodes do not execute prompts; use `shape=box` for LLM steering decisions.
 34. **Defaulting to visit-count loop breakers.** Do not add visit-count controls as the default loop guardrail.
