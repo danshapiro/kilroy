@@ -131,6 +131,70 @@ func (a *streamFinishWithoutResponseAdapter) Requests() []llm.Request {
 	return append([]llm.Request{}, a.requests...)
 }
 
+type providerEventStreamAdapter struct {
+	name string
+}
+
+func (a *providerEventStreamAdapter) Name() string { return a.name }
+
+func (a *providerEventStreamAdapter) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
+	_ = ctx
+	return llm.Response{Provider: a.name, Model: req.Model, Message: llm.Assistant("unexpected complete")}, nil
+}
+
+func (a *providerEventStreamAdapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, error) {
+	stream := llm.NewChanStream(nil)
+	go func() {
+		defer stream.CloseSend()
+		select {
+		case <-ctx.Done():
+			stream.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: ctx.Err()})
+			return
+		default:
+		}
+		stream.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart, Model: req.Model})
+		stream.Send(llm.StreamEvent{
+			Type:      llm.StreamEventProviderEvent,
+			EventType: "item/started",
+			Raw: map[string]any{
+				"item": map[string]any{
+					"id":      "cmd_1",
+					"type":    "commandExecution",
+					"command": "pwd",
+					"cwd":     "/tmp/worktree",
+					"status":  "inProgress",
+				},
+			},
+		})
+		stream.Send(llm.StreamEvent{
+			Type:      llm.StreamEventProviderEvent,
+			EventType: "item/completed",
+			Raw: map[string]any{
+				"item": map[string]any{
+					"id":     "cmd_1",
+					"type":   "commandExecution",
+					"status": "completed",
+				},
+			},
+		})
+		stream.Send(llm.StreamEvent{Type: llm.StreamEventTextStart, TextID: "text_0"})
+		stream.Send(llm.StreamEvent{Type: llm.StreamEventTextDelta, TextID: "text_0", Delta: "ok"})
+		stream.Send(llm.StreamEvent{Type: llm.StreamEventTextEnd, TextID: "text_0"})
+		resp := llm.Response{
+			Provider: a.name,
+			Model:    req.Model,
+			Message:  llm.Assistant("ok"),
+			Finish:   llm.FinishReason{Reason: llm.FinishReasonStop},
+		}
+		stream.Send(llm.StreamEvent{
+			Type:         llm.StreamEventFinish,
+			FinishReason: &resp.Finish,
+			Response:     &resp,
+		})
+	}()
+	return stream, nil
+}
+
 func streamFromResponse(ctx context.Context, resp llm.Response) llm.Stream {
 	stream := llm.NewChanStream(nil)
 	go func() {
@@ -159,6 +223,85 @@ func streamFromResponse(ctx context.Context, resp llm.Response) llm.Stream {
 		})
 	}()
 	return stream
+}
+
+func TestSession_ProviderToolLifecycleEvents_EmitToolCallStartEnd(t *testing.T) {
+	dir := t.TempDir()
+	c := llm.NewClient()
+	c.Register(&providerEventStreamAdapter{name: "openai"})
+
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := sess.ProcessInput(ctx, "hi")
+	if err != nil {
+		t.Fatalf("ProcessInput: %v", err)
+	}
+	if strings.TrimSpace(out) != "ok" {
+		t.Fatalf("out: %q", out)
+	}
+	sess.Close()
+
+	seenStart := false
+	seenEnd := false
+	seenTurnCount := false
+	startArgsJSON := ""
+	endFullOutput := "unset"
+	for ev := range sess.Events() {
+		switch ev.Kind {
+		case EventToolCallStart:
+			if ev.Data["call_id"] == "cmd_1" && ev.Data["tool_name"] == "exec_command" {
+				seenStart = true
+				rawArgs, ok := ev.Data["arguments_json"]
+				if !ok {
+					t.Fatalf("provider tool start missing arguments_json: %+v", ev.Data)
+				}
+				argsJSON, ok := rawArgs.(string)
+				if !ok {
+					t.Fatalf("provider tool start arguments_json type: got %T want string", rawArgs)
+				}
+				startArgsJSON = strings.TrimSpace(argsJSON)
+			}
+		case EventToolCallEnd:
+			if ev.Data["call_id"] == "cmd_1" && ev.Data["tool_name"] == "exec_command" {
+				seenEnd = true
+				rawFull, ok := ev.Data["full_output"]
+				if !ok {
+					t.Fatalf("provider tool end missing full_output: %+v", ev.Data)
+				}
+				fullOutput, ok := rawFull.(string)
+				if !ok {
+					t.Fatalf("provider tool end full_output type: got %T want string", rawFull)
+				}
+				endFullOutput = fullOutput
+			}
+		case EventAssistantTextEnd:
+			if v, ok := ev.Data["tool_call_count"]; ok {
+				if n, ok := v.(int); ok && n == 1 {
+					seenTurnCount = true
+				}
+			}
+		}
+	}
+	if !seenStart || !seenEnd {
+		t.Fatalf("expected provider-derived tool lifecycle events, got start=%t end=%t", seenStart, seenEnd)
+	}
+	if !seenTurnCount {
+		t.Fatalf("expected assistant text end with tool_call_count=1 from provider lifecycle events")
+	}
+	if startArgsJSON == "" {
+		t.Fatalf("expected non-empty provider arguments_json")
+	}
+	var parsedArgs map[string]any
+	if err := json.Unmarshal([]byte(startArgsJSON), &parsedArgs); err != nil {
+		t.Fatalf("provider arguments_json must be valid json: %v (value=%q)", err, startArgsJSON)
+	}
+	if endFullOutput != "" {
+		t.Fatalf("provider full_output: got %q want empty string", endFullOutput)
+	}
 }
 
 func TestSession_StreamFinishWithoutResponse_PreservesToolCalls(t *testing.T) {
@@ -203,6 +346,56 @@ func TestSession_StreamFinishWithoutResponse_PreservesToolCalls(t *testing.T) {
 	}
 	if !foundToolResult {
 		t.Fatalf("expected tool result in second request, got %+v", reqs[1].Messages)
+	}
+}
+
+func TestSession_AssistantTextEnd_IncludesToolCallCount(t *testing.T) {
+	dir := t.TempDir()
+	c := llm.NewClient()
+	f := &streamFinishWithoutResponseAdapter{name: "openai"}
+	c.Register(f)
+
+	sess, err := NewSession(c, NewOpenAIProfile("gpt-5.2"), NewLocalExecutionEnvironment(dir), SessionConfig{})
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := sess.ProcessInput(ctx, "write a file")
+	if err != nil {
+		t.Fatalf("ProcessInput: %v", err)
+	}
+	if strings.TrimSpace(out) != "ok" {
+		t.Fatalf("out: %q", out)
+	}
+	sess.Close()
+
+	seenToolRoundEnd := false
+	seenFinalRoundEnd := false
+	for ev := range sess.Events() {
+		if ev.Kind != EventAssistantTextEnd {
+			continue
+		}
+		v, ok := ev.Data["tool_call_count"]
+		if !ok {
+			t.Fatalf("assistant text end missing tool_call_count: %+v", ev.Data)
+		}
+		toolCalls, ok := v.(int)
+		if !ok {
+			t.Fatalf("tool_call_count type: got %T want int", v)
+		}
+		if toolCalls == 1 {
+			seenToolRoundEnd = true
+		}
+		if toolCalls == 0 {
+			seenFinalRoundEnd = true
+		}
+	}
+	if !seenToolRoundEnd {
+		t.Fatalf("expected assistant text end with tool_call_count=1")
+	}
+	if !seenFinalRoundEnd {
+		t.Fatalf("expected assistant text end with tool_call_count=0")
 	}
 }
 

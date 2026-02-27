@@ -102,6 +102,124 @@ func TestCodergenRouter_RunAPI_OneShot_StreamErrorEventTakesPrecedence(t *testin
 	}
 }
 
+func TestCodergenRouter_RunAPI_OneShot_EmitsProviderToolLifecycleProgress(t *testing.T) {
+	cfg := &RunConfigFile{Version: 1}
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendAPI},
+	}
+	r := NewCodergenRouterWithRuntimes(cfg, nil, map[string]ProviderRuntime{
+		"openai": {Key: "openai", Backend: BackendAPI},
+	})
+	r.apiClientFactory = func(map[string]ProviderRuntime) (*llm.Client, error) {
+		client := llm.NewClient()
+		client.Register(&scriptedStreamAdapter{
+			name: "openai",
+			script: func(s *llm.ChanStream) {
+				s.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart, ID: "turn_1", Model: "gpt-5.2"})
+				s.Send(llm.StreamEvent{
+					Type:      llm.StreamEventProviderEvent,
+					EventType: "item/started",
+					Raw: map[string]any{
+						"item": map[string]any{
+							"id":      "cmd_1",
+							"type":    "commandExecution",
+							"command": "pwd",
+							"cwd":     "/tmp/worktree",
+							"status":  "inProgress",
+						},
+					},
+				})
+				s.Send(llm.StreamEvent{Type: llm.StreamEventTextDelta, TextID: "text_0", Delta: "ok"})
+				s.Send(llm.StreamEvent{
+					Type:      llm.StreamEventProviderEvent,
+					EventType: "item/completed",
+					Raw: map[string]any{
+						"item": map[string]any{
+							"id":     "cmd_1",
+							"type":   "commandExecution",
+							"status": "completed",
+						},
+					},
+				})
+				resp := llm.Response{
+					Provider: "openai",
+					Model:    "gpt-5.2",
+					Message:  llm.Assistant("ok"),
+					Finish:   llm.FinishReason{Reason: llm.FinishReasonStop},
+				}
+				s.Send(llm.StreamEvent{Type: llm.StreamEventFinish, FinishReason: &resp.Finish, Response: &resp})
+			},
+		})
+		return client, nil
+	}
+
+	var mu sync.Mutex
+	captured := make([]map[string]any, 0, 8)
+	eng := &Engine{
+		Options: RunOptions{RunID: "run-provider-progress"},
+		progressSink: func(ev map[string]any) {
+			mu.Lock()
+			defer mu.Unlock()
+			captured = append(captured, ev)
+		},
+	}
+	execCtx := &Execution{
+		LogsRoot:    t.TempDir(),
+		WorktreeDir: t.TempDir(),
+		Engine:      eng,
+	}
+	node := &model.Node{
+		ID:    "stage-a",
+		Attrs: map[string]string{"codergen_mode": "one_shot"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	text, out, err := r.runAPI(ctx, execCtx, node, "openai", "gpt-5.2", "say hi")
+	if err != nil {
+		t.Fatalf("runAPI: %v", err)
+	}
+	if out != nil {
+		t.Fatalf("outcome: got %+v want nil", out)
+	}
+	if strings.TrimSpace(text) != "ok" {
+		t.Fatalf("text: got %q want %q", text, "ok")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	seenStart := false
+	seenEnd := false
+	seenTurnEndWithCount := false
+	for _, ev := range captured {
+		eventName, _ := ev["event"].(string)
+		switch eventName {
+		case "llm_tool_call_start":
+			if ev["tool_name"] == "exec_command" && ev["call_id"] == "cmd_1" {
+				seenStart = true
+			}
+		case "llm_tool_call_end":
+			if ev["tool_name"] == "exec_command" && ev["call_id"] == "cmd_1" {
+				if isErr, ok := ev["is_error"].(bool); !ok || isErr {
+					t.Fatalf("expected successful tool completion, got is_error=%v", ev["is_error"])
+				}
+				seenEnd = true
+			}
+		case "llm_turn_end":
+			if fmt.Sprint(ev["tool_call_count"]) == "1" {
+				seenTurnEndWithCount = true
+			}
+		}
+	}
+	if !seenStart || !seenEnd {
+		t.Fatalf("missing provider tool lifecycle progress events: start=%t end=%t captured=%v", seenStart, seenEnd, captured)
+	}
+	if !seenTurnEndWithCount {
+		t.Fatalf("missing llm_turn_end with tool_call_count=1; captured=%v", captured)
+	}
+}
+
 func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{

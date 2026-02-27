@@ -522,6 +522,8 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 		acc := llm.NewStreamAccumulator()
 		var resp *llm.Response
 		var streamErr error
+		providerToolCallCount := 0
+		seenProviderToolCalls := map[string]struct{}{}
 		assistantTextStarted := false
 		assistantTextDelta := false
 		emitAssistantTextStart := func() {
@@ -553,6 +555,35 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 				} else {
 					streamErr = llm.NewStreamError(req.Provider, "stream error")
 				}
+			case llm.StreamEventProviderEvent:
+				if lifecycle, ok := llm.ParseCodexAppServerToolLifecycle(ev); ok {
+					if !lifecycle.Completed {
+						callID := strings.TrimSpace(lifecycle.CallID)
+						if callID == "" {
+							providerToolCallCount++
+						} else if _, exists := seenProviderToolCalls[callID]; !exists {
+							seenProviderToolCalls[callID] = struct{}{}
+							providerToolCallCount++
+						}
+					}
+					if lifecycle.Completed {
+						s.emit(EventToolCallEnd, map[string]any{
+							"tool_name":   lifecycle.ToolName,
+							"call_id":     lifecycle.CallID,
+							"is_error":    lifecycle.IsError,
+							"full_output": "",
+							"source":      "provider",
+						})
+					} else {
+						data := map[string]any{
+							"tool_name":      lifecycle.ToolName,
+							"call_id":        lifecycle.CallID,
+							"arguments_json": lifecycle.ArgumentsJSON,
+							"source":         "provider",
+						}
+						s.emit(EventToolCallStart, data)
+					}
+				}
 			}
 		}
 		_ = stream.Close()
@@ -581,15 +612,22 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 			return "", err
 		}
 
+		calls := resp.ToolCalls()
+		turnToolCallCount := len(calls)
+		if providerToolCallCount > turnToolCallCount {
+			turnToolCallCount = providerToolCallCount
+		}
 		txt := resp.Text()
 		emitAssistantTextStart()
 		s.appendTurn(TurnAssistant, resp.Message)
 		if !assistantTextDelta && strings.TrimSpace(txt) != "" {
 			s.emit(EventAssistantTextDelta, map[string]any{"delta": txt})
 		}
-		s.emit(EventAssistantTextEnd, map[string]any{"text": txt})
+		s.emit(EventAssistantTextEnd, map[string]any{
+			"text":            txt,
+			"tool_call_count": turnToolCallCount,
+		})
 
-		calls := resp.ToolCalls()
 		if len(calls) == 0 {
 			return txt, nil
 		}

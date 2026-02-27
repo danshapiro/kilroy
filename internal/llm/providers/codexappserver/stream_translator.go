@@ -347,7 +347,13 @@ func translateStream(events <-chan map[string]any) <-chan llm.StreamEvent {
 				}
 				if itemType == "reasoning" {
 					outEvents = append(outEvents, closeReasoningForItem(itemID)...)
+					break
 				}
+				outEvents = append(outEvents, llm.StreamEvent{
+					Type:      llm.StreamEventProviderEvent,
+					EventType: notification.Method,
+					Raw:       notification.Params,
+				})
 
 			case "thread/tokenUsage/updated":
 				latestUsage = usageFromTokenUsage(asMap(notification.Params["tokenUsage"]))

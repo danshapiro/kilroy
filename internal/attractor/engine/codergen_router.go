@@ -208,6 +208,20 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 
 			acc := llm.NewStreamAccumulator()
 			var streamErr error
+			toolCallCount := 0
+			seenToolCallIDs := map[string]struct{}{}
+			recordToolCallStart := func(callID string) {
+				callID = strings.TrimSpace(callID)
+				if callID == "" {
+					toolCallCount++
+					return
+				}
+				if _, exists := seenToolCallIDs[callID]; exists {
+					return
+				}
+				seenToolCallIDs[callID] = struct{}{}
+				toolCallCount++
+			}
 			for ev := range stream.Events() {
 				acc.Process(ev)
 				if ev.Type == llm.StreamEventError && ev.Err != nil {
@@ -219,6 +233,24 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 					case llm.StreamEventTextDelta:
 						if ev.Delta != "" {
 							emitter.appendDelta(ev.Delta)
+						}
+					case llm.StreamEventToolCallStart:
+						if ev.ToolCall != nil {
+							recordToolCallStart(ev.ToolCall.ID)
+							emitter.emitToolCallStart(ev.ToolCall.Name, ev.ToolCall.ID)
+						}
+					case llm.StreamEventToolCallEnd:
+						if ev.ToolCall != nil {
+							emitter.emitToolCallEnd(ev.ToolCall.Name, ev.ToolCall.ID, false)
+						}
+					case llm.StreamEventProviderEvent:
+						if lifecycle, ok := llm.ParseCodexAppServerToolLifecycle(ev); ok {
+							if lifecycle.Completed {
+								emitter.emitToolCallEnd(lifecycle.ToolName, lifecycle.CallID, lifecycle.IsError)
+							} else {
+								recordToolCallStart(lifecycle.CallID)
+								emitter.emitToolCallStart(lifecycle.ToolName, lifecycle.CallID)
+							}
 						}
 					}
 				}
@@ -256,7 +288,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			}
 
 			if emitter != nil {
-				emitter.emitTurnEnd(len(resp.Text()), 0)
+				emitter.emitTurnEnd(len(resp.Text()), toolCallCount)
 			}
 
 			return resp.Text(), nil
