@@ -17,6 +17,28 @@ import (
 	"github.com/danshapiro/kilroy/internal/llm"
 )
 
+func assertRateLimitInfo(t *testing.T, rl *llm.RateLimitInfo) {
+	t.Helper()
+	if rl == nil {
+		t.Fatalf("expected rate limit info, got nil")
+	}
+	if rl.RequestsRemaining == nil || *rl.RequestsRemaining != 9 {
+		t.Fatalf("requests_remaining: %#v", rl.RequestsRemaining)
+	}
+	if rl.RequestsLimit == nil || *rl.RequestsLimit != 10 {
+		t.Fatalf("requests_limit: %#v", rl.RequestsLimit)
+	}
+	if rl.TokensRemaining == nil || *rl.TokensRemaining != 90 {
+		t.Fatalf("tokens_remaining: %#v", rl.TokensRemaining)
+	}
+	if rl.TokensLimit == nil || *rl.TokensLimit != 100 {
+		t.Fatalf("tokens_limit: %#v", rl.TokensLimit)
+	}
+	if rl.ResetAt != "2025-01-01T00:00:10Z" {
+		t.Fatalf("reset_at: %q", rl.ResetAt)
+	}
+}
+
 func TestAdapter_Complete_MapsToGeminiGenerateContent(t *testing.T) {
 	var gotBody map[string]any
 	gotKey := ""
@@ -34,6 +56,11 @@ func TestAdapter_Complete_MapsToGeminiGenerateContent(t *testing.T) {
 		_ = json.Unmarshal(b, &gotBody)
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("x-ratelimit-remaining-requests", "9")
+		w.Header().Set("x-ratelimit-limit-requests", "10")
+		w.Header().Set("x-ratelimit-remaining-tokens", "90")
+		w.Header().Set("x-ratelimit-limit-tokens", "100")
+		w.Header().Set("x-ratelimit-reset-requests", "Wed, 01 Jan 2025 00:00:10 GMT")
 		_, _ = w.Write([]byte(`{
   "candidates": [{"content": {"parts": [{"text":"Hello"}]}, "finishReason":"STOP"}],
   "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 2, "totalTokenCount": 3}
@@ -64,6 +91,7 @@ func TestAdapter_Complete_MapsToGeminiGenerateContent(t *testing.T) {
 	if strings.TrimSpace(resp.Text()) != "Hello" {
 		t.Fatalf("resp text: %q", resp.Text())
 	}
+	assertRateLimitInfo(t, resp.RateLimit)
 	if gotKey != "k" {
 		t.Fatalf("key param: %q", gotKey)
 	}
@@ -529,6 +557,11 @@ func TestAdapter_Stream_YieldsTextDeltasAndFinish(t *testing.T) {
 		_ = json.Unmarshal(b, &gotBody)
 
 		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("x-ratelimit-remaining-requests", "9")
+		w.Header().Set("x-ratelimit-limit-requests", "10")
+		w.Header().Set("x-ratelimit-remaining-tokens", "90")
+		w.Header().Set("x-ratelimit-limit-tokens", "100")
+		w.Header().Set("x-ratelimit-reset-requests", "Wed, 01 Jan 2025 00:00:10 GMT")
 		f, _ := w.(http.Flusher)
 		write := func(data string) {
 			_, _ = io.WriteString(w, "data: "+data+"\n\n")
@@ -570,6 +603,7 @@ func TestAdapter_Stream_YieldsTextDeltasAndFinish(t *testing.T) {
 	if finish == nil || strings.TrimSpace(finish.Text()) != "Hello" {
 		t.Fatalf("finish response: %+v", finish)
 	}
+	assertRateLimitInfo(t, finish.RateLimit)
 	if gotKey != "k" {
 		t.Fatalf("key param: %q", gotKey)
 	}

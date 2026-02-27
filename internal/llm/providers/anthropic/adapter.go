@@ -208,7 +208,9 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 		return llm.Response{}, llm.ErrorFromHTTPStatus(a.Name(), resp.StatusCode, msg, raw, ra)
 	}
 
-	return fromAnthropicResponse(a.Name(), raw, req.Model), nil
+	out := fromAnthropicResponse(a.Name(), raw, req.Model)
+	out.RateLimit = llm.ParseRateLimitInfo(resp.Header, time.Now())
+	return out, nil
 }
 
 func (a *Adapter) completeViaStream(ctx context.Context, req llm.Request) (llm.Response, error) {
@@ -388,6 +390,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 
 	s := llm.NewChanStream(cancel)
 	s.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart})
+	rateLimit := llm.ParseRateLimitInfo(resp.Header, time.Now())
 
 	go func() {
 		defer func() {
@@ -684,11 +687,12 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 
 				msg := llm.Message{Role: llm.RoleAssistant, Content: parts}
 				r := llm.Response{
-					Provider: a.Name(),
-					Model:    req.Model,
-					Message:  msg,
-					Finish:   finish,
-					Usage:    usage,
+					Provider:  a.Name(),
+					Model:     req.Model,
+					Message:   msg,
+					Finish:    finish,
+					Usage:     usage,
+					RateLimit: rateLimit,
 				}
 				if len(r.ToolCalls()) > 0 {
 					r.Finish = llm.FinishReason{Reason: "tool_calls", Raw: "tool_use"}

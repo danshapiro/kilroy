@@ -9,9 +9,11 @@ import (
 var (
 	profileFactoriesMu sync.RWMutex
 	profileFactories   = map[string]func(string) ProviderProfile{
-		"openai":    NewOpenAIProfile,
-		"anthropic": NewAnthropicProfile,
-		"google":    NewGeminiProfile,
+		"openai":           NewOpenAIProfile,
+		"anthropic":        NewAnthropicProfile,
+		"google":           NewGeminiProfile,
+		"codex-app-server": NewCodexAppServerProfile,
+		"codex":            NewCodexAppServerProfile,
 	}
 )
 

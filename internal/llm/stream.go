@@ -29,12 +29,19 @@ const (
 type StreamEvent struct {
 	Type StreamEventType `json:"type"`
 
+	// Stream start metadata
+	ID       string    `json:"id,omitempty"`
+	Model    string    `json:"model,omitempty"`
+	Warnings []Warning `json:"warnings,omitempty"`
+
 	// Text events
 	Delta  string `json:"delta,omitempty"`
 	TextID string `json:"text_id,omitempty"`
 
 	// Reasoning events
 	ReasoningDelta string `json:"reasoning_delta,omitempty"`
+	ReasoningID    string `json:"reasoning_id,omitempty"`
+	Redacted       *bool  `json:"redacted,omitempty"`
 
 	// Tool call events
 	ToolCall *ToolCallData `json:"tool_call,omitempty"`
@@ -48,5 +55,6 @@ type StreamEvent struct {
 	Err error `json:"-"`
 
 	// Passthrough
-	Raw map[string]any `json:"raw,omitempty"`
+	EventType string         `json:"event_type,omitempty"`
+	Raw       map[string]any `json:"raw,omitempty"`
 }
