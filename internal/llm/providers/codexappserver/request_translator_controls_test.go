@@ -74,6 +74,8 @@ func TestRequestTranslator_ApplyProviderOptions_MapsKnownKeysAndWarnsUnknown(t *
 			"codex_app_server": map[string]any{
 				"cwd":              "/tmp/project",
 				"approval_policy":  "never",
+				"sandbox_mode":     "danger-full-access",
+				"sandboxPolicy":    map[string]any{"type": "dangerFullAccess"},
 				"temperature":      0.2,
 				"reasoning_effort": "high",
 				"unsupportedX":     true,
@@ -86,6 +88,20 @@ func TestRequestTranslator_ApplyProviderOptions_MapsKnownKeysAndWarnsUnknown(t *
 	}
 	if params["approvalPolicy"] != "never" {
 		t.Fatalf("approvalPolicy mapping: %#v", params["approvalPolicy"])
+	}
+	if params["sandbox"] != "danger-full-access" {
+		t.Fatalf("sandbox mapping: %#v", params["sandbox"])
+	}
+	rawSandboxPolicy, ok := params["sandboxPolicy"]
+	if !ok {
+		t.Fatalf("missing sandboxPolicy mapping: %#v", params)
+	}
+	sandboxPolicy, ok := rawSandboxPolicy.(map[string]any)
+	if !ok {
+		t.Fatalf("sandboxPolicy type=%T want map[string]any", rawSandboxPolicy)
+	}
+	if sandboxPolicy["type"] != "dangerFullAccess" {
+		t.Fatalf("sandboxPolicy.type=%#v want %q", sandboxPolicy["type"], "dangerFullAccess")
 	}
 	if controls.Temperature == nil || *controls.Temperature != 0.2 {
 		t.Fatalf("temperature override: %#v", controls.Temperature)

@@ -40,6 +40,8 @@ var (
 		"cwd":                "cwd",
 		"approvalPolicy":     "approvalPolicy",
 		"approval_policy":    "approvalPolicy",
+		"sandbox":            "sandbox",
+		"sandbox_mode":       "sandbox",
 		"sandboxPolicy":      "sandboxPolicy",
 		"sandbox_policy":     "sandboxPolicy",
 		"model":              "model",
