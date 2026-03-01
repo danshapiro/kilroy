@@ -46,6 +46,30 @@ These three specs are the true north for system design. If you are making a chan
 - `./scripts/e2e-guardrail-matrix.sh`: run targeted engine guardrail regression tests.
 - `./kilroy attractor validate --graph <file.dot>`: validate graph structure/semantics before execution.
 
+## Pre-Commit CI Checklist
+
+Run all of these before every commit. They mirror the exact CI steps in `.github/workflows/ci.yml` and **all must pass** before pushing:
+
+```bash
+# 1. Format — CI uses gofmt -l . on the full repo checkout (no worktrees there)
+gofmt -l . | grep -v '^\./\.claude/' | grep -v '^\.claude/'
+# must produce no output; fix with: gofmt -w <file>
+
+# 2. Vet
+go vet ./...
+
+# 3. Build
+go build ./cmd/kilroy/
+
+# 4. Test
+go test ./...
+
+# 5. Validate demo graphs
+for f in demo/**/*.dot; do echo "Validating $f"; ./kilroy attractor validate --graph "$f"; done
+```
+
+Common pitfall: `gofmt -w ./cmd ./internal` misses files in other packages. Always run `gofmt -l .` (excluding `.claude/` worktrees) to match CI exactly.
+
 ## Kilroy Agent Rules
 
 ### Production Safety (Strict)
@@ -112,7 +136,7 @@ Runs live under `~/.local/state/kilroy/attractor/runs/<run_id>/`. Key files:
 For PRs we want to accept: check out the PR branch into a worktree, review, add fix-up commits, then non-squash merge — this preserves contributor credit while maintaining code quality.
 
 ## Coding Style & Naming Conventions
-- Follow idiomatic Go and run formatter before commit: `gofmt -w ./cmd ./internal`.
+- Follow idiomatic Go and run formatter before commit: `gofmt -w .` (or target specific files). Check with `gofmt -l . | grep -v '\.claude/'` — must produce no output.
 - Keep packages domain-focused (for example `engine`, `validate`, `modeldb`) and avoid cross-package leakage.
 - Use lowercase package names, `CamelCase` for exported symbols, and colocated `*_test.go` files.
 - Prefer explicit config over implicit behavior; this codebase favors deterministic runtime contracts.

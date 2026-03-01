@@ -35,13 +35,13 @@ func runsUsage() {
 
 // runManifest is the subset of manifest.json fields we care about for list/prune.
 type runManifest struct {
-	RunID      string            `json:"run_id"`
-	GraphName  string            `json:"graph_name"`
-	Goal       string            `json:"goal"`
-	StartedAt  string            `json:"started_at"`
-	LogsRoot   string            `json:"logs_root"`
-	RepoPat    string            `json:"repo_path"`
-	Labels     map[string]string `json:"labels"`
+	RunID     string            `json:"run_id"`
+	GraphName string            `json:"graph_name"`
+	Goal      string            `json:"goal"`
+	StartedAt string            `json:"started_at"`
+	LogsRoot  string            `json:"logs_root"`
+	RepoPat   string            `json:"repo_path"`
+	Labels    map[string]string `json:"labels"`
 }
 
 // runRecord is a fully resolved run entry (manifest + final status).
