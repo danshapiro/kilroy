@@ -452,8 +452,9 @@ git commit -m "skills/create-runfile: document browser dependency setup defaults
 
 - [ ] **Step 3: Verify documentation includes required browser contract language**
 
-Run: `grep -En 'validate-<stage>|validate-browser|browser artifacts|attempt-scoped|size cap|transient' README.md docs/strongdm/attractor/README.md`
-Expected: matches in both files covering contract + artifact constraints + failure classification guidance
+Run: `grep -En 'validate-<stage>|validate-browser|browser artifacts|attempt-scoped|size cap|transient' README.md`
+Run: `grep -En 'validate-<stage>|validate-browser|browser artifacts|attempt-scoped|size cap|transient' docs/strongdm/attractor/README.md`
+Expected: both commands return matches, confirming contract + artifact constraints + failure classification guidance in each file
 
 - [ ] **Step 4: Commit docs updates**
 
@@ -474,6 +475,7 @@ git commit -m "docs: add browser testing runtime and artifact guidance"
 - [ ] **Step 1: Add focused browser-hardening entries to guardrail matrix script**
 
 ```bash
+# relabel existing matrix entries from [1/7]..[7/7] to [1/10]..[7/10], then append:
 run_test_checked "[8/10] browser artifact collector + safety" \
   go test ./internal/attractor/engine -run '^TestDiscoverBrowserArtifacts|^TestCollectBrowserArtifacts' -count=1
 run_test_checked "[9/10] browser tool handler + retry routing" \
