@@ -14,6 +14,7 @@ import (
 
 	"github.com/oklog/ulid/v2"
 
+	"github.com/danshapiro/kilroy/internal/attractor/browsergate"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
@@ -547,6 +548,11 @@ var toolCommandAbsPathRE = regexp.MustCompile(`cd\s+/`)
 
 type ToolHandler struct{}
 
+var (
+	snapshotBrowserArtifactsFunc = snapshotBrowserArtifacts
+	collectBrowserArtifactsFunc  = collectBrowserArtifacts
+)
+
 func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *model.Node) (runtime.Outcome, error) {
 	stageDir := filepath.Join(execCtx.LogsRoot, node.ID)
 	cmdStr := strings.TrimSpace(node.Attr("tool_command", ""))
@@ -559,6 +565,18 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	timeout := parseDuration(node.Attr("timeout", ""), 0)
 	if timeout <= 0 {
 		timeout = 600 * time.Second
+	}
+	isBrowserVerifyNode := browsergate.IsBrowserVerificationNode(cmdStr, node.ID, node.Label(), node.Attrs)
+	var baseline map[string]artifactFingerprint
+	var startedAt time.Time
+	if isBrowserVerifyNode {
+		baselineRun, err := snapshotBrowserArtifactsFunc(execCtx.WorktreeDir)
+		if err != nil {
+			warnEngine(execCtx, fmt.Sprintf("snapshot browser artifacts: %v", err))
+		} else {
+			baseline = baselineRun
+		}
+		startedAt = time.Now()
 	}
 
 	callID := ulid.Make().String()
@@ -613,6 +631,9 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	cmd.Stderr = stderrFile
 
 	start := time.Now()
+	if !startedAt.IsZero() {
+		start = startedAt
+	}
 	runErr := cmd.Run()
 	dur := time.Since(start)
 	exitCode := -1
@@ -628,6 +649,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 			warnEngine(execCtx, fmt.Sprintf("write tool_timing.json: %v", err))
 		}
 		_ = writeDiffPatch(stageDir, execCtx.WorktreeDir)
+		emitBrowserArtifactCollection(execCtx, node, stageDir, isBrowserVerifyNode, baseline, startedAt)
 		return runtime.Outcome{
 			Status:        runtime.StatusFail,
 			FailureReason: fmt.Sprintf("tool_command timed out after %s", timeout),
@@ -653,9 +675,23 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	if rerr != nil {
 		warnEngine(execCtx, fmt.Sprintf("read stderr.log: %v", rerr))
 	}
+	emitBrowserArtifactCollection(execCtx, node, stageDir, isBrowserVerifyNode, baseline, startedAt)
+
 	combined := append(append([]byte{}, stdoutBytes...), stderrBytes...)
 	combinedStr := string(combined)
 	if runErr != nil {
+		rawExitStatus := strings.TrimSpace(runErr.Error())
+		failureReason := rawExitStatus
+		if isBrowserVerifyNode {
+			if line := firstActionableToolOutputLine(stderrBytes); line != "" {
+				failureReason = line
+			} else if line := firstActionableToolOutputLine(stdoutBytes); line != "" {
+				failureReason = line
+			}
+		}
+		if failureReason == "" {
+			failureReason = "tool command failed"
+		}
 		if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
 			if _, _, err := execCtx.Engine.CXDB.Append(ctx, "com.kilroy.attractor.ToolResult", 1, map[string]any{
 				"run_id":    execCtx.Engine.Options.RunID,
@@ -670,9 +706,10 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		}
 		return runtime.Outcome{
 			Status:        runtime.StatusFail,
-			FailureReason: runErr.Error(),
+			FailureReason: failureReason,
 			ContextUpdates: map[string]any{
-				"tool.output": truncate(combinedStr, 8_000),
+				"tool.output":      truncate(combinedStr, 8_000),
+				"tool.exit_status": rawExitStatus,
 			},
 		}, nil
 	}
@@ -695,6 +732,45 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		},
 		Notes: "tool completed",
 	}, nil
+}
+
+func emitBrowserArtifactCollection(execCtx *Execution, node *model.Node, stageDir string, isBrowserVerifyNode bool, baseline map[string]artifactFingerprint, startedAt time.Time) {
+	if !isBrowserVerifyNode {
+		return
+	}
+	summary, err := collectBrowserArtifactsFunc(stageDir, execCtx.WorktreeDir, baseline, startedAt)
+	if err != nil {
+		warnEngine(execCtx, fmt.Sprintf("collect browser artifacts: %v", err))
+	}
+
+	if execCtx == nil || execCtx.Engine == nil {
+		return
+	}
+	event := map[string]any{
+		"event":   "tool_browser_artifacts",
+		"node_id": node.ID,
+	}
+	for k, v := range summary.toProgressFields() {
+		event[k] = v
+	}
+	if err != nil {
+		event["collection_error"] = err.Error()
+	}
+	execCtx.Engine.appendProgress(event)
+}
+
+func firstActionableToolOutputLine(data []byte) string {
+	if len(data) == 0 {
+		return ""
+	}
+	lines := strings.Split(string(data), "\n")
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed != "" {
+			return trimToRunes(trimmed, 4000)
+		}
+	}
+	return ""
 }
 
 func truncate(s string, n int) string {

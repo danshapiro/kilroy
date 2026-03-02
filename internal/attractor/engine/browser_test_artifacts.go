@@ -206,11 +206,16 @@ func collectBrowserArtifacts(stageDir, worktreeDir string, baseline map[string]a
 			SizeBytes:       info.Size(),
 			ModTimeUnixNano: info.ModTime().UnixNano(),
 		}
-		if prior, ok := baseline[item.RelPath]; ok && prior == current {
-			summary.SkippedUnchanged++
-			continue
-		}
-		if !startedAt.IsZero() && info.ModTime().Before(startedAt) {
+		if prior, ok := baseline[item.RelPath]; ok {
+			if prior == current {
+				summary.SkippedUnchanged++
+				continue
+			}
+			if !startedAt.IsZero() && info.ModTime().Before(startedAt) {
+				summary.SkippedBeforeStart++
+				continue
+			}
+		} else if baseline == nil && !startedAt.IsZero() && info.ModTime().Before(startedAt) {
 			summary.SkippedBeforeStart++
 			continue
 		}

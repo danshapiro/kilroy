@@ -135,6 +135,41 @@ digraph G {
 	}
 }
 
+func TestLoopRestart_UsesToolFailureReason_ForBrowserTransientRouting(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	dot := []byte(`
+digraph G {
+  graph [goal="browser retry routing", default_max_retry="1"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  verify_browser [shape=parallelogram, max_retries="1", tool_command="echo 'page.goto failed: net::ERR_INTERNET_DISCONNECTED' >&2; exit 1"]
+  start -> verify_browser
+  verify_browser -> exit
+}
+`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	_, _ = runForTest(t, ctx, dot, RunOptions{RepoPath: repo, RunID: "browser-retry-routing", LogsRoot: logsRoot})
+
+	progressPath := filepath.Join(logsRoot, "progress.ndjson")
+	if !hasProgressEventForNode(t, progressPath, "stage_retry_sleep", "verify_browser") {
+		t.Fatalf("expected stage_retry_sleep for browser transient failure reason")
+	}
+	if hasProgressEventForNode(t, progressPath, "stage_retry_blocked", "verify_browser") {
+		t.Fatalf("did not expect stage_retry_blocked for browser transient failure reason")
+	}
+	if got := countProgressEventsForNode(t, progressPath, "stage_attempt_start", "verify_browser"); got < 2 {
+		t.Fatalf("expected at least two attempts for browser transient routing, got %d", got)
+	}
+
+	out := mustReadOutcome(t, filepath.Join(logsRoot, "verify_browser", "status.json"))
+	if !strings.Contains(strings.ToLower(out.FailureReason), "net::err_internet_disconnected") {
+		t.Fatalf("failure_reason should carry browser stderr text, got %q", out.FailureReason)
+	}
+}
+
 func testOpenAICLIConfig(repo string, pinned string, cxdbSrv *cxdbTestServer, codexCLI string) *RunConfigFile {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.Repo.Path = repo

@@ -112,6 +112,21 @@ func TestArchiveAttemptDir_EmptyDir(t *testing.T) {
 	}
 }
 
+func TestArchiveAttemptDir_PreservesBrowserArtifactDirectories(t *testing.T) {
+	stageDir := t.TempDir()
+	artifactPath := filepath.Join(stageDir, browserArtifactsDirName, "playwright-report", "index.html")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifactPath, []byte("artifact"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	archiveAttemptDir(stageDir, 1)
+
+	assertExists(t, filepath.Join(stageDir, "attempt_1", browserArtifactsDirName, "playwright-report", "index.html"))
+}
+
 // --- Integration test: engine archives prior attempt artifacts on retry ---
 
 // retryWithContentHandler writes a unique response.md on each call and fails

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1363,7 +1364,14 @@ func archiveAttemptDir(stageDir string, attemptNum int) {
 	}
 	for _, entry := range entries {
 		if entry.IsDir() {
-			continue // skip existing attempt_N subdirectories
+			name := entry.Name()
+			if strings.HasPrefix(name, "attempt_") || strings.HasPrefix(name, "visit_") {
+				continue
+			}
+			if name == browserArtifactsDirName {
+				copyAttemptSubdir(filepath.Join(stageDir, name), filepath.Join(destDir, name))
+			}
+			continue
 		}
 		src := filepath.Join(stageDir, entry.Name())
 		dst := filepath.Join(destDir, entry.Name())
@@ -1373,6 +1381,39 @@ func archiveAttemptDir(stageDir string, attemptNum int) {
 		}
 		_ = os.WriteFile(dst, data, 0o644)
 	}
+}
+
+func copyAttemptSubdir(srcDir, dstDir string) {
+	_ = filepath.WalkDir(srcDir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		rel, relErr := filepath.Rel(srcDir, path)
+		if relErr != nil {
+			return nil
+		}
+		target := filepath.Join(dstDir, rel)
+		if d.IsDir() {
+			_ = os.MkdirAll(target, 0o755)
+			return nil
+		}
+		info, statErr := os.Lstat(path)
+		if statErr != nil {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			return nil
+		}
+		if mkErr := os.MkdirAll(filepath.Dir(target), 0o755); mkErr != nil {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return nil
+		}
+		_ = os.WriteFile(target, data, 0o644)
+		return nil
+	})
 }
 
 func sleepWithContext(ctx context.Context, delay time.Duration) bool {
