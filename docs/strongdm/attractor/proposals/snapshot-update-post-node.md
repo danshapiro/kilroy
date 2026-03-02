@@ -261,15 +261,26 @@ execution**, not snapshot update timing.
 
 1. The run was launched on `2026-03-02` from repo base SHA
    `45b3956c83dcd19340b50e971e1e03818848eb9b` (`manifest.json`).
-2. The `./kilroy` binary used on that machine was built from
+2. At run startup, input materialization used `source_roots=["/home/user/code/kilroy"]`
+   and `default_include=[".ai/*.md"]`, so it copied the repository-local
+   `/home/user/code/kilroy/.ai/spec.md` into both:
+   - `logs_root/input_snapshot/files/.ai/spec.md`
+   - `logs_root/worktree/.ai/spec.md`
+3. That repository-local `.ai/spec.md` is an old **Solitaire** spec (3698 bytes,
+   SHA256 `1f94094f...`) left in the developer checkout and ignored by git
+   (`.gitignore` includes `.ai/`), so it is not visible in commit history but is
+   still visible to filesystem-based materialization.
+4. The snapshot copy is byte-identical to the repo-local file (same size and hash),
+   confirming direct provenance.
+5. The `./kilroy` binary used on that machine was built from
    `cee6fe8e2b1771aa3304ec1cf8b3798003549835` (`go version -m ./kilroy`), which
    predates the self-copy truncation fix.
-3. In that older binary, `copyInputFile` opened the target with
+6. In that older binary, `copyInputFile` opened the target with
    `os.O_TRUNC` unconditionally and had no same-file guard.
-4. Stage materialization copies from the worktree into the worktree target
+7. Stage materialization copies from the worktree into the worktree target
    (`source == target` for matched `.ai/*.md` files). In the stale binary, this
    truncates the source file to zero before copy.
-5. Result: `.ai/spec.md`, `.ai/definition_of_done.md`, and later
+8. Result: `.ai/spec.md`, `.ai/definition_of_done.md`, and later
    `.ai/plan_final.md` repeatedly become 0-byte files at stage startup.
 
 This exactly matches observed behavior:
