@@ -33,8 +33,7 @@ This is one integrated subsystem change (input materialization boundary + run-sc
   - Unit coverage for branch isolation, promotion expansion, deterministic ordering, conflict behavior.
 - Modify: `internal/attractor/engine/parallel_handlers.go`
   - Apply fan-in promotion merge at join boundary without altering git winner/ff semantics.
-- Modify: `internal/attractor/engine/resume.go`
-  - Resume hydration from persisted lineage heads, not mutable source workspace state.
+- Note: Resume hydration wiring is implemented inside `internal/attractor/engine/input_materialization.go`; `resume.go` orchestration callsites remain unchanged.
 - Modify tests:
   - `internal/attractor/engine/input_materialization_test.go`
   - `internal/attractor/engine/input_materialization_integration_test.go`
@@ -45,7 +44,6 @@ This is one integrated subsystem change (input materialization boundary + run-sc
 ### Runtime path migration surfaces
 - Modify: `internal/attractor/engine/stage_status_contract.go`
 - Modify: `internal/attractor/engine/stage_status_contract_test.go`
-- Modify: `internal/attractor/engine/handlers.go`
 - Modify: `internal/attractor/engine/failure_dossier.go`
 - Modify: `internal/attractor/engine/failure_dossier_test.go`
 - Modify: `internal/attractor/runstate/snapshot.go`
@@ -587,7 +585,7 @@ func isAbsolutePathLike(path string) bool {
 	if windowsAbsPathRE.MatchString(path) {
 		return true
 	}
-	return strings.HasPrefix(path, `\\\\`)
+	return strings.HasPrefix(path, `\\`)
 }
 
 func (m *InputMaterializationConfig) normalizeImports(p materializeFieldPresence) error {
@@ -614,10 +612,9 @@ func (m *InputMaterializationConfig) normalizeImports(p materializeFieldPresence
 		}
 		if isRequired {
 			required = append(required, pattern)
-			seen[pattern] = true
-			continue
+		} else {
+			bestEffort = append(bestEffort, pattern)
 		}
-		bestEffort = append(bestEffort, pattern)
 		seen[pattern] = true
 	}
 	m.Include = required
@@ -899,29 +896,58 @@ func inputRevisionRoot(logsRoot string, revID string) string {
 }
 
 func (l *InputSnapshotLineage) SaveAtomic(logsRoot string) error {
-	path := inputLineagePath(logsRoot)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".tmp"
-	if err := writeJSON(tmp, l); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return runtime.WriteJSONAtomicFile(inputLineagePath(logsRoot), l)
 }
 
 func (l *InputSnapshotLineage) MergePromotedPaths(promote []string, branchRevs map[string]string) (string, []InputSnapshotConflict, error) {
-	// Expand promotion patterns deterministically against each branch revision root.
-	// If the same promoted relative path resolves to different digests across
-	// branches, return failure_reason=input_snapshot_conflict with conflicts sorted
-	// by Path then branch key for stable diagnostics.
-	expanded := expandPromotionsDeterministic(promote, branchRevs, l.Revisions)
-	conflicts := detectPromotionConflicts(expanded)
+	patterns := normalizePromotePatterns(promote)
+	pathToEntries := map[string]map[string]InputSnapshotConflictDigestPair{}
+	for branchKey, revID := range branchRevs {
+		rev, ok := l.Revisions[revID]
+		if !ok {
+			return "", nil, fmt.Errorf("unknown branch revision %q", revID)
+		}
+		for _, rel := range matchPromotedPaths(patterns, rev.FileDigest) {
+			if _, ok := pathToEntries[rel]; !ok {
+				pathToEntries[rel] = map[string]InputSnapshotConflictDigestPair{}
+			}
+			pathToEntries[rel][branchKey] = InputSnapshotConflictDigestPair{
+				BranchKey:  branchKey,
+				RevisionID: revID,
+				Digest:     rev.FileDigest[rel],
+			}
+		}
+	}
+
+	merged := map[string]string{}
+	conflicts := make([]InputSnapshotConflict, 0)
+	for _, rel := range sortedMapKeys(pathToEntries) {
+		entries := make([]InputSnapshotConflictDigestPair, 0, len(pathToEntries[rel]))
+		for _, branchKey := range sortedMapKeys(pathToEntries[rel]) {
+			entries = append(entries, pathToEntries[rel][branchKey])
+		}
+		if len(entries) == 0 {
+			continue
+		}
+		firstDigest := entries[0].Digest
+		sameDigest := true
+		for _, entry := range entries[1:] {
+			if entry.Digest != firstDigest {
+				sameDigest = false
+				break
+			}
+		}
+		if !sameDigest {
+			conflicts = append(conflicts, InputSnapshotConflict{Path: rel, BranchDigests: entries})
+			continue
+		}
+		merged[rel] = firstDigest
+	}
 	if len(conflicts) > 0 {
 		sort.SliceStable(conflicts, func(i, j int) bool { return conflicts[i].Path < conflicts[j].Path })
 		return "", conflicts, fmt.Errorf("failure_reason=input_snapshot_conflict")
 	}
-	newHead := l.CreateRunRevision(l.RunHead, mergedDigestMap(expanded))
+	newHead := l.CreateRunRevision(l.RunHead, merged)
 	l.RunHead = newHead
 	return newHead, nil, nil
 }
@@ -944,7 +970,6 @@ git commit -m "engine/input: add run-branch snapshot lineage manager"
 **Files:**
 - Modify: `internal/attractor/engine/input_materialization.go`
 - Modify: `internal/attractor/engine/engine.go`
-- Modify: `internal/attractor/engine/resume.go`
 - Create: `internal/attractor/engine/input_lineage_test_helpers_test.go`
 - Modify: `internal/attractor/engine/input_materialization_integration_test.go`
 - Modify: `internal/attractor/engine/input_materialization_resume_test.go`
@@ -1180,14 +1205,18 @@ func (e *Engine) materializeBranchStartupInputs(ctx context.Context, parentWorkt
 	if !e.inputMaterializationEnabled() {
 		return nil
 	}
-	if err := e.ensureLineageLoaded(); err != nil {
-		return err
-	}
 	parentLineage, err := LoadInputSnapshotLineage(parentLogsRoot)
 	if err != nil {
 		return err
 	}
-	baseRev := strings.TrimSpace(parentLineage.RunHead)
+	if parentLineage == nil {
+		return fmt.Errorf("missing parent lineage")
+	}
+	e.inputLineage = parentLineage
+	baseRev := strings.TrimSpace(e.inputLineage.RunHead)
+	if baseRev == "" {
+		return fmt.Errorf("parent lineage missing run head revision")
+	}
 	e.activeBranchKey = branchKeyFromWorktree(e.WorktreeDir)
 	e.activeRunBaseRevision = baseRev
 	branchRev, err := e.inputLineage.ForkBranch(e.activeBranchKey, baseRev)
@@ -1245,11 +1274,16 @@ func (e *Engine) materializeResumeStartupInputs(ctx context.Context) error {
 		return nil
 	}
 	lineage, err := LoadInputSnapshotLineage(e.LogsRoot)
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	if err := hydrateRunScopedRevision(e.WorktreeDir, e.Options.RunID, inputRevisionRoot(e.LogsRoot, lineage.RunHead)); err != nil {
-		return err
+	if lineage != nil {
+		e.inputLineage = lineage
+		if runHead := strings.TrimSpace(lineage.RunHead); runHead != "" {
+			if err := hydrateRunScopedRevision(e.WorktreeDir, e.Options.RunID, inputRevisionRoot(e.LogsRoot, runHead)); err != nil {
+				return err
+			}
+		}
 	}
 	_, err = e.materializeInputsWithPolicy(ctx, inputMaterializationResumeScope, "", []string{e.WorktreeDir, inputSnapshotFilesRoot(e.LogsRoot)}, e.WorktreeDir, "", inputRunManifestPath(e.LogsRoot), true)
 	return err
@@ -1292,11 +1326,26 @@ if err := e.advanceLineageAfterStage(node.ID); err != nil {
 func persistRevisionSnapshot(logsRoot, revID, worktreeDir, runID string) error {
 	src := filepath.Join(worktreeDir, ".ai", "runs", runID)
 	dst := inputRevisionRoot(logsRoot, revID)
-	_ = os.RemoveAll(dst)
-	if _, err := os.Stat(src); errors.Is(err, os.ErrNotExist) {
-		return os.MkdirAll(dst, 0o755)
+	parent := filepath.Dir(dst)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return err
 	}
-	return copyTree(src, dst)
+	tmp, err := os.MkdirTemp(parent, strings.TrimSpace(revID)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tmp)
+	if _, err := os.Stat(src); errors.Is(err, os.ErrNotExist) {
+		if err := os.MkdirAll(tmp, 0o755); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	} else if err := copyTree(src, tmp); err != nil {
+		return err
+	}
+	_ = os.RemoveAll(dst)
+	return os.Rename(tmp, dst)
 }
 ```
 
@@ -1311,7 +1360,7 @@ Expected: PASS, including the new lineage-specific integration tests.
 - [ ] **Step 5: Commit lineage hydration integration**
 
 ```bash
-git add internal/attractor/engine/input_materialization.go internal/attractor/engine/engine.go internal/attractor/engine/resume.go internal/attractor/engine/input_lineage_test_helpers_test.go internal/attractor/engine/input_materialization_integration_test.go internal/attractor/engine/input_materialization_resume_test.go internal/attractor/engine/input_manifest_contract_test.go
+git add internal/attractor/engine/input_materialization.go internal/attractor/engine/engine.go internal/attractor/engine/input_lineage_test_helpers_test.go internal/attractor/engine/input_materialization_integration_test.go internal/attractor/engine/input_materialization_resume_test.go internal/attractor/engine/input_manifest_contract_test.go
 git commit -m "engine/input: hydrate run-scoped state from persisted lineage"
 ```
 
@@ -1360,7 +1409,7 @@ func TestFanIn_RunScopedPromotion_ConflictPayloadSortedByPathThenBranch(t *testi
 	if conflicts[0]["path"] != "a.md" || conflicts[1]["path"] != "z.md" {
 		t.Fatalf("conflicts must be sorted by path: %+v", conflicts)
 	}
-	b0 := conflicts[0]["branches"].([]string)
+	b0 := anyToStringSlice(t, conflicts[0]["branches"])
 	if len(b0) != 2 || b0[0] > b0[1] {
 		t.Fatalf("branch keys must be sorted within each conflict payload: %+v", conflicts)
 	}
@@ -1388,6 +1437,19 @@ func metaConflictList(t *testing.T, raw any) []map[string]any {
 	}
 	return out
 }
+
+func anyToStringSlice(t *testing.T, raw any) []string {
+	t.Helper()
+	items, ok := raw.([]any)
+	if !ok {
+		t.Fatalf("expected []any for branch list, got %T", raw)
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		out = append(out, strings.TrimSpace(fmt.Sprint(item)))
+	}
+	return out
+}
 ```
 
 - [ ] **Step 2: Run fan-in tests and capture expected failures**
@@ -1401,13 +1463,16 @@ Expected: FAIL because fan-in currently only ff-forwards git and never merges ru
 // after winner selection + ff-only fast-forward:
 newHead, conflicts, err := exec.Engine.mergeRunScopedFanInState(results)
 if err != nil {
-	return runtime.Outcome{
-		Status: runtime.StatusFail,
-		FailureReason: "input_snapshot_conflict",
-		Meta: map[string]any{
-			"conflicts": conflictsToMeta(conflicts), // sorted by path then branch_key
-		},
-	}, nil
+	if isInputSnapshotConflictError(err) {
+		return runtime.Outcome{
+			Status: runtime.StatusFail,
+			FailureReason: "input_snapshot_conflict",
+			Meta: map[string]any{
+				"conflicts": conflictsToMeta(conflicts), // sorted by path then branch_key
+			},
+		}, nil
+	}
+	return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
 }
 exec.Context.Set("input_lineage.run_head_revision", newHead)
 ```
@@ -1433,7 +1498,6 @@ git commit -m "engine/fanin: merge promoted run-scoped lineage paths determinist
 
 **Files:**
 - Modify: `internal/attractor/engine/stage_status_contract.go`
-- Modify: `internal/attractor/engine/handlers.go`
 - Modify: `internal/attractor/engine/failure_dossier.go`
 - Modify: `internal/attractor/runstate/snapshot.go`
 - Modify: `cmd/kilroy/attractor_status_follow.go`
@@ -1556,7 +1620,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit runtime path migration**
 
 ```bash
-git add internal/attractor/engine/stage_status_contract.go internal/attractor/engine/handlers.go internal/attractor/engine/failure_dossier.go internal/attractor/runstate/snapshot.go cmd/kilroy/attractor_status_follow.go cmd/kilroy/attractor_status_follow_test.go internal/attractor/engine/prompts/stage_status_contract_preamble.tmpl internal/attractor/engine/prompts/failure_dossier_preamble.tmpl internal/attractor/engine/stage_status_contract_test.go internal/attractor/engine/failure_dossier_test.go internal/attractor/engine/run_with_config_integration_test.go internal/attractor/engine/status_json_worktree_test.go internal/attractor/runstate/snapshot_test.go
+git add internal/attractor/engine/stage_status_contract.go internal/attractor/engine/failure_dossier.go internal/attractor/runstate/snapshot.go cmd/kilroy/attractor_status_follow.go cmd/kilroy/attractor_status_follow_test.go internal/attractor/engine/prompts/stage_status_contract_preamble.tmpl internal/attractor/engine/prompts/failure_dossier_preamble.tmpl internal/attractor/engine/stage_status_contract_test.go internal/attractor/engine/failure_dossier_test.go internal/attractor/engine/run_with_config_integration_test.go internal/attractor/engine/status_json_worktree_test.go internal/attractor/runstate/snapshot_test.go
 git commit -m "engine/runtime: move status and dossier fallbacks to run-scoped .ai"
 ```
 
