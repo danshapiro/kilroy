@@ -73,7 +73,7 @@ winner semantics.
 
 ## Branch-Safe Snapshot Lineage
 
-The previous draft used a single latest-revision model. That is not safe for
+The previous draft used a single "latest revision" model. That is not safe for
 parallel branches. This proposal uses explicit lineage.
 
 ### Run Startup
@@ -123,9 +123,9 @@ typed alias while preserving backward compatibility.
 inputs:
   materialize:
     imports:
-      - pattern: docs/requirements.md
+      - pattern: "docs/requirements.md"
         required: true
-      - pattern: docs/context-overview.md
+      - pattern: "docs/context/*.md"
         required: false
 ```
 
