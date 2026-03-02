@@ -1,7 +1,7 @@
 version: 1
 
 repo:
-  path: /home/user/code/kilroy
+  path: .
 
 cxdb:
   binary_addr: 127.0.0.1:9009
@@ -9,7 +9,7 @@ cxdb:
   autostart:
     enabled: true
     command:
-      - /home/user/code/kilroy/scripts/start-cxdb.sh
+      - scripts/start-cxdb.sh
     wait_timeout_ms: 60000
     poll_interval_ms: 250
     ui:
@@ -22,7 +22,7 @@ llm:
       backend: cli
 
 modeldb:
-  openrouter_model_info_path: /home/user/code/kilroy/internal/attractor/modeldb/pinned/openrouter_models.json
+  openrouter_model_info_path: internal/attractor/modeldb/pinned/openrouter_models.json
   openrouter_model_info_update_policy: pinned
 
 git:

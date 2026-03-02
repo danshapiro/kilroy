@@ -36,6 +36,45 @@ func TestDiscoverBrowserArtifacts_PlaywrightAndCypress(t *testing.T) {
 	}
 }
 
+func TestDiscoverBrowserArtifacts_FindsNestedSegmentMatches(t *testing.T) {
+	worktree := t.TempDir()
+
+	mustWriteFile(t, filepath.Join(worktree, "frontend", "playwright-report", "index.html"), "ok")
+	mustWriteFile(t, filepath.Join(worktree, "apps", "web", "test-results", "junit.xml"), "ok")
+	mustWriteFile(t, filepath.Join(worktree, "packages", "ui", "cypress", "videos", "spec.mp4"), "ok")
+	mustWriteFile(t, filepath.Join(worktree, "packages", "ui", "cypress", "screenshots", "spec.png"), "ok")
+
+	artifacts, err := discoverBrowserArtifacts(worktree)
+	if err != nil {
+		t.Fatalf("discoverBrowserArtifacts: %v", err)
+	}
+
+	got := artifactRelPaths(artifacts)
+	want := []string{
+		"apps/web/test-results/junit.xml",
+		"frontend/playwright-report/index.html",
+		"packages/ui/cypress/screenshots/spec.png",
+		"packages/ui/cypress/videos/spec.mp4",
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("discover rel paths mismatch:\n got=%v\nwant=%v", got, want)
+	}
+}
+
+func TestBrowserArtifactCandidate_DoesNotMatchPartialSegmentNames(t *testing.T) {
+	cases := []string{
+		"frontend/playwright-reporter/index.html",
+		"apps/web/test-results-old/result.xml",
+		"packages/ui/cypress/videos2/spec.mp4",
+		"packages/ui/cypress-screenshots/spec.png",
+	}
+	for _, rel := range cases {
+		if browserArtifactCandidate(rel) {
+			t.Fatalf("expected false for partial segment match: %q", rel)
+		}
+	}
+}
+
 func TestCollectBrowserArtifacts_CopiesIntoStageBrowserArtifactsDir(t *testing.T) {
 	worktree := t.TempDir()
 	stageDir := t.TempDir()

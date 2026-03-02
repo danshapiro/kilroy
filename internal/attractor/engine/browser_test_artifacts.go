@@ -18,7 +18,7 @@ const (
 	browserArtifactTotalCapBytes   = int64(50 * 1024 * 1024)
 )
 
-var browserArtifactRootPrefixes = []string{
+var browserArtifactPathSegments = []string{
 	"playwright-report/",
 	"test-results/",
 	"cypress/videos/",
@@ -277,8 +277,8 @@ func browserArtifactCandidate(rel string) bool {
 	if rel == "" || rel == "." {
 		return false
 	}
-	for _, prefix := range browserArtifactRootPrefixes {
-		if strings.HasPrefix(rel, prefix) {
+	for _, sequence := range browserArtifactPathSegments {
+		if containsPathSegmentSequence(rel, sequence) {
 			return true
 		}
 	}
@@ -289,6 +289,32 @@ func browserArtifactCandidate(rel string) bool {
 		}
 	}
 	return false
+}
+
+func containsPathSegmentSequence(rel, sequence string) bool {
+	relParts := splitNonEmptyPathSegments(rel)
+	sequenceParts := splitNonEmptyPathSegments(sequence)
+	if len(relParts) == 0 || len(sequenceParts) == 0 || len(relParts) < len(sequenceParts) {
+		return false
+	}
+	for start := 0; start <= len(relParts)-len(sequenceParts); start++ {
+		if slices.Equal(relParts[start:start+len(sequenceParts)], sequenceParts) {
+			return true
+		}
+	}
+	return false
+}
+
+func splitNonEmptyPathSegments(in string) []string {
+	parts := strings.Split(strings.Trim(filepath.ToSlash(in), "/"), "/")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if strings.TrimSpace(part) == "" || part == "." {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
 }
 
 func shouldSkipBrowserWalkDir(rel string) bool {
