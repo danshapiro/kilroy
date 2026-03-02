@@ -14,8 +14,104 @@ import (
 	"github.com/danshapiro/kilroy/internal/cxdb"
 )
 
+type runBootstrap struct {
+	Graph                   *model.Graph
+	Dot                     []byte
+	Config                  *RunConfigFile
+	Options                 RunOptions
+	Registry                *HandlerRegistry
+	ResolvedArtifactPolicy  ResolvedArtifactPolicy
+	Catalog                 *modeldb.Catalog
+	ModelCatalogSource      string
+	ModelCatalogPath        string
+	Runtimes                map[string]ProviderRuntime
+	InputInferer            InputReferenceInferer
+	ResolvedWarning         string
+	InputInfererInitWarning string
+	StartupWarnings         []string
+	Warnings                []string
+	CXDBClient              *cxdb.Client
+	CXDBBin                 *cxdb.BinaryClient
+	Startup                 *CXDBStartupInfo
+}
+
 // RunWithConfig executes a run using the metaspec run configuration file schema.
 func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, overrides RunOptions) (*Result, error) {
+	boot, err := bootstrapRunWithConfig(ctx, dotSource, cfg, overrides)
+	if err != nil {
+		return nil, err
+	}
+	defer closeRunBootstrapResources(boot)
+
+	var sink *CXDBSink
+	if boot.CXDBClient != nil {
+		bundleID, bundle, _, err := cxdb.KilroyAttractorRegistryBundle()
+		if err != nil {
+			return nil, err
+		}
+		if _, err := boot.CXDBClient.PublishRegistryBundle(ctx, bundleID, bundle); err != nil {
+			return nil, err
+		}
+		ci, err := createContextWithFallback(ctx, boot.CXDBClient, boot.CXDBBin)
+		if err != nil {
+			return nil, err
+		}
+		sink = NewCXDBSink(boot.CXDBClient, boot.CXDBBin, boot.Options.RunID, ci.ContextID, ci.HeadTurnID, bundleID)
+	}
+
+	eng := newBaseEngine(boot.Graph, dotSource, boot.Options)
+	eng.Registry = boot.Registry // reuse the registry from validation (avoids creating a duplicate)
+	eng.RunConfig = boot.Config
+	eng.ArtifactPolicy = boot.ResolvedArtifactPolicy
+	eng.Context = NewContextWithGraphAttrs(boot.Graph)
+	eng.CodergenBackend = NewCodergenRouterWithRuntimes(boot.Config, boot.Catalog, boot.Runtimes)
+	eng.CXDB = sink
+	eng.ModelCatalogSHA = boot.Catalog.SHA256
+	eng.ModelCatalogSource = boot.ModelCatalogSource
+	eng.ModelCatalogPath = boot.ModelCatalogPath
+	eng.InputMaterializationPolicy = inputMaterializationPolicyFromConfig(boot.Config)
+	eng.InputReferenceInferer = boot.InputInferer
+	eng.InputInferenceCache = map[string][]InferredReference{}
+	eng.InputSourceTargetMap = map[string]string{}
+	if boot.ResolvedWarning != "" {
+		eng.Warn(boot.ResolvedWarning)
+		eng.Context.AppendLog(boot.ResolvedWarning)
+	}
+	if boot.InputInfererInitWarning != "" {
+		eng.Warn(boot.InputInfererInitWarning)
+		eng.Context.AppendLog(boot.InputInfererInitWarning)
+	}
+	for _, w := range boot.StartupWarnings {
+		eng.Warn(w)
+	}
+
+	if boot.Options.OnEngineReady != nil {
+		boot.Options.OnEngineReady(eng)
+	}
+
+	res, err := eng.run(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if boot.Startup != nil {
+		res.CXDBUIURL = strings.TrimSpace(boot.Startup.UIURL)
+	}
+	return res, nil
+}
+
+func closeRunBootstrapResources(boot *runBootstrap) {
+	if boot == nil {
+		return
+	}
+	if boot.Startup != nil {
+		_ = boot.Startup.shutdownManagedProcesses()
+	}
+	if boot.CXDBBin != nil {
+		_ = boot.CXDBBin.Close()
+	}
+}
+
+func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, overrides RunOptions) (*runBootstrap, error) {
 	if cfg == nil {
 		return nil, fmt.Errorf("config is nil")
 	}
@@ -229,79 +325,66 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 		return nil, err
 	}
 
-	var sink *CXDBSink
-	var startup *CXDBStartupInfo
+	var (
+		cxdbClient *cxdb.Client
+		bin        *cxdb.BinaryClient
+		startup    *CXDBStartupInfo
+	)
 	if !overrides.DisableCXDB {
 		// CXDB is required in v1 and must be reachable.
-		cxdbClient, bin, cxdbStartup, err := ensureCXDBReady(ctx, cfg, opts.LogsRoot, opts.RunID)
+		var cxdbStartup *CXDBStartupInfo
+		cxdbClient, bin, cxdbStartup, err = ensureCXDBReady(ctx, cfg, opts.LogsRoot, opts.RunID)
 		if err != nil {
 			return nil, err
 		}
-		defer func() { _ = bin.Close() }()
 		startup = cxdbStartup
-		if startup != nil {
-			// Defer process shutdown after bin close is deferred so shutdown runs first (LIFO).
-			defer func() { _ = startup.shutdownManagedProcesses() }()
-		}
 		if startup != nil && overrides.OnCXDBStartup != nil {
 			overrides.OnCXDBStartup(startup)
 		}
-		bundleID, bundle, _, err := cxdb.KilroyAttractorRegistryBundle()
-		if err != nil {
-			return nil, err
-		}
-		if _, err := cxdbClient.PublishRegistryBundle(ctx, bundleID, bundle); err != nil {
-			return nil, err
-		}
-		ci, err := createContextWithFallback(ctx, cxdbClient, bin)
-		if err != nil {
-			return nil, err
-		}
-		sink = NewCXDBSink(cxdbClient, bin, opts.RunID, ci.ContextID, ci.HeadTurnID, bundleID)
 	}
 
-	eng := newBaseEngine(g, dotSource, opts)
-	eng.Registry = reg // reuse the registry from validation (avoids creating a duplicate)
-	eng.RunConfig = cfg
-	eng.ArtifactPolicy = resolvedArtifactPolicy
-	eng.Context = NewContextWithGraphAttrs(g)
-	eng.CodergenBackend = NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
-	eng.CXDB = sink
-	eng.ModelCatalogSHA = catalog.SHA256
-	eng.ModelCatalogSource = resolved.Source
-	eng.ModelCatalogPath = resolved.SnapshotPath
-	eng.InputMaterializationPolicy = inputMaterializationPolicyFromConfig(cfg)
-	eng.InputReferenceInferer = inputInferer
-	eng.InputInferenceCache = map[string][]InferredReference{}
-	eng.InputSourceTargetMap = map[string]string{}
-	if strings.TrimSpace(resolved.Warning) != "" {
-		eng.Warn(resolved.Warning)
-		eng.Context.AppendLog(resolved.Warning)
+	resolvedWarning := strings.TrimSpace(resolved.Warning)
+	inputInfererInitWarning = strings.TrimSpace(inputInfererInitWarning)
+	combinedWarnings := []string{}
+	if resolvedWarning != "" {
+		combinedWarnings = append(combinedWarnings, resolvedWarning)
 	}
-	if strings.TrimSpace(inputInfererInitWarning) != "" {
-		eng.Warn(inputInfererInitWarning)
-		eng.Context.AppendLog(inputInfererInitWarning)
+	if inputInfererInitWarning != "" {
+		combinedWarnings = append(combinedWarnings, inputInfererInitWarning)
 	}
+	startupWarnings := []string{}
 	if startup != nil {
 		for _, w := range startup.Warnings {
-			eng.Warn(w)
+			w = strings.TrimSpace(w)
+			if w == "" {
+				continue
+			}
+			startupWarnings = append(startupWarnings, w)
+			combinedWarnings = append(combinedWarnings, w)
 		}
 	}
 
-	if overrides.OnEngineReady != nil {
-		overrides.OnEngineReady(eng)
-	}
-
-	res, err := eng.run(ctx)
-	if err != nil {
-		return nil, err
-	}
-	if startup != nil {
-		res.CXDBUIURL = strings.TrimSpace(startup.UIURL)
-	}
-	return res, nil
+	return &runBootstrap{
+		Graph:                   g,
+		Dot:                     dotSource,
+		Config:                  cfg,
+		Options:                 opts,
+		Registry:                reg,
+		ResolvedArtifactPolicy:  resolvedArtifactPolicy,
+		Catalog:                 catalog,
+		ModelCatalogSource:      resolved.Source,
+		ModelCatalogPath:        resolved.SnapshotPath,
+		Runtimes:                runtimes,
+		InputInferer:            inputInferer,
+		ResolvedWarning:         resolvedWarning,
+		InputInfererInitWarning: inputInfererInitWarning,
+		StartupWarnings:         startupWarnings,
+		Warnings:                combinedWarnings,
+		CXDBClient:              cxdbClient,
+		CXDBBin:                 bin,
+		Startup:                 startup,
+	}, nil
 }
-
 func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRuntime, catalog *modeldb.Catalog, opts RunOptions) ([]providerPreflightCheck, error) {
 	if g == nil || catalog == nil {
 		return nil, nil

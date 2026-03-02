@@ -222,6 +222,160 @@ digraph G {
 	}
 }
 
+func TestPreflightWithConfig_SkipsRunExecutionArtifacts(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+	runID := "preflight-skip-exec"
+
+	dot := []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  start -> exit
+}
+`)
+
+	cfg := &RunConfigFile{Version: 1}
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = "127.0.0.1:9"
+	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:9"
+	cfg.ModelDB.OpenRouterModelInfoPath = pinned
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+	cfg.Git.RunBranchPrefix = "attractor/run"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	res, err := PreflightWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       runID,
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("PreflightWithConfig: %v", err)
+	}
+	if res == nil {
+		t.Fatal("PreflightWithConfig returned nil result")
+	}
+
+	reportPath := filepath.Join(logsRoot, "preflight_report.json")
+	if got, want := res.PreflightReportPath, reportPath; got != want {
+		t.Fatalf("PreflightReportPath: got %q want %q", got, want)
+	}
+	assertExists(t, reportPath)
+
+	for _, rel := range []string{"final.json", "checkpoint.json", "manifest.json", "run.pid"} {
+		p := filepath.Join(logsRoot, rel)
+		if _, statErr := os.Stat(p); !os.IsNotExist(statErr) {
+			t.Fatalf("expected %s to be absent; stat err=%v", p, statErr)
+		}
+	}
+	worktreeDir := filepath.Join(logsRoot, "worktree")
+	if _, statErr := os.Stat(worktreeDir); !os.IsNotExist(statErr) {
+		t.Fatalf("expected worktree dir to be absent; stat err=%v", statErr)
+	}
+
+	runBranch := "attractor/run/" + runID
+	if got := strings.TrimSpace(runCmdOut(t, repo, "git", "branch", "--list", runBranch)); got != "" {
+		t.Fatalf("expected run branch %q to be absent, got %q", runBranch, got)
+	}
+}
+
+func TestPreflightWithConfig_ReturnsRunAndReportMetadata(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+	runID := "preflight-metadata"
+
+	dot := []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  start -> exit
+}
+`)
+
+	cfg := &RunConfigFile{Version: 1}
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = "127.0.0.1:9"
+	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:9"
+	cfg.ModelDB.OpenRouterModelInfoPath = pinned
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	res, err := PreflightWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       runID,
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("PreflightWithConfig: %v", err)
+	}
+	if res == nil {
+		t.Fatal("PreflightWithConfig returned nil result")
+	}
+	if got, want := res.RunID, runID; got != want {
+		t.Fatalf("RunID: got %q want %q", got, want)
+	}
+	if got, want := res.LogsRoot, logsRoot; got != want {
+		t.Fatalf("LogsRoot: got %q want %q", got, want)
+	}
+
+	reportPath := filepath.Join(logsRoot, "preflight_report.json")
+	if got, want := res.PreflightReportPath, reportPath; got != want {
+		t.Fatalf("PreflightReportPath: got %q want %q", got, want)
+	}
+	b, readErr := os.ReadFile(reportPath)
+	if readErr != nil {
+		t.Fatalf("read preflight_report.json: %v", readErr)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("decode preflight_report.json: %v", err)
+	}
+}
+
+func TestPreflightWithConfig_StillEnforcesRunPolicyGates(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+
+	dot := []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="hi"]
+  start -> a -> exit
+}
+`)
+
+	cfg := &RunConfigFile{Version: 1}
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = "127.0.0.1:9"
+	cfg.CXDB.HTTPBaseURL = "http://127.0.0.1:9"
+	cfg.LLM.CLIProfile = "test_shim"
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendCLI},
+	}
+	cfg.ModelDB.OpenRouterModelInfoPath = pinned
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	_, err := PreflightWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       "preflight-gate",
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err == nil {
+		t.Fatal("expected test_shim gate error, got nil")
+	}
+	if !strings.Contains(err.Error(), "llm.cli_profile=test_shim requires --allow-test-shim") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunWithConfig_WritesPIDFile(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
