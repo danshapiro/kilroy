@@ -43,9 +43,11 @@ git:
 inputs:
   materialize:
     enabled: true
-    include: []
-    default_include:
-      - ".ai/*.md"
+    imports:
+      - pattern: "docs/**/*.md"
+        required: false
+    fan_in:
+      promote_run_scoped: []
     follow_references: true
     infer_with_llm: false
     # To enable inference, set both fields explicitly:

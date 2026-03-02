@@ -128,11 +128,19 @@ func TestCreateRunfileTemplate_IncludesInputMaterializationContract(t *testing.T
 	if _, ok := materialize["enabled"]; !ok {
 		t.Fatal("template must include inputs.materialize.enabled")
 	}
-	if _, ok := materialize["include"]; !ok {
-		t.Fatal("template must include inputs.materialize.include")
+	if _, ok := materialize["imports"]; !ok {
+		t.Fatal("template must include inputs.materialize.imports")
 	}
-	if _, ok := materialize["default_include"]; !ok {
-		t.Fatal("template must include inputs.materialize.default_include")
+	if _, ok := materialize["include"]; ok {
+		t.Fatal("template must not include inputs.materialize.include when imports schema is used")
+	}
+	if _, ok := materialize["default_include"]; ok {
+		t.Fatal("template must not include inputs.materialize.default_include when imports schema is used")
+	}
+	fanIn := asMap(t, materialize["fan_in"], "inputs.materialize.fan_in")
+	promoteRunScoped := asSlice(t, fanIn["promote_run_scoped"], "inputs.materialize.fan_in.promote_run_scoped")
+	if len(promoteRunScoped) != 0 {
+		t.Fatal("template default must not opt into fan-in promotion")
 	}
 	if _, ok := materialize["follow_references"]; !ok {
 		t.Fatal("template must include inputs.materialize.follow_references")
