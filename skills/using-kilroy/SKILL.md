@@ -17,7 +17,7 @@ Kilroy is a local-first Attractor runner:
 Use these exact command forms:
 
 ```text
-kilroy attractor run [--detach] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]
+kilroy attractor run [--preflight|--test-run] [--detach] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]
 kilroy attractor resume --logs-root <dir>
 kilroy attractor resume --cxdb <http_base_url> --context-id <id>
 kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]
@@ -48,6 +48,12 @@ kilroy attractor validate --graph pipeline.dot
 
 ```bash
 kilroy attractor run --graph pipeline.dot --config run.yaml
+```
+
+Optional preflight-only check (validates all preflights, no stage execution):
+
+```bash
+kilroy attractor run --graph pipeline.dot --config run.yaml --preflight
 ```
 
 5. If interrupted, resume from the most convenient source:

@@ -86,6 +86,8 @@ To build a reliable picture of run state:
 
 Always inspect `graph.dot` first so status is interpreted in graph context.
 
+Preflight-only runs (`--preflight` / `--test-run`) are expected to write `preflight_report.json` and skip execution artifacts (`manifest.json`, `checkpoint.json`, `final.json`, `worktree/`).
+
 1. `manifest.json`: run identity, graph name, repo, worktree, `started_at`.
 2. `live.json`: most recent event.
 3. `checkpoint.json`: last completed node and failure context.
