@@ -83,31 +83,9 @@ merge_analysis verifies all design docs exist and are cross-module consistent.
 Only after merge_analysis succeeds does the pipeline proceed to implement_* nodes.
 See `skills/create-dotfile/reference_template.dot` OPTIONAL comments for stub examples.
 
-**Worker pool (for 5+ discrete deliverable files requiring idempotent resumability):**
-When the task produces many independent files (e.g. 6 service modules, 8 API handlers), use a worker pool
-instead of a simple fan-out to get per-file idempotency and stall detection:
-
-```
-plan_work (shape=box, auto_status=true)
-  → work_pool (shape=component)
-  → worker_0 / worker_1 / worker_2 (shape=box, auto_status=true)
-  → check_work_complete (shape=box, auto_status=true)
-  → [loop back to work_pool if outcome=more_work, else merge_implementation]
-```
-
-plan_work writes `.ai/runs/$KILROY_RUN_ID/work_queue.json` once (skips if already exists).
-Each worker_N claims items where `item.id % N == N_index`, skips files already on disk.
-check_work_complete reads `.ai/runs/$KILROY_RUN_ID/work_pass.txt` (pass counter); routes:
-- `outcome=more_work` → work_pool (files remain)
-- `outcome=all_done`  → merge_implementation
-- `outcome=fail`      → postmortem (pass count > 5, stall guard)
-
-Required properties: (1) idempotent — skip existing files; (2) modulo item assignment;
-(3) pass-counter stall guard capping retries; (4) explicit all_done completion edge.
-
 **auto_status=true assignment rules:**
 - MUST: synthesis nodes — consolidate_*, merge_*, debate_*, review_consensus, postmortem
-- SHOULD: all implement_*, worker_N, analyze_* nodes in fan-outs — their primary
+- SHOULD: all implement_*, analyze_* nodes in fan-outs — their primary
   completion signal is the deliverable file; auto_status removes redundant success writes
 - NEVER on shape=diamond routing nodes or shape=parallelogram tool nodes
 

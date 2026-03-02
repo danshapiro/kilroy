@@ -157,14 +157,6 @@ digraph reference_template {
     // merge_analysis   [shape=box, auto_status=true, prompt="...verify all design docs..."]
     // See reference_template.dot OPTIONAL stubs below for pattern.
 
-    // OPTIONAL: For 5+ discrete deliverable files — use worker pool instead of flat fan-out.
-    // plan_work          [shape=box, auto_status=true, label="Plan Work Queue", prompt="...write .ai/runs/$KILROY_RUN_ID/work_queue.json..."]
-    // work_pool          [shape=component, label="Worker Pool"]
-    // worker_0           [shape=box, auto_status=true, label="Worker 0", prompt="...id%3==0..."]
-    // worker_1           [shape=box, auto_status=true, label="Worker 1", prompt="...id%3==1..."]
-    // worker_2           [shape=box, auto_status=true, label="Worker 2", prompt="...id%3==2..."]
-    // check_work_complete [shape=box, auto_status=true, label="Work Complete?", prompt="...pass counter..."]
-
     subgraph cluster_implement_verify {
         label="Implement And Verify"
 
