@@ -35,7 +35,17 @@ digraph SubstackCreatorUI {
     color="#D1D5DB";
     style="rounded";
 
-    app_start [label="App Start", fillcolor="#F9FAFB"];
+    app_start [
+      label="App Start",
+      shape=circle,
+      fixedsize=true,
+      width=1.05,
+      style="filled,bold",
+      fillcolor="#DBEAFE",
+      color="#1D4ED8",
+      fontcolor="#1E3A8A",
+      penwidth=2.0
+    ];
     first_run [label="First run?", shape=diamond, fillcolor="#EEF2FF", color="#6366F1"];
   }
 
