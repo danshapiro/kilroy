@@ -276,7 +276,7 @@ func TestReferenceSurfaces_NoLegacyRootAIScratchPaths(t *testing.T) {
 		"skills/build-dod/SKILL.md",
 		"skills/create-runfile/SKILL.md",
 		"skills/create-runfile/reference_run_template.yaml",
-		"demo/substack-pipeline-v01.dot",
+		"demo/substack-spec-v01.dot",
 		"docs/strongdm/dot specs/semport.dot",
 		"docs/strongdm/attractor/attractor-spec.md",
 		"docs/strongdm/attractor/README.md",
