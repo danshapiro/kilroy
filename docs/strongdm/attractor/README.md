@@ -46,6 +46,12 @@ Although bringing your own agentic loop and unified LLM SDK is not required to b
   - `KILROY_PREFLIGHT_CAPABILITY_PROBES=off` disables capability probing and keeps binary-presence checks only.
   - API prompt probes retry transient failures by default (timeout `30000ms`, retries `2`, backoff `500ms` to `5000ms`).
   - Tune with `KILROY_PREFLIGHT_API_PROMPT_PROBE_TIMEOUT_MS`, `KILROY_PREFLIGHT_API_PROMPT_PROBE_RETRIES`, `KILROY_PREFLIGHT_API_PROMPT_PROBE_BASE_DELAY_MS`, `KILROY_PREFLIGHT_API_PROMPT_PROBE_MAX_DELAY_MS`.
+- Preflight-only run mode:
+  - `./kilroy attractor run --graph <graph.dot> --config <run.yaml> --preflight` (alias: `--test-run`).
+  - Runs full startup validation stack (policy gates, graph/config validation, model/provider preflight, CXDB readiness unless `--no-cxdb`) and then exits before execution.
+  - Writes `<logs_root>/preflight_report.json`.
+  - Does not produce execution artifacts: `final.json`, `checkpoint.json`, `manifest.json`, `run.pid`, `worktree/`, run branch traversal.
+  - `--preflight/--test-run` cannot be combined with `--detach`.
 - Provider plug-ins (runtime metadata):
   - Providers are resolved through runtime metadata (protocol family + backend + failover), not hard-coded provider switches.
   - Built-ins: `openai`, `anthropic`, `google`, `kimi`, `zai`, `cerebras`, `minimax`.

@@ -224,6 +224,21 @@ llm:
 ./kilroy attractor run --graph pipeline.dot --config run.yaml --allow-test-shim
 ```
 
+Preflight-only run (validate everything, do not start execution):
+
+```bash
+./kilroy attractor run --graph pipeline.dot --config run.yaml --preflight
+./kilroy attractor run --graph pipeline.dot --config run.yaml --test-run
+```
+
+Preflight-only mode contract:
+
+- `--test-run` is an alias of `--preflight`.
+- It still enforces normal startup safety gates (stale-build confirmation, CLI headless warning, `--allow-test-shim` policy, provider/model preflight, CXDB readiness unless `--no-cxdb`).
+- It writes `{logs_root}/preflight_report.json`.
+- It does not start traversal or stage execution.
+- These are absent by design: `final.json`, `checkpoint.json`, `manifest.json`, `run.pid`, `worktree/`, run branch traversal.
+
 On success, stdout includes:
 
 - `run_id=...`
@@ -373,6 +388,7 @@ review [shape=box, reasoning_effort=high, prompt="..."]
 Typical run-level artifacts under `{logs_root}`:
 
 - `graph.dot`
+- `preflight_report.json`
 - `manifest.json`
 - `checkpoint.json`
 - `final.json`
@@ -393,7 +409,7 @@ Typical stage-level artifacts under `{logs_root}/{node_id}`:
 ## Commands
 
 ```text
-kilroy attractor run [--allow-test-shim] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]
+kilroy attractor run [--preflight|--test-run] [--allow-test-shim] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]
 kilroy attractor resume --logs-root <dir>
 kilroy attractor resume --cxdb <http_base_url> --context-id <id>
 kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]
