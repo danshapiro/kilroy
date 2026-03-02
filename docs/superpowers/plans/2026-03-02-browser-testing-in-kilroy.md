@@ -103,6 +103,10 @@ func TestCollectBrowserArtifacts_RespectsPerFileAndTotalSizeCaps(t *testing.T) {
 func TestCollectBrowserArtifacts_SkipsSymlinksAndOutOfTreeTargets(t *testing.T) {
     // Symlinks and paths resolving outside worktree are skipped for safety.
 }
+
+func TestCollectBrowserArtifacts_ClearsPreviousAttemptDestination(t *testing.T) {
+    // Destination is reset before copy so stale attempt files do not leak.
+}
 ```
 
 - [ ] **Step 2: Run the targeted test file to confirm failures**
@@ -120,6 +124,8 @@ Expected: FAIL (missing discovery/collector implementation)
 //   playwright-report, test-results, cypress/videos,
 //   cypress/screenshots, junit*.xml, *.trace.zip
 // - Copy into stageDir/browser_artifacts/<relative_path>
+// - Clear stageDir/browser_artifacts before each collection pass so each
+//   attempt writes a fresh artifact set.
 // - Exclude heavyweight caches (playwright/.cache and other install/cache paths).
 // - Collect only files created/modified during the current stage attempt
 //   (based on pre-run snapshot + startedAt boundary).
@@ -189,6 +195,8 @@ Expected: FAIL (collector/attempt-archive integration and failure-reason plumbin
 //   and setup/install commands are excluded.
 // - capture pre-run artifact snapshot + stage start time before command run
 // - after stdout/stderr/timing capture, invoke collectBrowserArtifacts(stageDir, worktreeDir, baseline, startedAt)
+// - ensure collector clears stageDir/browser_artifacts before writing new files
+//   to prevent stale artifact bleed across retries.
 // - append collector summary to progress events
 // - never fail stage solely because artifact copy partially fails (warn + continue)
 // - on command failure:
@@ -239,7 +247,8 @@ Expected: FAIL on new browser cases
 ```go
 // Add normalized hints such as:
 // "host system is missing dependencies",
-// "executable doesn't exist", "please run the following command to download new browsers",
+// "browsertype.launch: executable doesn't exist",
+// "please run the following command to download new browsers",
 // "net::err_name_not_resolved"
 // Do NOT add ambiguous hints like "websocket closed" or
 // "target page, context or browser has been closed" (high false-positive risk).
@@ -465,11 +474,11 @@ git commit -m "docs: add browser testing runtime and artifact guidance"
 - [ ] **Step 1: Add focused browser-hardening entries to guardrail matrix script**
 
 ```bash
-run_test_checked "[x/y] browser artifact collector + safety" \
+run_test_checked "[8/10] browser artifact collector + safety" \
   go test ./internal/attractor/engine -run '^TestDiscoverBrowserArtifacts|^TestCollectBrowserArtifacts' -count=1
-run_test_checked "[x/y] browser tool handler + retry routing" \
+run_test_checked "[9/10] browser tool handler + retry routing" \
   go test ./internal/attractor/engine -run '^TestToolHandler_CollectsBrowserArtifacts|^TestToolHandler_BrowserFailureReasonUsesStderrExcerpt|^TestToolHandler_NonBrowserFailureReason_RemainsExitStatus|^TestLoopRestart_UsesToolFailureReason_ForBrowserTransientRouting|^TestArchiveAttemptDir_PreservesBrowserArtifactDirectories' -count=1
-run_test_checked "[x/y] browser validator lint coverage" \
+run_test_checked "[10/10] browser validator lint coverage" \
   go test ./internal/attractor/validate -run '^TestLintValidateScriptFailureContract|^TestLintBrowserInlineToolCommandContract' -count=1
 ```
 
