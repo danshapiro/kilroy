@@ -108,6 +108,44 @@ digraph P {
 	}
 }
 
+func TestInputMaterialization_Lineage_BranchIsolationBeforeFanIn(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	cfg := newInputMaterializationRunConfigForTest(t, repo)
+	cfg.Inputs.Materialize.FanIn.PromoteRunScoped = nil
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	runID := "lineage-branch-isolation"
+	res, err := RunWithConfig(ctx, branchIsolationDOTForRunID(runID), cfg, RunOptions{
+		RunID:       runID,
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("final status: got %q want %q", res.FinalStatus, runtime.FinalSuccess)
+	}
+
+	results := mustLoadParallelResults(t, filepath.Join(res.LogsRoot, "par", "parallel_results.json"))
+	if len(results) != 2 {
+		t.Fatalf("expected 2 branch results, got %d", len(results))
+	}
+	aResult := mustParallelResultByStartNode(t, results, "a")
+	bResult := mustParallelResultByStartNode(t, results, "b")
+
+	aFile := runScopedPath(aResult.WorktreeDir, res.RunID, "branch_a_only.md")
+	bFile := runScopedPath(bResult.WorktreeDir, res.RunID, "branch_a_only.md")
+	if !fileExists(aFile) {
+		t.Fatalf("writer branch must retain its own run-scoped file: %s", aFile)
+	}
+	if fileExists(bFile) {
+		t.Fatalf("cross-branch leakage detected: %s", bFile)
+	}
+}
+
 func newInputMaterializationRunConfigForTest(t *testing.T, repo string) *RunConfigFile {
 	t.Helper()
 	cfg := &RunConfigFile{Version: 1}

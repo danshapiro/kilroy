@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,6 +28,10 @@ type InputManifest struct {
 	Sources                      []string                    `json:"sources"`
 	ResolvedFiles                []string                    `json:"resolved_files"`
 	SourceTargetMap              []InputSourceTargetMapEntry `json:"source_target_map"`
+	RunBaseRevision              string                      `json:"run_base_revision,omitempty"`
+	BranchRevision               string                      `json:"branch_revision,omitempty"`
+	BaseRunRevision              string                      `json:"base_run_revision,omitempty"`
+	BranchHeadRevision           string                      `json:"branch_head_revision,omitempty"`
 	DiscoveredReferences         []DiscoveredInputReference  `json:"discovered_references"`
 	UnresolvedInferredReferences []InferredReference         `json:"unresolved_inferred_references,omitempty"`
 	Warnings                     []string                    `json:"warnings,omitempty"`
@@ -780,10 +786,22 @@ func (e *Engine) materializeRunStartupInputs(ctx context.Context) error {
 	if !e.inputMaterializationEnabled() {
 		return nil
 	}
-	_, err := e.materializeInputsWithPolicy(ctx, inputMaterializationRunScope, "", []string{
+	if err := e.ensureLineageLoaded(); err != nil {
+		return err
+	}
+	manifest, err := e.materializeInputsWithPolicy(ctx, inputMaterializationRunScope, "", []string{
 		e.Options.RepoPath,
 	}, e.WorktreeDir, inputSnapshotFilesRoot(e.LogsRoot), inputRunManifestPath(e.LogsRoot), true)
-	return err
+	if err != nil {
+		return err
+	}
+	if err := e.ensureRunStartupLineage(manifest); err != nil {
+		return err
+	}
+	if err := persistRevisionSnapshot(e.LogsRoot, e.inputLineage.RunHead, e.WorktreeDir, e.Options.RunID); err != nil {
+		return err
+	}
+	return e.inputLineage.SaveAtomic(e.LogsRoot)
 }
 
 func (e *Engine) materializeStageInputs(ctx context.Context, nodeID string) error {
@@ -804,8 +822,14 @@ func (e *Engine) materializeStageInputs(ctx context.Context, nodeID string) erro
 		return err
 	}
 	if manifest != nil {
+		e.attachStageLineageTuple(manifest)
+		if err := writeJSON(manifestPath, manifest); err != nil {
+			return err
+		}
 		// Keep the run-level manifest in sync with the latest closure expansion.
-		_ = writeJSON(inputRunManifestPath(e.LogsRoot), manifest)
+		runManifest := *manifest
+		e.attachRunManifestLineage(&runManifest)
+		_ = writeJSON(inputRunManifestPath(e.LogsRoot), &runManifest)
 		e.currentInputManifestPath = manifestPath
 	}
 	return nil
@@ -815,24 +839,356 @@ func (e *Engine) materializeBranchStartupInputs(ctx context.Context, parentWorkt
 	if !e.inputMaterializationEnabled() {
 		return nil
 	}
+	parentLineage, err := LoadInputSnapshotLineage(parentLogsRoot)
+	if err != nil {
+		return err
+	}
+	e.inputLineage = parentLineage
+	baseRev := strings.TrimSpace(parentLineage.RunHead)
+	if baseRev == "" {
+		return fmt.Errorf("branch startup missing parent run head revision")
+	}
+	e.activeBranchKey = branchKeyFromWorktree(e.WorktreeDir)
+	e.activeRunBaseRevision = baseRev
+	branchRev, err := e.inputLineage.ForkBranch(e.activeBranchKey, baseRev)
+	if err != nil {
+		return err
+	}
+	e.activeBranchRevision = branchRev
+	if err := hydrateRunScopedRevision(e.WorktreeDir, e.Options.RunID, revisionHydrationRoot(parentLogsRoot, e.inputLineage, branchRev)); err != nil {
+		return err
+	}
 	roots := []string{parentWorktree}
 	if snapshot := strings.TrimSpace(inputSnapshotFilesRoot(parentLogsRoot)); snapshot != "" {
 		roots = append(roots, snapshot)
 	}
-	_, err := e.materializeInputsWithPolicy(ctx, inputMaterializationBranchScope, "", roots, e.WorktreeDir, "", inputRunManifestPath(e.LogsRoot), true)
-	return err
+	manifest, err := e.materializeInputsWithPolicy(ctx, inputMaterializationBranchScope, "", roots, e.WorktreeDir, "", inputRunManifestPath(e.LogsRoot), true)
+	if err != nil {
+		return err
+	}
+	if manifest != nil {
+		manifest.BaseRunRevision = baseRev
+		manifest.BranchHeadRevision = branchRev
+		if err := writeJSON(inputRunManifestPath(e.LogsRoot), manifest); err != nil {
+			return err
+		}
+	}
+	if err := persistRevisionSnapshot(e.LogsRoot, branchRev, e.WorktreeDir, e.Options.RunID); err != nil {
+		return err
+	}
+	return e.inputLineage.SaveAtomic(e.LogsRoot)
 }
 
 func (e *Engine) materializeResumeStartupInputs(ctx context.Context) error {
 	if !e.inputMaterializationEnabled() {
 		return nil
 	}
+	if err := e.ensureLineageLoaded(); err != nil {
+		return err
+	}
+	if runHead := strings.TrimSpace(e.inputLineage.RunHead); runHead != "" {
+		if err := hydrateRunScopedRevision(e.WorktreeDir, e.Options.RunID, revisionHydrationRoot(e.LogsRoot, e.inputLineage, runHead)); err != nil {
+			return err
+		}
+	}
+	e.activeBranchKey = ""
+	e.activeRunBaseRevision = ""
+	e.activeBranchRevision = ""
 	roots := []string{e.WorktreeDir}
 	if snapshot := strings.TrimSpace(inputSnapshotFilesRoot(e.LogsRoot)); snapshot != "" {
 		roots = append(roots, snapshot)
 	}
-	_, err := e.materializeInputsWithPolicy(ctx, inputMaterializationResumeScope, "", roots, e.WorktreeDir, "", inputRunManifestPath(e.LogsRoot), true)
-	return err
+	manifest, err := e.materializeInputsWithPolicy(ctx, inputMaterializationResumeScope, "", roots, e.WorktreeDir, "", inputRunManifestPath(e.LogsRoot), true)
+	if err != nil {
+		return err
+	}
+	if manifest != nil {
+		e.attachRunManifestLineage(manifest)
+		if err := writeJSON(inputRunManifestPath(e.LogsRoot), manifest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) ensureLineageLoaded() error {
+	if e == nil {
+		return fmt.Errorf("nil engine")
+	}
+	if e.inputLineage != nil {
+		return nil
+	}
+	lineage, err := LoadInputSnapshotLineage(e.LogsRoot)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if lineage == nil {
+		lineage = newInputSnapshotLineage(e.Options.RunID)
+	}
+	if strings.TrimSpace(lineage.RunID) == "" {
+		lineage.RunID = strings.TrimSpace(e.Options.RunID)
+	}
+	e.inputLineage = lineage
+	return nil
+}
+
+func (e *Engine) ensureRunStartupLineage(manifest *InputManifest) error {
+	if e == nil {
+		return fmt.Errorf("nil engine")
+	}
+	if err := e.ensureLineageLoaded(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(e.inputLineage.RunHead) == "" {
+		digest, err := digestRunScopedState(e.WorktreeDir, e.Options.RunID)
+		if err != nil {
+			return err
+		}
+		next := e.inputLineage.CreateRunRevision("", digest)
+		if strings.TrimSpace(next) == "" {
+			return fmt.Errorf("create run startup lineage revision")
+		}
+		e.inputLineage.RunHead = next
+	}
+	e.activeBranchKey = ""
+	e.activeRunBaseRevision = ""
+	e.activeBranchRevision = ""
+	e.attachRunManifestLineage(manifest)
+	if manifest != nil {
+		if err := writeJSON(inputRunManifestPath(e.LogsRoot), manifest); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (e *Engine) attachStageLineageTuple(manifest *InputManifest) {
+	if manifest == nil {
+		return
+	}
+	if strings.TrimSpace(e.activeBranchKey) != "" {
+		manifest.RunBaseRevision = strings.TrimSpace(e.activeRunBaseRevision)
+		manifest.BranchRevision = strings.TrimSpace(e.activeBranchRevision)
+		return
+	}
+	if e.inputLineage == nil {
+		return
+	}
+	manifest.RunBaseRevision = strings.TrimSpace(e.inputLineage.RunHead)
+	manifest.BranchRevision = ""
+}
+
+func (e *Engine) attachRunManifestLineage(manifest *InputManifest) {
+	if manifest == nil {
+		return
+	}
+	if strings.TrimSpace(e.activeBranchKey) != "" {
+		manifest.BaseRunRevision = strings.TrimSpace(e.activeRunBaseRevision)
+		manifest.BranchHeadRevision = strings.TrimSpace(e.activeBranchRevision)
+		return
+	}
+	if e.inputLineage == nil {
+		return
+	}
+	manifest.BaseRunRevision = strings.TrimSpace(e.inputLineage.RunHead)
+	manifest.BranchHeadRevision = ""
+}
+
+func (e *Engine) advanceLineageAfterStage(nodeID string) error {
+	if !e.inputMaterializationEnabled() {
+		return nil
+	}
+	if err := e.ensureLineageLoaded(); err != nil {
+		return err
+	}
+	digest, err := digestRunScopedState(e.WorktreeDir, e.Options.RunID)
+	if err != nil {
+		return fmt.Errorf("digest run-scoped state for %s: %w", strings.TrimSpace(nodeID), err)
+	}
+	var nextRev string
+	if strings.TrimSpace(e.activeBranchKey) != "" {
+		nextRev = e.inputLineage.AdvanceBranch(e.activeBranchKey, e.activeBranchRevision, digest)
+		if strings.TrimSpace(nextRev) == "" {
+			return fmt.Errorf("advance branch lineage for %s", strings.TrimSpace(nodeID))
+		}
+		e.activeBranchRevision = nextRev
+	} else {
+		nextRev = e.inputLineage.CreateRunRevision(e.inputLineage.RunHead, digest)
+		if strings.TrimSpace(nextRev) == "" {
+			return fmt.Errorf("advance run lineage for %s", strings.TrimSpace(nodeID))
+		}
+		e.inputLineage.RunHead = nextRev
+	}
+	if err := persistRevisionSnapshot(e.LogsRoot, nextRev, e.WorktreeDir, e.Options.RunID); err != nil {
+		return err
+	}
+	if err := e.inputLineage.SaveAtomic(e.LogsRoot); err != nil {
+		return err
+	}
+	runManifestPath := inputRunManifestPath(e.LogsRoot)
+	manifest, err := loadInputManifest(runManifestPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	e.attachRunManifestLineage(manifest)
+	return writeJSON(runManifestPath, manifest)
+}
+
+func digestRunScopedState(worktreeDir string, runID string) (map[string]string, error) {
+	root := runScopedWorktreeRoot(worktreeDir, runID)
+	digest := map[string]string{}
+	info, err := os.Stat(root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return digest, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("run-scoped root is not a directory: %s", root)
+	}
+	if err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(b)
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		digest[filepath.ToSlash(rel)] = "sha256:" + hex.EncodeToString(sum[:])
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return digest, nil
+}
+
+func persistRevisionSnapshot(logsRoot, revID, worktreeDir, runID string) error {
+	revID = strings.TrimSpace(revID)
+	if revID == "" {
+		return fmt.Errorf("revision id is required")
+	}
+	src := runScopedWorktreeRoot(worktreeDir, runID)
+	dst := inputRevisionRoot(logsRoot, revID)
+	_ = os.RemoveAll(dst)
+	if _, err := os.Stat(src); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return os.MkdirAll(dst, 0o755)
+		}
+		return err
+	}
+	return copyTree(src, dst)
+}
+
+func hydrateRunScopedRevision(worktreeDir string, runID string, revisionRoot string) error {
+	target := runScopedWorktreeRoot(worktreeDir, runID)
+	_ = os.RemoveAll(target)
+	revisionRoot = strings.TrimSpace(revisionRoot)
+	if revisionRoot == "" {
+		return os.MkdirAll(target, 0o755)
+	}
+	info, err := os.Stat(revisionRoot)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return os.MkdirAll(target, 0o755)
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("revision snapshot root is not a directory: %s", revisionRoot)
+	}
+	return copyTree(revisionRoot, target)
+}
+
+func copyTree(src string, dst string) error {
+	src = strings.TrimSpace(src)
+	dst = strings.TrimSpace(dst)
+	if src == "" || dst == "" {
+		return fmt.Errorf("copy tree requires source and destination")
+	}
+	return filepath.WalkDir(src, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := dst
+		if rel != "." {
+			target = filepath.Join(dst, rel)
+		}
+		if d.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		return copyInputFile(path, target)
+	})
+}
+
+func runScopedWorktreeRoot(worktreeDir string, runID string) string {
+	return filepath.Join(strings.TrimSpace(worktreeDir), ".ai", "runs", strings.TrimSpace(runID))
+}
+
+func branchKeyFromWorktree(worktreeDir string) string {
+	key := strings.TrimSpace(filepath.Base(filepath.Clean(worktreeDir)))
+	if key == "" || key == "." || key == string(filepath.Separator) {
+		return "branch"
+	}
+	return strings.ReplaceAll(key, " ", "_")
+}
+
+func revisionHydrationRoot(logsRoot string, lineage *InputSnapshotLineage, revID string) string {
+	revID = strings.TrimSpace(revID)
+	if revID == "" {
+		return ""
+	}
+	seen := map[string]bool{}
+	var find func(string) string
+	find = func(current string) string {
+		current = strings.TrimSpace(current)
+		if current == "" || seen[current] {
+			return ""
+		}
+		seen[current] = true
+		root := inputRevisionRoot(logsRoot, current)
+		if info, err := os.Stat(root); err == nil && info.IsDir() {
+			return root
+		}
+		if lineage == nil {
+			return ""
+		}
+		rev, ok := lineage.Revisions[current]
+		if !ok {
+			return ""
+		}
+		for _, parent := range rev.ParentIDs {
+			if root := find(parent); root != "" {
+				return root
+			}
+		}
+		return ""
+	}
+	if root := find(revID); root != "" {
+		return root
+	}
+	return inputRevisionRoot(logsRoot, revID)
 }
 
 func (e *Engine) ensureInputMaterializationStateLoaded() {

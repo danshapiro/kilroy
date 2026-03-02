@@ -178,6 +178,40 @@ digraph G {
 	}
 }
 
+func TestInputManifestContract_LineageRevisionFields(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	cfg := newInputMaterializationRunConfigForTest(t, repo)
+	runID := "lineage-manifest-fields"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	res, err := RunWithConfig(ctx, branchIsolationDOTForRunID(runID), cfg, RunOptions{
+		RunID:       runID,
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("final status: got %q want %q", res.FinalStatus, runtime.FinalSuccess)
+	}
+
+	results := mustLoadParallelResults(t, filepath.Join(res.LogsRoot, "par", "parallel_results.json"))
+	branchResult := mustParallelResultByStartNode(t, results, "a")
+
+	branchManifest := mustLoadInputManifest(t, inputRunManifestPath(branchResult.LogsRoot))
+	if strings.TrimSpace(branchManifest.BaseRunRevision) == "" || strings.TrimSpace(branchManifest.BranchHeadRevision) == "" {
+		t.Fatalf("branch manifest missing base/head revisions: %+v", branchManifest)
+	}
+
+	branchStageManifest := mustLoadInputManifest(t, inputStageManifestPath(branchResult.LogsRoot, "a"))
+	if strings.TrimSpace(branchStageManifest.RunBaseRevision) == "" || strings.TrimSpace(branchStageManifest.BranchRevision) == "" {
+		t.Fatalf("branch stage manifest missing lineage tuple: %+v", branchStageManifest)
+	}
+}
+
 func newInputManifestContractConfig(t *testing.T, repo string, cliPath string) *RunConfigFile {
 	t.Helper()
 	cfg := &RunConfigFile{Version: 1}

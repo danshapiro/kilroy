@@ -85,3 +85,42 @@ func TestInputMaterializationRunStartup_IncludeMissingFailsFast(t *testing.T) {
 		t.Fatalf("expected *inputIncludeMissingError, got %T (%v)", err, err)
 	}
 }
+
+func TestInputMaterializationResume_LineageHydratesRunScopedWithoutWorkspaceAI(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	cfg := newInputMaterializationRunConfigForTest(t, repo)
+	runID := "lineage-resume"
+
+	res, err := RunWithConfig(context.Background(), resumeSeedDOTForRunID(runID), cfg, RunOptions{
+		RunID:       runID,
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+
+	runScoped := runScopedPath(res.WorktreeDir, res.RunID, "postmortem_latest.md")
+	if err := os.MkdirAll(filepath.Dir(runScoped), 0o755); err != nil {
+		t.Fatalf("mkdir run scoped: %v", err)
+	}
+	if err := os.WriteFile(runScoped, []byte("lineage-only-content"), 0o644); err != nil {
+		t.Fatalf("write run scoped: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(repo, ".ai")); err != nil {
+		t.Fatalf("remove source .ai: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(res.WorktreeDir, ".ai")); err != nil {
+		t.Fatalf("remove worktree .ai: %v", err)
+	}
+
+	if err := resumeFromCheckpointForTest(context.Background(), logsRoot); err != nil {
+		t.Fatalf("resumeFromCheckpointForTest: %v", err)
+	}
+
+	resumedRunScoped := runScopedPath(filepath.Join(logsRoot, "worktree"), res.RunID, "postmortem_latest.md")
+	if !fileExists(resumedRunScoped) {
+		t.Fatalf("resume failed to hydrate run-scoped file from persisted lineage: %s", resumedRunScoped)
+	}
+}

@@ -175,6 +175,10 @@ type Engine struct {
 	InputReferenceInferer      InputReferenceInferer
 	InputInferenceCache        map[string][]InferredReference
 	InputSourceTargetMap       map[string]string
+	inputLineage               *InputSnapshotLineage
+	activeBranchKey            string
+	activeRunBaseRevision      string
+	activeBranchRevision       string
 	currentInputManifestPath   string
 
 	warningsMu sync.Mutex
@@ -1096,6 +1100,17 @@ func (e *Engine) executeNode(ctx context.Context, node *model.Node) (runtime.Out
 
 	// Write status.json (canonical metaspec shape).
 	_ = writeJSON(filepath.Join(stageDir, "status.json"), out)
+	if err := e.advanceLineageAfterStage(node.ID); err != nil {
+		out = runtime.Outcome{
+			Status:        runtime.StatusFail,
+			FailureReason: err.Error(),
+			ContextUpdates: map[string]any{
+				"failure_reason": err.Error(),
+			},
+			SuggestedNextIDs: []string{},
+		}
+		_ = writeJSON(filepath.Join(stageDir, "status.json"), out)
+	}
 	return out, nil
 }
 
