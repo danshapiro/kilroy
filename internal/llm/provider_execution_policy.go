@@ -80,10 +80,15 @@ func ApplyExecutionPolicy(req Request, policy ProviderExecutionPolicy) Request {
 			req.MaxTokens = &v
 		}
 	}
-	// Apply maximum cap.
+	// Apply maximum cap. If both floor and cap are set, the floor wins
+	// (provider protocol contracts like Kimi's are load-bearing).
 	if policy.MaxMaxTokens > 0 {
-		if req.MaxTokens == nil || *req.MaxTokens > policy.MaxMaxTokens {
-			v := policy.MaxMaxTokens
+		cap := policy.MaxMaxTokens
+		if policy.MinMaxTokens > cap {
+			cap = policy.MinMaxTokens
+		}
+		if req.MaxTokens == nil || *req.MaxTokens > cap {
+			v := cap
 			req.MaxTokens = &v
 		}
 	}
