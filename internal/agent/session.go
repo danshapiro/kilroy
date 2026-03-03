@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oklog/ulid/v2"
 
@@ -293,16 +294,11 @@ func (s *Session) execTool(ctx context.Context, call llm.ToolCallData) ToolExecR
 	// Emit output deltas (best-effort). Even for non-streaming tools, this gives consumers a uniform
 	// incremental event pattern that mirrors provider LLM streaming.
 	full := res.FullOutput
-	const chunk = 4000
-	for i := 0; i < len(full); i += chunk {
-		j := i + chunk
-		if j > len(full) {
-			j = len(full)
-		}
+	for _, delta := range utf8Chunk(full, 4000) {
 		s.emit(EventToolCallOutputDelta, map[string]any{
 			"tool_name": res.ToolName,
 			"call_id":   res.CallID,
-			"delta":     full[i:j],
+			"delta":     delta,
 		})
 	}
 
@@ -524,6 +520,10 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 		var streamErr error
 		providerToolCallCount := 0
 		seenProviderToolCalls := map[string]struct{}{}
+		seenProviderOutputDeltas := map[string]struct{}{}
+		seenProviderToolEnds := map[string]struct{}{}
+		providerToolNameByCallID := map[string]string{}
+		providerOutputByCallID := map[string]string{}
 		assistantTextStarted := false
 		assistantTextDelta := false
 		emitAssistantTextStart := func() {
@@ -532,6 +532,16 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 			}
 			assistantTextStarted = true
 			s.emit(EventAssistantTextStart, map[string]any{})
+		}
+		emitToolOutputDeltas := func(toolName, callID, fullOutput string) {
+			for _, delta := range utf8Chunk(fullOutput, 4000) {
+				s.emit(EventToolCallOutputDelta, map[string]any{
+					"tool_name": toolName,
+					"call_id":   callID,
+					"delta":     delta,
+					"source":    "provider",
+				})
+			}
 		}
 		for ev := range stream.Events() {
 			acc.Process(ev)
@@ -557,23 +567,47 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 				}
 			case llm.StreamEventProviderEvent:
 				if lifecycle, ok := llm.ParseCodexAppServerToolLifecycle(ev); ok {
-					if !lifecycle.Completed {
-						callID := strings.TrimSpace(lifecycle.CallID)
-						if callID == "" {
+					callID := strings.TrimSpace(lifecycle.CallID)
+					if callID == "" {
+						if !lifecycle.Completed {
 							providerToolCallCount++
-						} else if _, exists := seenProviderToolCalls[callID]; !exists {
+						}
+					} else {
+						if _, exists := seenProviderToolCalls[callID]; !exists {
 							seenProviderToolCalls[callID] = struct{}{}
 							providerToolCallCount++
 						}
+						if tn := strings.TrimSpace(lifecycle.ToolName); tn != "" {
+							providerToolNameByCallID[callID] = tn
+						}
 					}
 					if lifecycle.Completed {
+						if callID != "" {
+							if _, ended := seenProviderToolEnds[callID]; ended {
+								continue
+							}
+						}
+						if callID == "" {
+							emitToolOutputDeltas(lifecycle.ToolName, lifecycle.CallID, lifecycle.FullOutput)
+						} else if _, seen := seenProviderOutputDeltas[callID]; !seen {
+							emitToolOutputDeltas(lifecycle.ToolName, lifecycle.CallID, lifecycle.FullOutput)
+							seenProviderOutputDeltas[callID] = struct{}{}
+							providerOutputByCallID[callID] = lifecycle.FullOutput
+						} else if lifecycle.FullOutput != "" && providerOutputByCallID[callID] != lifecycle.FullOutput {
+							// Reconcile mismatch: provider completion output is authoritative.
+							emitToolOutputDeltas(lifecycle.ToolName, lifecycle.CallID, lifecycle.FullOutput)
+							providerOutputByCallID[callID] = lifecycle.FullOutput
+						}
 						s.emit(EventToolCallEnd, map[string]any{
 							"tool_name":   lifecycle.ToolName,
 							"call_id":     lifecycle.CallID,
 							"is_error":    lifecycle.IsError,
-							"full_output": "",
+							"full_output": lifecycle.FullOutput,
 							"source":      "provider",
 						})
+						if callID != "" {
+							seenProviderToolEnds[callID] = struct{}{}
+						}
 					} else {
 						data := map[string]any{
 							"tool_name":      lifecycle.ToolName,
@@ -583,6 +617,28 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 						}
 						s.emit(EventToolCallStart, data)
 					}
+				} else if outputDelta, ok := llm.ParseCodexAppServerToolOutputDelta(ev); ok {
+					callID := strings.TrimSpace(outputDelta.CallID)
+					toolName := strings.TrimSpace(outputDelta.ToolName)
+					if callID != "" {
+						if _, exists := seenProviderToolCalls[callID]; !exists {
+							seenProviderToolCalls[callID] = struct{}{}
+							providerToolCallCount++
+						}
+						if mappedToolName := strings.TrimSpace(providerToolNameByCallID[callID]); mappedToolName != "" {
+							toolName = mappedToolName
+						} else if toolName != "" {
+							providerToolNameByCallID[callID] = toolName
+						}
+						seenProviderOutputDeltas[callID] = struct{}{}
+						providerOutputByCallID[callID] += outputDelta.Delta
+					}
+					s.emit(EventToolCallOutputDelta, map[string]any{
+						"tool_name": toolName,
+						"call_id":   callID,
+						"delta":     outputDelta.Delta,
+						"source":    "provider",
+					})
 				}
 			}
 		}
@@ -727,6 +783,33 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 	}
 
 	return "", fmt.Errorf("max tool rounds reached")
+}
+
+func utf8Chunk(full string, maxBytes int) []string {
+	if maxBytes <= 0 || len(full) == 0 {
+		return nil
+	}
+	chunks := make([]string, 0, len(full)/maxBytes+1)
+	for i := 0; i < len(full); {
+		j := i + maxBytes
+		if j >= len(full) {
+			chunks = append(chunks, full[i:])
+			break
+		}
+		for j > i && !utf8.RuneStart(full[j]) {
+			j--
+		}
+		if j == i {
+			_, size := utf8.DecodeRuneInString(full[i:])
+			if size <= 0 {
+				size = 1
+			}
+			j = i + size
+		}
+		chunks = append(chunks, full[i:j])
+		i = j
+	}
+	return chunks
 }
 
 func (s *Session) drainSteering() []string {
