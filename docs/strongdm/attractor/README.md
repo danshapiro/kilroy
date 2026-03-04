@@ -26,7 +26,7 @@ Although bringing your own agentic loop and unified LLM SDK is not required to b
   - Sensitive Codex state roots (`codex-home*`, `.codex/auth.json`, `.codex/config.toml`) are excluded from `stage.tgz` and `run.tgz`.
   - Idle watchdog enforces process-group cleanup for stalled Codex CLI stages.
 - Codex schema behavior:
-  - Structured output schema requires `final` and `summary`, but allows additional properties for CLI compatibility.
+  - Structured output schema requires `final` and `summary` and sets `additionalProperties: false` (strict object contract required by Codex/OpenAI structured-output validation).
   - If codex rejects schema validation (`invalid_json_schema`-class errors), Attractor retries once without `--output-schema` and records fallback metadata in stage artifacts.
   - If codex returns unknown structured keys on schema-enabled output, Attractor emits a loud warning, writes `structured_output_unknown_keys.json`, retries once without `--output-schema`, and records fallback metadata in `cli_invocation.json`.
   - If codex emits known state-db discrepancy signatures, Attractor retries once with a fresh isolated state root and records state-db fallback metadata.

@@ -149,3 +149,22 @@ func TestCatalogHasProviderModel_SparkEntry(t *testing.T) {
 		t.Error("expected SupportsReasoning=true")
 	}
 }
+
+func TestLoadEmbeddedCatalog_ContainsAnthropicSonnet46(t *testing.T) {
+	c, err := LoadEmbeddedCatalog()
+	if err != nil {
+		t.Fatalf("LoadEmbeddedCatalog: %v", err)
+	}
+	if !CatalogHasProviderModel(c, "anthropic", "claude-sonnet-4.6") {
+		t.Fatal("expected embedded catalog to contain anthropic/claude-sonnet-4.6")
+	}
+	if !CatalogHasProviderModel(c, "anthropic", "claude-sonnet-4-6") {
+		t.Fatal("expected dash-format anthropic model id to resolve for claude-sonnet-4.6")
+	}
+	if !CatalogHasProviderModel(c, "openai", "gpt-5.3-codex") {
+		t.Fatal("expected embedded catalog to contain openai/gpt-5.3-codex")
+	}
+	if !CatalogHasProviderModel(c, "google", "gemini-3.1-pro-preview") {
+		t.Fatal("expected embedded catalog to contain google/gemini-3.1-pro-preview")
+	}
+}
