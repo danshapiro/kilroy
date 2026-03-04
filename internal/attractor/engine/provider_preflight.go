@@ -31,6 +31,9 @@ const (
 	defaultPreflightAPIPromptProbeRetries   = 2
 	defaultPreflightAPIPromptProbeBaseDelay = 500 * time.Millisecond
 	defaultPreflightAPIPromptProbeMaxDelay  = 5 * time.Second
+
+	codexAppServerCommandEnv     = "CODEX_APP_SERVER_COMMAND"
+	codexAppServerDefaultCommand = "codex"
 )
 
 type providerPreflightReport struct {
@@ -90,9 +93,8 @@ func runProviderCLIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 		_ = writePreflightReport(opts.LogsRoot, report)
 	}()
 
-	// Validate CLI-only models: fail early if a CLI-only model (e.g.,
-	// gpt-5.3-codex-spark) is used but its provider is not configured with
-	// backend=cli.
+	// Validate CLI-only models: fail early if a configured CLI-only model is
+	// used but its provider is not configured with backend=cli.
 	if err := validateCLIOnlyModels(g, runtimes, opts.ForceModels, report); err != nil {
 		return report, err
 	}
@@ -179,7 +181,53 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 			})
 			return fmt.Errorf("preflight: provider %s missing runtime definition", provider)
 		}
+		if rt.API.Protocol == providerspec.ProtocolCodexAppServer {
+			command := strings.TrimSpace(os.Getenv(codexAppServerCommandEnv))
+			source := "default"
+			if command == "" {
+				command = codexAppServerDefaultCommand
+			} else {
+				source = "env"
+			}
+			resolvedPath, lookErr := exec.LookPath(command)
+			if lookErr != nil {
+				report.addCheck(providerPreflightCheck{
+					Name:     "provider_api_presence",
+					Provider: provider,
+					Status:   preflightStatusFail,
+					Message:  fmt.Sprintf("codex app server command %q is not available: %v", command, lookErr),
+					Details: map[string]any{
+						"command": command,
+						"source":  source,
+					},
+				})
+				return fmt.Errorf("preflight: provider %s codex app server command %q is not available: %w", provider, command, lookErr)
+			}
+			report.addCheck(providerPreflightCheck{
+				Name:     "provider_api_presence",
+				Provider: provider,
+				Status:   preflightStatusPass,
+				Message:  fmt.Sprintf("codex app server command %q is available", command),
+				Details: map[string]any{
+					"command":       command,
+					"resolved_path": resolvedPath,
+					"source":        source,
+				},
+			})
+		}
 		keyEnv := strings.TrimSpace(rt.API.DefaultAPIKeyEnv)
+		if rt.API.Protocol == providerspec.ProtocolCodexAppServer && keyEnv == "" {
+			report.addCheck(providerPreflightCheck{
+				Name:     "provider_api_credentials",
+				Provider: provider,
+				Status:   preflightStatusPass,
+				Message:  "api key env is not required for codex app server",
+				Details: map[string]any{
+					"protocol": string(rt.API.Protocol),
+				},
+			})
+			continue
+		}
 		if keyEnv == "" {
 			report.addCheck(providerPreflightCheck{
 				Name:     "provider_api_credentials",

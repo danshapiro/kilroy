@@ -157,7 +157,9 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 		return llm.Response{}, llm.ErrorFromHTTPStatus(a.Name(), resp.StatusCode, msg, raw, ra)
 	}
 
-	return fromResponses(a.Name(), raw, req.Model), nil
+	out := fromResponses(a.Name(), raw, req.Model)
+	out.RateLimit = llm.ParseRateLimitInfo(resp.Header, time.Now())
+	return out, nil
 }
 
 func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, error) {
@@ -255,6 +257,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 	s := llm.NewChanStream(cancel)
 	// STREAM_START
 	s.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart})
+	rateLimit := llm.ParseRateLimitInfo(resp.Header, time.Now())
 
 	go func() {
 		defer func() {
@@ -399,6 +402,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 					rawResp = payload
 				}
 				r := fromResponses(a.Name(), rawResp, req.Model)
+				r.RateLimit = rateLimit
 				// Ensure text segment is closed.
 				if textStarted {
 					s.Send(llm.StreamEvent{Type: llm.StreamEventTextEnd, TextID: textID})

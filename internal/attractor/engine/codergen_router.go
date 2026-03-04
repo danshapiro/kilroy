@@ -94,8 +94,8 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 		return "", nil, fmt.Errorf("no backend configured for provider %s", prov)
 	}
 
-	// CLI-only model override: models like gpt-5.3-codex-spark have no API
-	// endpoint. Force CLI backend regardless of provider configuration.
+	// CLI-only model override: force CLI backend when a model is marked
+	// CLI-only in the registry.
 	if isCLIOnlyModel(modelID) && backend != BackendCLI {
 		warnEngine(exec, fmt.Sprintf("cli-only model override: node=%s model=%s backend=%s->cli", node.ID, modelID, backend))
 		backend = BackendCLI
@@ -238,15 +238,24 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			if reasoning != "" {
 				sessCfg.ReasoningEffort = reasoning
 			}
-			if maxTokensPtr != nil {
-				sessCfg.MaxTokens = maxTokensPtr
+			if providerOptions := agentLoopProviderOptions(prov, execCtx.WorktreeDir); len(providerOptions) > 0 {
+				sessCfg.ProviderOptions = providerOptions
 			}
 			// Cerebras GLM 4.7: preserve reasoning across agent-loop turns.
 			// clear_thinking defaults to true on the API, which strips prior
 			// reasoning context — counterproductive for multi-step agentic work.
 			if normalizeProviderKey(prov) == "cerebras" {
-				sessCfg.ProviderOptions = map[string]any{
-					"cerebras": map[string]any{"clear_thinking": false},
+				if sessCfg.ProviderOptions == nil {
+					sessCfg.ProviderOptions = map[string]any{}
+				}
+				if existing, ok := sessCfg.ProviderOptions["cerebras"]; ok {
+					if cerebrasOpts, ok := existing.(map[string]any); ok {
+						cerebrasOpts["clear_thinking"] = false
+					} else {
+						sessCfg.ProviderOptions["cerebras"] = map[string]any{"clear_thinking": false}
+					}
+				} else {
+					sessCfg.ProviderOptions["cerebras"] = map[string]any{"clear_thinking": false}
 				}
 			}
 			if v := parseInt(node.Attr("max_agent_turns", ""), 0); v > 0 {
@@ -380,6 +389,36 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		return text, nil, nil
 	default:
 		return "", nil, fmt.Errorf("invalid codergen_mode: %q (want one_shot|agent_loop)", mode)
+	}
+}
+
+func agentLoopProviderOptions(provider string, worktreeDir string) map[string]any {
+	switch normalizeProviderKey(provider) {
+	case "cerebras":
+		// Cerebras GLM 4.7: preserve reasoning across agent-loop turns.
+		// clear_thinking defaults to true on the API, which strips prior
+		// reasoning context, this is counterproductive for multi-step agentic work.
+		return map[string]any{
+			"cerebras": map[string]any{"clear_thinking": false},
+		}
+	case "codex-app-server":
+		opts := map[string]any{
+			"approvalPolicy": "never",
+			// Keep both thread-level and turn-level sandbox knobs set.
+			// App-server surfaces use different fields/casing across thread/start and turn/start.
+			"sandbox": "danger-full-access",
+			"sandboxPolicy": map[string]any{
+				"type": "dangerFullAccess",
+			},
+		}
+		if wt := strings.TrimSpace(worktreeDir); wt != "" {
+			opts["cwd"] = wt
+		}
+		return map[string]any{
+			"codex_app_server": opts,
+		}
+	default:
+		return nil
 	}
 }
 

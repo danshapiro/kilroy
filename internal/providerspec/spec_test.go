@@ -4,7 +4,7 @@ import "testing"
 
 func TestBuiltinSpecsIncludeCoreAndNewProviders(t *testing.T) {
 	s := Builtins()
-	for _, key := range []string{"openai", "anthropic", "google", "kimi", "zai", "cerebras", "minimax", "inception"} {
+	for _, key := range []string{"openai", "codex-app-server", "anthropic", "google", "kimi", "zai", "cerebras", "minimax", "inception"} {
 		if _, ok := s[key]; !ok {
 			t.Fatalf("missing builtin provider %q", key)
 		}
@@ -33,6 +33,9 @@ func TestCanonicalProviderKey_Aliases(t *testing.T) {
 	if got := CanonicalProviderKey("minimax-ai"); got != "minimax" {
 		t.Fatalf("minimax-ai alias: got %q want %q", got, "minimax")
 	}
+	if got := CanonicalProviderKey("codex_app_server"); got != "codex-app-server" {
+		t.Fatalf("codex_app_server alias: got %q want %q", got, "codex-app-server")
+	}
 	if got := CanonicalProviderKey("inceptionlabs"); got != "inception" {
 		t.Fatalf("inceptionlabs alias: got %q want %q", got, "inception")
 	}
@@ -41,6 +44,28 @@ func TestCanonicalProviderKey_Aliases(t *testing.T) {
 	}
 	if got := CanonicalProviderKey("glm"); got != "glm" {
 		t.Fatalf("unknown provider keys should pass through unchanged, got %q", got)
+	}
+}
+
+func TestBuiltinCodexAppServerDefaults(t *testing.T) {
+	spec, ok := Builtin("codex-app-server")
+	if !ok {
+		t.Fatalf("expected codex-app-server builtin")
+	}
+	if spec.API == nil {
+		t.Fatalf("expected codex-app-server api spec")
+	}
+	if got := spec.API.Protocol; got != ProtocolCodexAppServer {
+		t.Fatalf("codex-app-server protocol: got %q want %q", got, ProtocolCodexAppServer)
+	}
+	if got := spec.API.DefaultAPIKeyEnv; got != "" {
+		t.Fatalf("codex-app-server api_key_env: got %q want empty", got)
+	}
+	if got := spec.API.ProviderOptionsKey; got != "codex_app_server" {
+		t.Fatalf("codex-app-server provider_options_key: got %q want %q", got, "codex_app_server")
+	}
+	if got := spec.API.ProfileFamily; got != "codex-app-server" {
+		t.Fatalf("codex-app-server profile_family: got %q want %q", got, "codex-app-server")
 	}
 }
 

@@ -41,6 +41,19 @@ func TestProviderProfiles_ToolsetsAndDocSelection(t *testing.T) {
 	assertHasTool(t, gemini, "read_many_files")
 	assertHasTool(t, gemini, "list_dir")
 	assertMissingTool(t, gemini, "apply_patch")
+
+	codex := NewCodexAppServerProfile("gpt-5-codex")
+	if codex.ID() != "codex-app-server" {
+		t.Fatalf("codex id: %q", codex.ID())
+	}
+	if !codex.SupportsParallelToolCalls() {
+		t.Fatalf("codex profile should support parallel tool calls")
+	}
+	if codex.ContextWindowSize() != 1_047_576 {
+		t.Fatalf("codex context window: got %d want %d", codex.ContextWindowSize(), 1_047_576)
+	}
+	assertHasTool(t, codex, "apply_patch")
+	assertMissingTool(t, codex, "edit_file")
 }
 
 func TestProviderProfiles_ToolLists_MatchSpec(t *testing.T) {
@@ -86,6 +99,21 @@ func TestProviderProfiles_ToolLists_MatchSpec(t *testing.T) {
 			"grep",
 			"glob",
 			"list_dir",
+			"spawn_agent",
+			"send_input",
+			"wait",
+			"close_agent",
+		})
+	})
+	t.Run("codex-app-server", func(t *testing.T) {
+		p := NewCodexAppServerProfile("gpt-5-codex")
+		assertToolListExact(t, p, []string{
+			"read_file",
+			"apply_patch",
+			"write_file",
+			"shell",
+			"grep",
+			"glob",
 			"spawn_agent",
 			"send_input",
 			"wait",
@@ -180,5 +208,21 @@ func TestNewProfileForFamily_DefaultFamiliesAndRegistration(t *testing.T) {
 
 	if _, err := NewProfileForFamily("missing-family", "m3"); err == nil {
 		t.Fatalf("expected unsupported family error")
+	}
+
+	codex, err := NewProfileForFamily("codex-app-server", "gpt-5-codex")
+	if err != nil {
+		t.Fatalf("NewProfileForFamily(codex-app-server): %v", err)
+	}
+	if codex.ID() != "codex-app-server" {
+		t.Fatalf("codex profile id=%q want codex-app-server", codex.ID())
+	}
+
+	codexAlias, err := NewProfileForFamily("codex", "gpt-5-codex")
+	if err != nil {
+		t.Fatalf("NewProfileForFamily(codex): %v", err)
+	}
+	if codexAlias.ID() != "codex-app-server" {
+		t.Fatalf("codex alias profile id=%q want codex-app-server", codexAlias.ID())
 	}
 }
