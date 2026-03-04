@@ -74,8 +74,21 @@ func TestCodergenStatusIngestion_FallbackOnlyWhenCanonicalMissing(t *testing.T) 
 }
 
 func TestCodergenStatusIngestion_InvalidFallbackIsRejected(t *testing.T) {
-	_, source := runStatusIngestionFixture(t, false, false, true)
+	out, source := runStatusIngestionFixture(t, false, false, true)
 	if source != "" {
 		t.Fatalf("source=%q want empty", source)
+	}
+	if out.Status != runtime.StatusFail {
+		t.Fatalf("status=%q want %q", out.Status, runtime.StatusFail)
+	}
+}
+
+func TestCodergenStatusIngestion_MissingFallbackIsDiagnosed(t *testing.T) {
+	out, source := runStatusIngestionFixture(t, false, false, false)
+	if source != "" {
+		t.Fatalf("source=%q want empty", source)
+	}
+	if out.Status != runtime.StatusFail {
+		t.Fatalf("status=%q want %q", out.Status, runtime.StatusFail)
 	}
 }
