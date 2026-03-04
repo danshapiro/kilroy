@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -235,25 +237,130 @@ type fallbackStatusPath struct {
 	source statusSource
 }
 
-func copyFirstValidFallbackStatus(stageStatusPath string, fallbackPaths []fallbackStatusPath) (statusSource, error) {
+type fallbackStatusFailureMode string
+
+const (
+	fallbackFailureModeNone           fallbackStatusFailureMode = ""
+	fallbackFailureModeMissing        fallbackStatusFailureMode = "missing"
+	fallbackFailureModeUnreadable     fallbackStatusFailureMode = "unreadable"
+	fallbackFailureModeCorrupt        fallbackStatusFailureMode = "corrupt"
+	fallbackFailureModeInvalidPayload fallbackStatusFailureMode = "invalid_payload"
+)
+
+const (
+	fallbackStatusDecodeMaxAttempts = 3
+	fallbackStatusDecodeBaseDelay   = 25 * time.Millisecond
+)
+
+func copyFirstValidFallbackStatus(stageStatusPath string, fallbackPaths []fallbackStatusPath) (statusSource, string, error) {
 	if _, err := os.Stat(stageStatusPath); err == nil {
-		return statusSourceCanonical, nil
+		return statusSourceCanonical, "", nil
 	}
+	issues := make([]string, 0, len(fallbackPaths))
 	for _, fallback := range fallbackPaths {
-		b, err := os.ReadFile(fallback.path)
+		b, mode, err := readAndDecodeFallbackStatusWithRetry(fallback.path)
 		if err != nil {
-			continue
-		}
-		if _, err := runtime.DecodeOutcomeJSON(b); err != nil {
+			issues = append(issues, formatFallbackStatusIssue(fallback, mode, err))
 			continue
 		}
 		if err := runtime.WriteFileAtomic(stageStatusPath, b); err != nil {
-			return statusSourceNone, err
+			return statusSourceNone, strings.Join(issues, "; "), err
 		}
 		_ = os.Remove(fallback.path)
-		return fallback.source, nil
+		return fallback.source, "", nil
 	}
-	return statusSourceNone, nil
+	return statusSourceNone, strings.Join(issues, "; "), nil
+}
+
+func readAndDecodeFallbackStatusWithRetry(path string) ([]byte, fallbackStatusFailureMode, error) {
+	var lastErr error
+	mode := fallbackFailureModeMissing
+	for attempt := 1; attempt <= fallbackStatusDecodeMaxAttempts; attempt++ {
+		b, err := os.ReadFile(path)
+		if err != nil {
+			lastErr = err
+			if os.IsNotExist(err) {
+				mode = fallbackFailureModeMissing
+			} else {
+				mode = fallbackFailureModeUnreadable
+			}
+			if attempt < fallbackStatusDecodeMaxAttempts && shouldRetryFallbackRead(mode, err) {
+				time.Sleep(backoffDelay(attempt))
+				continue
+			}
+			return nil, mode, lastErr
+		}
+		if _, err := runtime.DecodeOutcomeJSON(b); err != nil {
+			lastErr = err
+			mode = classifyFallbackDecodeError(b, err)
+			if attempt < fallbackStatusDecodeMaxAttempts && shouldRetryFallbackDecode(mode, b, err) {
+				time.Sleep(backoffDelay(attempt))
+				continue
+			}
+			return nil, mode, lastErr
+		}
+		return b, fallbackFailureModeNone, nil
+	}
+	return nil, mode, lastErr
+}
+
+func classifyFallbackDecodeError(raw []byte, err error) fallbackStatusFailureMode {
+	if isCorruptFallbackPayload(raw, err) {
+		return fallbackFailureModeCorrupt
+	}
+	return fallbackFailureModeInvalidPayload
+}
+
+func shouldRetryFallbackRead(mode fallbackStatusFailureMode, err error) bool {
+	if mode == fallbackFailureModeMissing {
+		return true
+	}
+	return errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+func shouldRetryFallbackDecode(mode fallbackStatusFailureMode, raw []byte, err error) bool {
+	return mode == fallbackFailureModeCorrupt && isCorruptFallbackPayload(raw, err)
+}
+
+func isCorruptFallbackPayload(raw []byte, err error) bool {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return true
+	}
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return true
+	}
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return true
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(msg, "unexpected end of json input") || strings.Contains(msg, "invalid character")
+}
+
+func backoffDelay(attempt int) time.Duration {
+	if attempt <= 0 {
+		attempt = 1
+	}
+	return time.Duration(attempt) * fallbackStatusDecodeBaseDelay
+}
+
+func formatFallbackStatusIssue(fallback fallbackStatusPath, mode fallbackStatusFailureMode, err error) string {
+	switch mode {
+	case fallbackFailureModeMissing:
+		return fmt.Sprintf("fallback[%s] missing status artifact: %s", fallback.source, fallback.path)
+	case fallbackFailureModeUnreadable:
+		return fmt.Sprintf("fallback[%s] unreadable status artifact: %s (%v)", fallback.source, fallback.path, err)
+	case fallbackFailureModeCorrupt:
+		return fmt.Sprintf("fallback[%s] corrupt status artifact: %s (%v)", fallback.source, fallback.path, err)
+	case fallbackFailureModeInvalidPayload:
+		return fmt.Sprintf("fallback[%s] invalid status payload: %s (%v)", fallback.source, fallback.path, err)
+	default:
+		return fmt.Sprintf("fallback[%s] status ingestion error: %s (%v)", fallback.source, fallback.path, err)
+	}
 }
 
 func buildManualBoxFanInPromptPreamble(exec *Execution, node *model.Node) string {
@@ -468,20 +575,29 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 	// If the backend/agent wrote a worktree status.json, surface it to the engine by
 	// copying it into the authoritative stage directory location.
 	source := statusSourceNone
+	ingestionDiagnostic := ""
 	if len(worktreeStatusPaths) > 0 {
 		var err error
-		source, err = copyFirstValidFallbackStatus(stageStatusPath, worktreeStatusPaths)
+		source, ingestionDiagnostic, err = copyFirstValidFallbackStatus(stageStatusPath, worktreeStatusPaths)
 		if err != nil {
-			return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+			reason := err.Error()
+			if strings.TrimSpace(ingestionDiagnostic) != "" {
+				reason = reason + "; " + strings.TrimSpace(ingestionDiagnostic)
+			}
+			return runtime.Outcome{Status: runtime.StatusFail, FailureReason: reason}, nil
 		}
 	}
 	if exec != nil && exec.Engine != nil {
-		exec.Engine.appendProgress(map[string]any{
+		progress := map[string]any{
 			"event":   "status_ingestion_decision",
 			"node_id": node.ID,
 			"source":  string(source),
 			"copied":  source == statusSourceWorktree || source == statusSourceDotAI,
-		})
+		}
+		if strings.TrimSpace(ingestionDiagnostic) != "" {
+			progress["diagnostic"] = strings.TrimSpace(ingestionDiagnostic)
+		}
+		exec.Engine.appendProgress(progress)
 	}
 
 	if out != nil {
@@ -523,9 +639,13 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			},
 		}, nil
 	}
+	reason := "missing status.json (auto_status=false)"
+	if strings.TrimSpace(ingestionDiagnostic) != "" {
+		reason = reason + "; " + strings.TrimSpace(ingestionDiagnostic)
+	}
 	return runtime.Outcome{
 		Status:        runtime.StatusFail,
-		FailureReason: "missing status.json (auto_status=false)",
+		FailureReason: reason,
 		Notes:         "codergen completed without an outcome or status.json",
 		ContextUpdates: map[string]any{
 			"last_stage":    node.ID,
