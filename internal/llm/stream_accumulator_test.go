@@ -1,6 +1,9 @@
 package llm
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func TestStreamAccumulator_FinishWithResponse_UsesIt(t *testing.T) {
 	acc := NewStreamAccumulator()
@@ -50,5 +53,53 @@ func TestStreamAccumulator_NoFinishResponse_BuildsFromText(t *testing.T) {
 	}
 	if got.Usage.TotalTokens != 3 {
 		t.Fatalf("usage: %+v", got.Usage)
+	}
+}
+
+func TestStreamAccumulator_NoFinishResponse_BuildsToolCalls(t *testing.T) {
+	acc := NewStreamAccumulator()
+	acc.Process(StreamEvent{
+		Type: StreamEventToolCallStart,
+		ToolCall: &ToolCallData{
+			ID:   "call_1",
+			Name: "write_file",
+			Type: "function",
+		},
+	})
+	acc.Process(StreamEvent{
+		Type: StreamEventToolCallDelta,
+		ToolCall: &ToolCallData{
+			ID:        "call_1",
+			Name:      "write_file",
+			Type:      "function",
+			Arguments: json.RawMessage(`{"path":"a.txt"}`),
+		},
+	})
+	// Some providers send args again on TOOL_CALL_END; accumulator should avoid duplicating.
+	acc.Process(StreamEvent{
+		Type: StreamEventToolCallEnd,
+		ToolCall: &ToolCallData{
+			ID:        "call_1",
+			Name:      "write_file",
+			Type:      "function",
+			Arguments: json.RawMessage(`{"path":"a.txt"}`),
+		},
+	})
+	finish := FinishReason{Reason: FinishReasonToolCalls}
+	acc.Process(StreamEvent{Type: StreamEventFinish, FinishReason: &finish})
+
+	got := acc.Response()
+	if got == nil {
+		t.Fatalf("expected response")
+	}
+	calls := got.ToolCalls()
+	if len(calls) != 1 {
+		t.Fatalf("tool calls: got %d want 1 (%+v)", len(calls), calls)
+	}
+	if calls[0].ID != "call_1" || calls[0].Name != "write_file" {
+		t.Fatalf("tool call identity mismatch: %+v", calls[0])
+	}
+	if string(calls[0].Arguments) != `{"path":"a.txt"}` {
+		t.Fatalf("tool call args mismatch: %q", string(calls[0].Arguments))
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/oklog/ulid/v2"
 
@@ -293,16 +294,11 @@ func (s *Session) execTool(ctx context.Context, call llm.ToolCallData) ToolExecR
 	// Emit output deltas (best-effort). Even for non-streaming tools, this gives consumers a uniform
 	// incremental event pattern that mirrors provider LLM streaming.
 	full := res.FullOutput
-	const chunk = 4000
-	for i := 0; i < len(full); i += chunk {
-		j := i + chunk
-		if j > len(full) {
-			j = len(full)
-		}
+	for _, delta := range utf8Chunk(full, 4000) {
 		s.emit(EventToolCallOutputDelta, map[string]any{
 			"tool_name": res.ToolName,
 			"call_id":   res.CallID,
-			"delta":     full[i:j],
+			"delta":     delta,
 		})
 	}
 
@@ -494,8 +490,8 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 		if s.cfg.LLMRetryPolicy != nil {
 			policy = *s.cfg.LLMRetryPolicy
 		}
-		resp, err := llm.Retry(ctx, policy, s.cfg.LLMSleep, nil, func() (llm.Response, error) {
-			return s.client.Complete(ctx, req)
+		stream, err := llm.Retry(ctx, policy, s.cfg.LLMSleep, nil, func() (llm.Stream, error) {
+			return s.client.Stream(ctx, req)
 		})
 		if err != nil {
 			s.emit(EventError, map[string]any{"error": err.Error()})
@@ -519,15 +515,175 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 			}
 		}
 
-		txt := resp.Text()
-		s.emit(EventAssistantTextStart, map[string]any{})
-		s.appendTurn(TurnAssistant, resp.Message)
-		if strings.TrimSpace(txt) != "" {
-			s.emit(EventAssistantTextDelta, map[string]any{"delta": txt})
+		acc := llm.NewStreamAccumulator()
+		var resp *llm.Response
+		var streamErr error
+		providerToolCallCount := 0
+		seenProviderToolCalls := map[string]struct{}{}
+		seenProviderOutputDeltas := map[string]struct{}{}
+		seenProviderToolEnds := map[string]struct{}{}
+		providerToolNameByCallID := map[string]string{}
+		providerOutputByCallID := map[string]string{}
+		assistantTextStarted := false
+		assistantTextDelta := false
+		emitAssistantTextStart := func() {
+			if assistantTextStarted {
+				return
+			}
+			assistantTextStarted = true
+			s.emit(EventAssistantTextStart, map[string]any{})
 		}
-		s.emit(EventAssistantTextEnd, map[string]any{"text": txt})
+		emitToolOutputDeltas := func(toolName, callID, fullOutput string) {
+			for _, delta := range utf8Chunk(fullOutput, 4000) {
+				s.emit(EventToolCallOutputDelta, map[string]any{
+					"tool_name": toolName,
+					"call_id":   callID,
+					"delta":     delta,
+					"source":    "provider",
+				})
+			}
+		}
+		for ev := range stream.Events() {
+			acc.Process(ev)
+			switch ev.Type {
+			case llm.StreamEventTextStart:
+				emitAssistantTextStart()
+			case llm.StreamEventTextDelta:
+				emitAssistantTextStart()
+				if ev.Delta != "" {
+					assistantTextDelta = true
+					s.emit(EventAssistantTextDelta, map[string]any{"delta": ev.Delta})
+				}
+			case llm.StreamEventFinish:
+				if ev.Response != nil {
+					cp := *ev.Response
+					resp = &cp
+				}
+			case llm.StreamEventError:
+				if ev.Err != nil {
+					streamErr = ev.Err
+				} else {
+					streamErr = llm.NewStreamError(req.Provider, "stream error")
+				}
+			case llm.StreamEventProviderEvent:
+				if lifecycle, ok := llm.ParseCodexAppServerToolLifecycle(ev); ok {
+					callID := strings.TrimSpace(lifecycle.CallID)
+					if callID == "" {
+						if !lifecycle.Completed {
+							providerToolCallCount++
+						}
+					} else {
+						if _, exists := seenProviderToolCalls[callID]; !exists {
+							seenProviderToolCalls[callID] = struct{}{}
+							providerToolCallCount++
+						}
+						if tn := strings.TrimSpace(lifecycle.ToolName); tn != "" {
+							providerToolNameByCallID[callID] = tn
+						}
+					}
+					if lifecycle.Completed {
+						if callID != "" {
+							if _, ended := seenProviderToolEnds[callID]; ended {
+								continue
+							}
+						}
+						if callID == "" {
+							emitToolOutputDeltas(lifecycle.ToolName, lifecycle.CallID, lifecycle.FullOutput)
+						} else if _, seen := seenProviderOutputDeltas[callID]; !seen {
+							emitToolOutputDeltas(lifecycle.ToolName, lifecycle.CallID, lifecycle.FullOutput)
+							seenProviderOutputDeltas[callID] = struct{}{}
+							providerOutputByCallID[callID] = lifecycle.FullOutput
+						} else if lifecycle.FullOutput != "" && providerOutputByCallID[callID] != lifecycle.FullOutput {
+							// Reconcile mismatch: provider completion output is authoritative.
+							emitToolOutputDeltas(lifecycle.ToolName, lifecycle.CallID, lifecycle.FullOutput)
+							providerOutputByCallID[callID] = lifecycle.FullOutput
+						}
+						s.emit(EventToolCallEnd, map[string]any{
+							"tool_name":   lifecycle.ToolName,
+							"call_id":     lifecycle.CallID,
+							"is_error":    lifecycle.IsError,
+							"full_output": lifecycle.FullOutput,
+							"source":      "provider",
+						})
+						if callID != "" {
+							seenProviderToolEnds[callID] = struct{}{}
+						}
+					} else {
+						data := map[string]any{
+							"tool_name":      lifecycle.ToolName,
+							"call_id":        lifecycle.CallID,
+							"arguments_json": lifecycle.ArgumentsJSON,
+							"source":         "provider",
+						}
+						s.emit(EventToolCallStart, data)
+					}
+				} else if outputDelta, ok := llm.ParseCodexAppServerToolOutputDelta(ev); ok {
+					callID := strings.TrimSpace(outputDelta.CallID)
+					toolName := strings.TrimSpace(outputDelta.ToolName)
+					if callID != "" {
+						if _, exists := seenProviderToolCalls[callID]; !exists {
+							seenProviderToolCalls[callID] = struct{}{}
+							providerToolCallCount++
+						}
+						if mappedToolName := strings.TrimSpace(providerToolNameByCallID[callID]); mappedToolName != "" {
+							toolName = mappedToolName
+						} else if toolName != "" {
+							providerToolNameByCallID[callID] = toolName
+						}
+						seenProviderOutputDeltas[callID] = struct{}{}
+						providerOutputByCallID[callID] += outputDelta.Delta
+					}
+					s.emit(EventToolCallOutputDelta, map[string]any{
+						"tool_name": toolName,
+						"call_id":   callID,
+						"delta":     outputDelta.Delta,
+						"source":    "provider",
+					})
+				}
+			}
+		}
+		_ = stream.Close()
+
+		if streamErr != nil {
+			s.emit(EventError, map[string]any{"error": streamErr.Error()})
+			// Spec: context overflow should emit a warning (no automatic compaction).
+			var cle *llm.ContextLengthError
+			if errors.As(streamErr, &cle) {
+				s.emit(EventWarning, map[string]any{"message": "Context length exceeded"})
+			}
+			// Spec: non-retryable/unrecoverable errors transition the session to CLOSED.
+			var le llm.Error
+			if errors.As(streamErr, &le) && !le.Retryable() {
+				s.Close()
+			}
+			return "", streamErr
+		}
+
+		if resp == nil {
+			resp = acc.Response()
+		}
+		if resp == nil {
+			err := llm.NewStreamError(req.Provider, "stream ended without finish event")
+			s.emit(EventError, map[string]any{"error": err.Error()})
+			return "", err
+		}
 
 		calls := resp.ToolCalls()
+		turnToolCallCount := len(calls)
+		if providerToolCallCount > turnToolCallCount {
+			turnToolCallCount = providerToolCallCount
+		}
+		txt := resp.Text()
+		emitAssistantTextStart()
+		s.appendTurn(TurnAssistant, resp.Message)
+		if !assistantTextDelta && strings.TrimSpace(txt) != "" {
+			s.emit(EventAssistantTextDelta, map[string]any{"delta": txt})
+		}
+		s.emit(EventAssistantTextEnd, map[string]any{
+			"text":            txt,
+			"tool_call_count": turnToolCallCount,
+		})
+
 		if len(calls) == 0 {
 			return txt, nil
 		}
@@ -627,6 +783,33 @@ func (s *Session) processOneInput(ctx context.Context, input string) (string, er
 	}
 
 	return "", fmt.Errorf("max tool rounds reached")
+}
+
+func utf8Chunk(full string, maxBytes int) []string {
+	if maxBytes <= 0 || len(full) == 0 {
+		return nil
+	}
+	chunks := make([]string, 0, len(full)/maxBytes+1)
+	for i := 0; i < len(full); {
+		j := i + maxBytes
+		if j >= len(full) {
+			chunks = append(chunks, full[i:])
+			break
+		}
+		for j > i && !utf8.RuneStart(full[j]) {
+			j--
+		}
+		if j == i {
+			_, size := utf8.DecodeRuneInString(full[i:])
+			if size <= 0 {
+				size = 1
+			}
+			j = i + size
+		}
+		chunks = append(chunks, full[i:j])
+		i = j
+	}
+	return chunks
 }
 
 func (s *Session) drainSteering() []string {

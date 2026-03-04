@@ -19,6 +19,16 @@ var builtinSpecs = map[string]Spec{
 			CapabilityAll:      []string{"--json"},
 		},
 	},
+	"codex-app-server": {
+		Key:     "codex-app-server",
+		Aliases: []string{"codex_app_server"},
+		API: &APISpec{
+			Protocol:           ProtocolCodexAppServer,
+			DefaultAPIKeyEnv:   "",
+			ProviderOptionsKey: "codex_app_server",
+			ProfileFamily:      "codex-app-server",
+		},
+	},
 	"anthropic": {
 		Key: "anthropic",
 		API: &APISpec{

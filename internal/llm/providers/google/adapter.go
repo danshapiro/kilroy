@@ -203,7 +203,9 @@ func (a *Adapter) Complete(ctx context.Context, req llm.Request) (llm.Response, 
 		return llm.Response{}, llm.ErrorFromHTTPStatus(a.Name(), resp.StatusCode, msg, raw, ra)
 	}
 
-	return fromGeminiResponse(a.Name(), raw, req.Model), nil
+	out := fromGeminiResponse(a.Name(), raw, req.Model)
+	out.RateLimit = llm.ParseRateLimitInfo(resp.Header, time.Now())
+	return out, nil
 }
 
 func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, error) {
@@ -338,6 +340,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 		cancel()
 		return nil, llm.ErrorFromHTTPStatus(a.Name(), resp.StatusCode, msg, raw, ra)
 	}
+	rateLimit := llm.ParseRateLimitInfo(resp.Header, time.Now())
 
 	s := llm.NewChanStream(cancel)
 	s.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart})
@@ -435,12 +438,13 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 						flushTextPart()
 						msg := llm.Message{Role: llm.RoleAssistant, Content: contentParts}
 						r := llm.Response{
-							Provider: a.Name(),
-							Model:    req.Model,
-							Message:  msg,
-							Finish:   finish,
-							Usage:    usage,
-							Raw:      raw,
+							Provider:  a.Name(),
+							Model:     req.Model,
+							Message:   msg,
+							Finish:    finish,
+							Usage:     usage,
+							RateLimit: rateLimit,
+							Raw:       raw,
 						}
 						if r.Finish.Reason == "" {
 							if len(r.ToolCalls()) > 0 {

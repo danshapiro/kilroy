@@ -31,6 +31,195 @@ func (a *okAdapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, er
 	return nil, fmt.Errorf("stream not implemented")
 }
 
+type scriptedStreamAdapter struct {
+	name   string
+	script func(s *llm.ChanStream)
+}
+
+func (a *scriptedStreamAdapter) Name() string { return a.name }
+func (a *scriptedStreamAdapter) Complete(ctx context.Context, req llm.Request) (llm.Response, error) {
+	_ = ctx
+	return llm.Response{Provider: a.name, Model: req.Model, Message: llm.Assistant("ok")}, nil
+}
+func (a *scriptedStreamAdapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, error) {
+	_ = ctx
+	_ = req
+	st := llm.NewChanStream(nil)
+	go func() {
+		defer st.CloseSend()
+		if a.script != nil {
+			a.script(st)
+		}
+	}()
+	return st, nil
+}
+
+func TestCodergenRouter_RunAPI_OneShot_StreamErrorEventTakesPrecedence(t *testing.T) {
+	cfg := &RunConfigFile{Version: 1}
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendAPI},
+	}
+	r := NewCodergenRouterWithRuntimes(cfg, nil, map[string]ProviderRuntime{
+		"openai": {Key: "openai", Backend: BackendAPI},
+	})
+	r.apiClientFactory = func(map[string]ProviderRuntime) (*llm.Client, error) {
+		client := llm.NewClient()
+		client.Register(&scriptedStreamAdapter{
+			name: "openai",
+			script: func(s *llm.ChanStream) {
+				s.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart})
+				s.Send(llm.StreamEvent{Type: llm.StreamEventError, Err: llm.NewStreamError("openai", "synthetic stream failure")})
+				resp := llm.Response{Provider: "openai", Model: "gpt-5.2", Message: llm.Assistant("finish should not win")}
+				finish := llm.FinishReason{Reason: "stop"}
+				usage := llm.Usage{InputTokens: 1, OutputTokens: 2, TotalTokens: 3}
+				s.Send(llm.StreamEvent{Type: llm.StreamEventFinish, FinishReason: &finish, Usage: &usage, Response: &resp})
+			},
+		})
+		return client, nil
+	}
+
+	execCtx := &Execution{
+		LogsRoot:    t.TempDir(),
+		WorktreeDir: t.TempDir(),
+	}
+	node := &model.Node{
+		ID:    "stage-a",
+		Attrs: map[string]string{"codergen_mode": "one_shot"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	text, out, err := r.runAPI(ctx, execCtx, node, "openai", "gpt-5.2", "say hi")
+	if err == nil || !strings.Contains(err.Error(), "synthetic stream failure") {
+		t.Fatalf("expected stream failure, got err=%v", err)
+	}
+	if strings.TrimSpace(text) != "" {
+		t.Fatalf("text: got %q want empty on stream error", text)
+	}
+	if out != nil {
+		t.Fatalf("outcome: got %+v want nil", out)
+	}
+}
+
+func TestCodergenRouter_RunAPI_OneShot_EmitsProviderToolLifecycleProgress(t *testing.T) {
+	cfg := &RunConfigFile{Version: 1}
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendAPI},
+	}
+	r := NewCodergenRouterWithRuntimes(cfg, nil, map[string]ProviderRuntime{
+		"openai": {Key: "openai", Backend: BackendAPI},
+	})
+	r.apiClientFactory = func(map[string]ProviderRuntime) (*llm.Client, error) {
+		client := llm.NewClient()
+		client.Register(&scriptedStreamAdapter{
+			name: "openai",
+			script: func(s *llm.ChanStream) {
+				s.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart, ID: "turn_1", Model: "gpt-5.2"})
+				s.Send(llm.StreamEvent{
+					Type:      llm.StreamEventProviderEvent,
+					EventType: "item/started",
+					Raw: map[string]any{
+						"item": map[string]any{
+							"id":      "cmd_1",
+							"type":    "commandExecution",
+							"command": "pwd",
+							"cwd":     "/tmp/worktree",
+							"status":  "inProgress",
+						},
+					},
+				})
+				s.Send(llm.StreamEvent{Type: llm.StreamEventTextDelta, TextID: "text_0", Delta: "ok"})
+				s.Send(llm.StreamEvent{
+					Type:      llm.StreamEventProviderEvent,
+					EventType: "item/completed",
+					Raw: map[string]any{
+						"item": map[string]any{
+							"id":     "cmd_1",
+							"type":   "commandExecution",
+							"status": "completed",
+						},
+					},
+				})
+				resp := llm.Response{
+					Provider: "openai",
+					Model:    "gpt-5.2",
+					Message:  llm.Assistant("ok"),
+					Finish:   llm.FinishReason{Reason: llm.FinishReasonStop},
+				}
+				s.Send(llm.StreamEvent{Type: llm.StreamEventFinish, FinishReason: &resp.Finish, Response: &resp})
+			},
+		})
+		return client, nil
+	}
+
+	var mu sync.Mutex
+	captured := make([]map[string]any, 0, 8)
+	eng := &Engine{
+		Options: RunOptions{RunID: "run-provider-progress"},
+		progressSink: func(ev map[string]any) {
+			mu.Lock()
+			defer mu.Unlock()
+			captured = append(captured, ev)
+		},
+	}
+	execCtx := &Execution{
+		LogsRoot:    t.TempDir(),
+		WorktreeDir: t.TempDir(),
+		Engine:      eng,
+	}
+	node := &model.Node{
+		ID:    "stage-a",
+		Attrs: map[string]string{"codergen_mode": "one_shot"},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	text, out, err := r.runAPI(ctx, execCtx, node, "openai", "gpt-5.2", "say hi")
+	if err != nil {
+		t.Fatalf("runAPI: %v", err)
+	}
+	if out != nil {
+		t.Fatalf("outcome: got %+v want nil", out)
+	}
+	if strings.TrimSpace(text) != "ok" {
+		t.Fatalf("text: got %q want %q", text, "ok")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	seenStart := false
+	seenEnd := false
+	seenTurnEndWithCount := false
+	for _, ev := range captured {
+		eventName, _ := ev["event"].(string)
+		switch eventName {
+		case "llm_tool_call_start":
+			if ev["tool_name"] == "exec_command" && ev["call_id"] == "cmd_1" {
+				seenStart = true
+			}
+		case "llm_tool_call_end":
+			if ev["tool_name"] == "exec_command" && ev["call_id"] == "cmd_1" {
+				if isErr, ok := ev["is_error"].(bool); !ok || isErr {
+					t.Fatalf("expected successful tool completion, got is_error=%v", ev["is_error"])
+				}
+				seenEnd = true
+			}
+		case "llm_turn_end":
+			if fmt.Sprint(ev["tool_call_count"]) == "1" {
+				seenTurnEndWithCount = true
+			}
+		}
+	}
+	if !seenStart || !seenEnd {
+		t.Fatalf("missing provider tool lifecycle progress events: start=%t end=%t captured=%v", seenStart, seenEnd, captured)
+	}
+	if !seenTurnEndWithCount {
+		t.Fatalf("missing llm_turn_end with tool_call_count=1; captured=%v", captured)
+	}
+}
+
 func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
@@ -390,5 +579,74 @@ func TestShouldFailoverLLMError_GetwdBootstrapErrorDoesNotFailover(t *testing.T)
 	err := fmt.Errorf("tool read_file schema: getwd: no such file or directory")
 	if shouldFailoverLLMError(err) {
 		t.Fatalf("getwd bootstrap errors should not trigger failover")
+	}
+}
+
+func TestAgentLoopProviderOptions_CodexAppServer_UsesFullAutonomousPermissions(t *testing.T) {
+	got := agentLoopProviderOptions("codex_app_server", "/tmp/worktree")
+	if len(got) != 1 {
+		t.Fatalf("provider options length=%d want 1", len(got))
+	}
+	raw, ok := got["codex_app_server"]
+	if !ok {
+		t.Fatalf("missing codex_app_server provider options: %#v", got)
+	}
+	opts, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("codex_app_server options type=%T want map[string]any", raw)
+	}
+	if gotCwd := fmt.Sprint(opts["cwd"]); gotCwd != "/tmp/worktree" {
+		t.Fatalf("cwd=%q want %q", gotCwd, "/tmp/worktree")
+	}
+	if gotApproval := fmt.Sprint(opts["approvalPolicy"]); gotApproval != "never" {
+		t.Fatalf("approvalPolicy=%q want %q", gotApproval, "never")
+	}
+	if gotSandbox := fmt.Sprint(opts["sandbox"]); gotSandbox != "danger-full-access" {
+		t.Fatalf("sandbox=%q want %q", gotSandbox, "danger-full-access")
+	}
+	rawSandboxPolicy, ok := opts["sandboxPolicy"]
+	if !ok {
+		t.Fatalf("missing sandboxPolicy in codex options: %#v", opts)
+	}
+	sandboxPolicy, ok := rawSandboxPolicy.(map[string]any)
+	if !ok {
+		t.Fatalf("sandboxPolicy type=%T want map[string]any", rawSandboxPolicy)
+	}
+	if gotType := fmt.Sprint(sandboxPolicy["type"]); gotType != "dangerFullAccess" {
+		t.Fatalf("sandboxPolicy.type=%q want %q", gotType, "dangerFullAccess")
+	}
+}
+
+func TestAgentLoopProviderOptions_Cerebras_PreservesReasoningHistory(t *testing.T) {
+	got := agentLoopProviderOptions("cerebras", "")
+	raw, ok := got["cerebras"]
+	if !ok {
+		t.Fatalf("missing cerebras provider options: %#v", got)
+	}
+	opts, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("cerebras options type=%T want map[string]any", raw)
+	}
+	clearThinking, ok := opts["clear_thinking"].(bool)
+	if !ok {
+		t.Fatalf("clear_thinking type=%T want bool", opts["clear_thinking"])
+	}
+	if clearThinking {
+		t.Fatalf("clear_thinking=%v want false", clearThinking)
+	}
+}
+
+func TestAgentLoopProviderOptions_CodexAppServer_OmitsCwdWhenWorktreeEmpty(t *testing.T) {
+	got := agentLoopProviderOptions("codex-app-server", "")
+	raw, ok := got["codex_app_server"]
+	if !ok {
+		t.Fatalf("missing codex_app_server provider options: %#v", got)
+	}
+	opts, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("codex_app_server options type=%T want map[string]any", raw)
+	}
+	if _, exists := opts["cwd"]; exists {
+		t.Fatalf("expected cwd to be omitted when worktreeDir is empty: %#v", opts["cwd"])
 	}
 }

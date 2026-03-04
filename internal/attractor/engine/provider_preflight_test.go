@@ -637,6 +637,164 @@ func TestPreflightReport_IncludesCLIProfileAndSource(t *testing.T) {
 	}
 }
 
+func TestRunWithConfig_PreflightCodexAppServer_DoesNotRequireEnvGate(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
+	prepareCodexAppServerCommandForPreflight(t)
+
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "codex-app-server/gpt-5.3-codex"}
+  ]
+}`)
+
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"codex-app-server": BackendAPI,
+	})
+	cfg.LLM.CLIProfile = "real"
+	dot := singleProviderDot("codex-app-server", "gpt-5.3-codex")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-codex-app-server-no-env-gate", LogsRoot: logsRoot})
+	if err == nil {
+		t.Fatalf("expected downstream cxdb error, got nil")
+	}
+	if strings.Contains(err.Error(), "preflight:") {
+		t.Fatalf("unexpected preflight failure: %v", err)
+	}
+
+	report := mustReadPreflightReport(t, logsRoot)
+	foundAPIPresencePass := false
+	foundCredentialsPass := false
+	for _, check := range report.Checks {
+		if check.Name == "provider_api_presence" && check.Provider == "codex-app-server" {
+			foundAPIPresencePass = true
+			if check.Status != "pass" {
+				t.Fatalf("provider_api_presence.status=%q want pass", check.Status)
+			}
+		}
+		if check.Name != "provider_api_credentials" || check.Provider != "codex-app-server" {
+			continue
+		}
+		foundCredentialsPass = true
+		if check.Status != "pass" {
+			t.Fatalf("provider_api_credentials.status=%q want pass", check.Status)
+		}
+		if !strings.Contains(check.Message, "not required") {
+			t.Fatalf("provider_api_credentials.message=%q want mention of non-required api key", check.Message)
+		}
+	}
+	if !foundAPIPresencePass {
+		t.Fatalf("expected provider_api_presence pass check for codex-app-server")
+	}
+	if !foundCredentialsPass {
+		t.Fatalf("expected provider_api_credentials pass check for codex-app-server")
+	}
+}
+
+func TestRunWithConfig_PreflightCodexAppServer_ExplicitAPIKeyEnvIsEnforced(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
+	t.Setenv("CODEX_APP_SERVER_TOKEN", "")
+	prepareCodexAppServerCommandForPreflight(t)
+
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "codex-app-server/gpt-5.3-codex"}
+  ]
+}`)
+
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"codex-app-server": BackendAPI,
+	})
+	cfg.LLM.CLIProfile = "real"
+	cfg.LLM.Providers["codex-app-server"] = ProviderConfig{
+		Backend: BackendAPI,
+		API: ProviderAPIConfig{
+			APIKeyEnv: "CODEX_APP_SERVER_TOKEN",
+		},
+	}
+	dot := singleProviderDot("codex-app-server", "gpt-5.3-codex")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-codex-app-server-explicit-env", LogsRoot: logsRoot})
+	if err == nil {
+		t.Fatalf("expected preflight failure, got nil")
+	}
+	if !strings.Contains(err.Error(), "preflight: provider codex-app-server missing api key env CODEX_APP_SERVER_TOKEN") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	report := mustReadPreflightReport(t, logsRoot)
+	foundCredentialsFail := false
+	for _, check := range report.Checks {
+		if check.Name != "provider_api_credentials" || check.Provider != "codex-app-server" {
+			continue
+		}
+		foundCredentialsFail = true
+		if check.Status != "fail" {
+			t.Fatalf("provider_api_credentials.status=%q want fail", check.Status)
+		}
+		if !strings.Contains(check.Message, "CODEX_APP_SERVER_TOKEN") {
+			t.Fatalf("provider_api_credentials.message=%q want mention of CODEX_APP_SERVER_TOKEN", check.Message)
+		}
+	}
+	if !foundCredentialsFail {
+		t.Fatalf("expected provider_api_credentials fail check for codex-app-server")
+	}
+}
+
+func TestRunWithConfig_PreflightCodexAppServer_FailsWhenCommandUnavailable(t *testing.T) {
+	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
+	t.Setenv("CODEX_APP_SERVER_COMMAND", "codex-missing-preflight")
+
+	repo := initTestRepo(t)
+	catalog := writeCatalogForPreflight(t, `{
+  "data": [
+    {"id": "codex-app-server/gpt-5.3-codex"}
+  ]
+}`)
+
+	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
+		"codex-app-server": BackendAPI,
+	})
+	cfg.LLM.CLIProfile = "real"
+	dot := singleProviderDot("codex-app-server", "gpt-5.3-codex")
+
+	logsRoot := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "preflight-codex-app-server-missing-command", LogsRoot: logsRoot})
+	if err == nil {
+		t.Fatalf("expected preflight failure, got nil")
+	}
+	if !strings.Contains(err.Error(), `preflight: provider codex-app-server codex app server command "codex-missing-preflight" is not available`) {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	report := mustReadPreflightReport(t, logsRoot)
+	foundPresenceFail := false
+	for _, check := range report.Checks {
+		if check.Name != "provider_api_presence" || check.Provider != "codex-app-server" {
+			continue
+		}
+		foundPresenceFail = true
+		if check.Status != "fail" {
+			t.Fatalf("provider_api_presence.status=%q want fail", check.Status)
+		}
+		if !strings.Contains(check.Message, "codex-missing-preflight") {
+			t.Fatalf("provider_api_presence.message=%q want mention of codex-missing-preflight", check.Message)
+		}
+	}
+	if !foundPresenceFail {
+		t.Fatalf("expected provider_api_presence fail check for codex-app-server")
+	}
+}
+
 func TestRunWithConfig_PreflightPromptProbe_UsesOnlyAPIProvidersInGraph(t *testing.T) {
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
@@ -1764,18 +1922,26 @@ exit 1
 }
 
 func TestProviderPreflight_CLIOnlyModelWithAPIBackend_Fails(t *testing.T) {
+	orig := cliOnlyModelIDs
+	cliOnlyModelIDs = map[string]bool{
+		"test-cli-only-model": true,
+	}
+	t.Cleanup(func() {
+		cliOnlyModelIDs = orig
+	})
+
 	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.3-codex-spark"}
+    {"id": "openai/test-cli-only-model"}
   ]
 }`)
 	// openai configured as API backend — should fail for CLI-only model.
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"openai": BackendAPI,
 	})
-	dot := singleProviderDot("openai", "gpt-5.3-codex-spark")
+	dot := singleProviderDot("openai", "test-cli-only-model")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1805,18 +1971,26 @@ func TestProviderPreflight_CLIOnlyModelWithAPIBackend_Fails(t *testing.T) {
 }
 
 func TestProviderPreflight_CLIOnlyModelWithCLIBackend_Passes(t *testing.T) {
+	orig := cliOnlyModelIDs
+	cliOnlyModelIDs = map[string]bool{
+		"test-cli-only-model": true,
+	}
+	t.Cleanup(func() {
+		cliOnlyModelIDs = orig
+	})
+
 	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.3-codex-spark"}
+    {"id": "openai/test-cli-only-model"}
   ]
 }`)
 	// openai configured as CLI backend — should pass the CLI-only check.
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"openai": BackendCLI,
 	})
-	dot := singleProviderDot("openai", "gpt-5.3-codex-spark")
+	dot := singleProviderDot("openai", "test-cli-only-model")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1841,11 +2015,19 @@ func TestProviderPreflight_CLIOnlyModelWithCLIBackend_Passes(t *testing.T) {
 }
 
 func TestProviderPreflight_CLIOnlyModel_ForceModelOverridesToRegular_NoFail(t *testing.T) {
+	orig := cliOnlyModelIDs
+	cliOnlyModelIDs = map[string]bool{
+		"test-cli-only-model": true,
+	}
+	t.Cleanup(func() {
+		cliOnlyModelIDs = orig
+	})
+
 	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
-    {"id": "openai/gpt-5.3-codex-spark"},
+    {"id": "openai/test-cli-only-model"},
     {"id": "openai/gpt-5.2-codex"}
   ]
 }`)
@@ -1854,7 +2036,7 @@ func TestProviderPreflight_CLIOnlyModel_ForceModelOverridesToRegular_NoFail(t *t
 	cfg := testPreflightConfigForProviders(repo, catalog, map[string]BackendKind{
 		"openai": BackendAPI,
 	})
-	dot := singleProviderDot("openai", "gpt-5.3-codex-spark")
+	dot := singleProviderDot("openai", "test-cli-only-model")
 
 	logsRoot := t.TempDir()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -1865,20 +2047,28 @@ func TestProviderPreflight_CLIOnlyModel_ForceModelOverridesToRegular_NoFail(t *t
 		AllowTestShim: true,
 		ForceModels:   map[string]string{"openai": "gpt-5.2-codex"},
 	})
-	// Should NOT fail with CLI-only error — force-model replaces Spark with
-	// a regular model.
+	// Should NOT fail with CLI-only error — force-model replaces the
+	// CLI-only model with a regular model.
 	if err != nil && strings.Contains(err.Error(), "CLI-only") {
 		t.Fatalf("force-model to regular model should bypass CLI-only check, got: %v", err)
 	}
 }
 
 func TestProviderPreflight_ForceModelInjectsCLIOnly_WithAPIBackend_Fails(t *testing.T) {
+	orig := cliOnlyModelIDs
+	cliOnlyModelIDs = map[string]bool{
+		"test-cli-only-model": true,
+	}
+	t.Cleanup(func() {
+		cliOnlyModelIDs = orig
+	})
+
 	t.Setenv("KILROY_PREFLIGHT_PROMPT_PROBES", "off")
 	repo := initTestRepo(t)
 	catalog := writeCatalogForPreflight(t, `{
   "data": [
     {"id": "openai/gpt-5.2-codex"},
-    {"id": "openai/gpt-5.3-codex-spark"}
+    {"id": "openai/test-cli-only-model"}
   ]
 }`)
 	// openai configured as API backend, graph uses a regular model, but
@@ -1895,7 +2085,7 @@ func TestProviderPreflight_ForceModelInjectsCLIOnly_WithAPIBackend_Fails(t *test
 		RunID:         "force-cli-only-api-fail",
 		LogsRoot:      logsRoot,
 		AllowTestShim: true,
-		ForceModels:   map[string]string{"openai": "gpt-5.3-codex-spark"},
+		ForceModels:   map[string]string{"openai": "test-cli-only-model"},
 	})
 	if err == nil {
 		t.Fatal("expected preflight error when force-model injects CLI-only model with API backend, got nil")
@@ -1942,4 +2132,20 @@ func TestUsedAPIProviders_ExcludesUncredentialedFailoverTarget(t *testing.T) {
 	if strings.Join(got, ",") != "anthropic,google" {
 		t.Fatalf("want [anthropic google] (both credentialed), got %v", got)
 	}
+}
+
+func prepareCodexAppServerCommandForPreflight(t *testing.T) {
+	t.Helper()
+	binDir := t.TempDir()
+	commandName := "codex-preflight"
+	commandPath := filepath.Join(binDir, commandName)
+	script := `#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+`
+	if err := os.WriteFile(commandPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write codex preflight helper binary: %v", err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	t.Setenv("CODEX_APP_SERVER_COMMAND", commandName)
 }

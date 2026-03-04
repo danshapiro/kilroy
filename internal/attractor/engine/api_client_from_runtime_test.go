@@ -114,6 +114,77 @@ func TestNewAPIClientFromProviderRuntimes_RegistersMinimaxViaOpenAICompat(t *tes
 	}
 }
 
+func TestNewAPIClientFromProviderRuntimes_RegistersCodexAppServerProtocol(t *testing.T) {
+	runtimes := map[string]ProviderRuntime{
+		"codex-app-server": {
+			Key:     "codex-app-server",
+			Backend: BackendAPI,
+			API: providerspec.APISpec{
+				Protocol:         providerspec.ProtocolCodexAppServer,
+				DefaultAPIKeyEnv: "",
+			},
+		},
+	}
+	c, err := newAPIClientFromProviderRuntimes(runtimes)
+	if err != nil {
+		t.Fatalf("newAPIClientFromProviderRuntimes: %v", err)
+	}
+	if len(c.ProviderNames()) != 1 || c.ProviderNames()[0] != "codex-app-server" {
+		t.Fatalf("expected codex-app-server adapter, got %v", c.ProviderNames())
+	}
+}
+
+func TestNewAPIClientFromProviderRuntimes_CodexAppServerHonorsExplicitAPIKeyEnv(t *testing.T) {
+	runtimes := map[string]ProviderRuntime{
+		"codex-app-server": {
+			Key:     "codex-app-server",
+			Backend: BackendAPI,
+			API: providerspec.APISpec{
+				Protocol:         providerspec.ProtocolCodexAppServer,
+				DefaultAPIKeyEnv: "CODEX_APP_SERVER_TOKEN",
+			},
+		},
+	}
+
+	t.Setenv("CODEX_APP_SERVER_TOKEN", "")
+	c, err := newAPIClientFromProviderRuntimes(runtimes)
+	if err != nil {
+		t.Fatalf("newAPIClientFromProviderRuntimes: %v", err)
+	}
+	if len(c.ProviderNames()) != 0 {
+		t.Fatalf("expected no adapters when explicit codex api key env is unset, got %v", c.ProviderNames())
+	}
+
+	t.Setenv("CODEX_APP_SERVER_TOKEN", "present")
+	c, err = newAPIClientFromProviderRuntimes(runtimes)
+	if err != nil {
+		t.Fatalf("newAPIClientFromProviderRuntimes: %v", err)
+	}
+	if len(c.ProviderNames()) != 1 || c.ProviderNames()[0] != "codex-app-server" {
+		t.Fatalf("expected codex-app-server adapter when explicit env is set, got %v", c.ProviderNames())
+	}
+}
+
+func TestNewAPIClientFromProviderRuntimes_CodexAppServerPreservesCustomProviderKey(t *testing.T) {
+	runtimes := map[string]ProviderRuntime{
+		"my-codex-provider": {
+			Key:     "my-codex-provider",
+			Backend: BackendAPI,
+			API: providerspec.APISpec{
+				Protocol:         providerspec.ProtocolCodexAppServer,
+				DefaultAPIKeyEnv: "",
+			},
+		},
+	}
+	c, err := newAPIClientFromProviderRuntimes(runtimes)
+	if err != nil {
+		t.Fatalf("newAPIClientFromProviderRuntimes: %v", err)
+	}
+	if len(c.ProviderNames()) != 1 || c.ProviderNames()[0] != "my-codex-provider" {
+		t.Fatalf("expected custom codex provider key to be preserved, got %v", c.ProviderNames())
+	}
+}
+
 func TestResolveBuiltInBaseURLOverride_MinimaxUsesEnvOverride(t *testing.T) {
 	t.Setenv("MINIMAX_BASE_URL", "http://127.0.0.1:8888")
 	got := resolveBuiltInBaseURLOverride("minimax", "https://api.minimax.io")

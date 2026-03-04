@@ -739,13 +739,7 @@ func TestRunWithConfig_APIBackend_OneShot_WritesRequestAndResponseArtifacts(t *t
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-  "id": "resp_1",
-  "model": "gpt-5.2",
-  "output": [{"type": "message", "content": [{"type":"output_text", "text":"Hello"}]}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
+		writeOpenAITextResponse(w, r, "resp_1", "gpt-5.2", "Hello")
 	}))
 	t.Cleanup(openaiSrv.Close)
 
@@ -781,7 +775,6 @@ digraph G {
 	}
 
 	assertExists(t, filepath.Join(res.LogsRoot, "a", "api_request.json"))
-	assertExists(t, filepath.Join(res.LogsRoot, "a", "api_response.json"))
 }
 
 func TestRunWithConfig_APIBackend_ForceModelOverride_UsesForcedModel(t *testing.T) {
@@ -799,19 +792,13 @@ func TestRunWithConfig_APIBackend_ForceModelOverride_UsesForcedModel(t *testing.
 			return
 		}
 		b, _ := io.ReadAll(r.Body)
-		_ = r.Body.Close()
+		r.Body = io.NopCloser(strings.NewReader(string(b)))
 		var gotReq map[string]any
 		_ = json.Unmarshal(b, &gotReq)
 		mu.Lock()
 		gotModel = strings.TrimSpace(anyToString(gotReq["model"]))
 		mu.Unlock()
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-  "id": "resp_1",
-  "model": "gpt-unknown-force-b",
-  "output": [{"type": "message", "content": [{"type":"output_text", "text":"Hello"}]}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
+		writeOpenAITextResponse(w, r, "resp_1", "gpt-unknown-force-b", "Hello")
 	}))
 	t.Cleanup(openaiSrv.Close)
 
@@ -851,7 +838,6 @@ digraph G {
 	}
 
 	assertExists(t, filepath.Join(res.LogsRoot, "a", "api_request.json"))
-	assertExists(t, filepath.Join(res.LogsRoot, "a", "api_response.json"))
 
 	mu.Lock()
 	model := gotModel
@@ -873,13 +859,7 @@ func TestRunWithConfig_APIBackend_AutoStatusFalse_FailsWhenNoStatusWritten(t *te
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-  "id": "resp_1",
-  "model": "gpt-5.2",
-  "output": [{"type": "message", "content": [{"type":"output_text", "text":"Hello"}]}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
+		writeOpenAITextResponse(w, r, "resp_1", "gpt-5.2", "Hello")
 	}))
 	t.Cleanup(openaiSrv.Close)
 
@@ -1009,4 +989,15 @@ func assertNoCodexStateEntries(t *testing.T, entries []string) {
 			t.Fatalf("unexpected codex credential entry in tar: %q", name)
 		}
 	}
+}
+
+// writeOpenAITextResponse is a convenience wrapper around writeOpenAIResponseAuto
+// for fake servers that return a simple text response.
+func writeOpenAITextResponse(w http.ResponseWriter, r *http.Request, id, model, text string) {
+	writeOpenAIResponseAuto(w, r, map[string]any{
+		"id":     id,
+		"model":  model,
+		"output": []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": text}}}},
+		"usage":  map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+	})
 }

@@ -12,11 +12,38 @@ import (
 	"github.com/danshapiro/kilroy/internal/llm"
 )
 
+func assertRateLimitInfo(t *testing.T, rl *llm.RateLimitInfo) {
+	t.Helper()
+	if rl == nil {
+		t.Fatalf("expected rate limit info, got nil")
+	}
+	if rl.RequestsRemaining == nil || *rl.RequestsRemaining != 9 {
+		t.Fatalf("requests_remaining: %#v", rl.RequestsRemaining)
+	}
+	if rl.RequestsLimit == nil || *rl.RequestsLimit != 10 {
+		t.Fatalf("requests_limit: %#v", rl.RequestsLimit)
+	}
+	if rl.TokensRemaining == nil || *rl.TokensRemaining != 90 {
+		t.Fatalf("tokens_remaining: %#v", rl.TokensRemaining)
+	}
+	if rl.TokensLimit == nil || *rl.TokensLimit != 100 {
+		t.Fatalf("tokens_limit: %#v", rl.TokensLimit)
+	}
+	if rl.ResetAt != "2025-01-01T00:00:10Z" {
+		t.Fatalf("reset_at: %q", rl.ResetAt)
+	}
+}
+
 func TestAdapter_Complete_ChatCompletionsMapsToolCalls(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/chat/completions" {
 			t.Fatalf("path: %s", r.URL.Path)
 		}
+		w.Header().Set("x-ratelimit-remaining-requests", "9")
+		w.Header().Set("x-ratelimit-limit-requests", "10")
+		w.Header().Set("x-ratelimit-remaining-tokens", "90")
+		w.Header().Set("x-ratelimit-limit-tokens", "100")
+		w.Header().Set("x-ratelimit-reset-requests", "Wed, 01 Jan 2025 00:00:10 GMT")
 		_, _ = w.Write([]byte(`{"id":"c1","model":"m","choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","content":"","tool_calls":[{"id":"call_1","type":"function","function":{"name":"read_file","arguments":"{\"file_path\":\"README.md\"}"}}]}}],"usage":{"prompt_tokens":10,"completion_tokens":3,"total_tokens":13}}`))
 	}))
 	defer srv.Close()
@@ -39,11 +66,17 @@ func TestAdapter_Complete_ChatCompletionsMapsToolCalls(t *testing.T) {
 	if len(resp.ToolCalls()) != 1 {
 		t.Fatalf("tool call mapping failed")
 	}
+	assertRateLimitInfo(t, resp.RateLimit)
 }
 
 func TestAdapter_Stream_EmitsFinishEvent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("x-ratelimit-remaining-requests", "9")
+		w.Header().Set("x-ratelimit-limit-requests", "10")
+		w.Header().Set("x-ratelimit-remaining-tokens", "90")
+		w.Header().Set("x-ratelimit-limit-tokens", "100")
+		w.Header().Set("x-ratelimit-reset-requests", "Wed, 01 Jan 2025 00:00:10 GMT")
 		_, _ = w.Write([]byte("data: {\"id\":\"c2\",\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":null}]}\n\n"))
 		_, _ = w.Write([]byte("data: {\"id\":\"c2\",\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1,\"completion_tokens\":1,\"total_tokens\":2}}\n\n"))
 		_, _ = w.Write([]byte("data: [DONE]\n\n"))
@@ -61,16 +94,17 @@ func TestAdapter_Stream_EmitsFinishEvent(t *testing.T) {
 	}
 	defer stream.Close()
 
-	sawFinish := false
+	var finish *llm.Response
 	for ev := range stream.Events() {
 		if ev.Type == llm.StreamEventFinish {
-			sawFinish = true
+			finish = ev.Response
 			break
 		}
 	}
-	if !sawFinish {
+	if finish == nil {
 		t.Fatalf("expected finish event")
 	}
+	assertRateLimitInfo(t, finish.RateLimit)
 }
 
 func TestAdapter_Stream_MapsToolCallDeltasToEventsAndFinalResponse(t *testing.T) {

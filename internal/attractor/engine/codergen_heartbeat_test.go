@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -138,27 +140,26 @@ func TestRunWithConfig_APIBackend_HeartbeatEmitsDuringAgentLoop(t *testing.T) {
 		n := requestCount
 		reqMu.Unlock()
 
+		toolCallResp := map[string]any{
+			"id": "resp_1", "model": "gpt-5.2",
+			"output": []any{map[string]any{"type": "function_call", "id": "call_1", "name": "shell", "arguments": `{"command":"sleep 1"}`}},
+			"usage":  map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+		}
+		textResp := map[string]any{
+			"id": "resp_2", "model": "gpt-5.2",
+			"output": []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "done"}}}},
+			"usage":  map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+		}
+
 		// First request: return a shell tool call that sleeps briefly.
 		if n == 1 {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{
-  "id": "resp_1",
-  "model": "gpt-5.2",
-  "output": [{"type":"function_call","id":"call_1","name":"shell","arguments":"{\"command\":\"sleep 1\"}"}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
+			writeOpenAIResponseAuto(w, r, toolCallResp)
 			return
 		}
 		// Second request onward: simulate API thinking time so the heartbeat
 		// goroutine fires at least once before the session completes.
 		time.Sleep(500 * time.Millisecond)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-  "id": "resp_2",
-  "model": "gpt-5.2",
-  "output": [{"type":"message","content":[{"type":"output_text","text":"done"}]}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
+		writeOpenAIResponseAuto(w, r, textResp)
 	}))
 	t.Cleanup(openaiSrv.Close)
 
@@ -234,47 +235,68 @@ func TestRunWithConfig_APIBackend_SessionEventsPreventFalseStallWithoutHeartbeat
 	cxdbSrv := newCXDBTestServer(t)
 
 	requestCount := 0
+	const toolRounds = 8
 	var reqMu sync.Mutex
 	openaiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		var reqBody map[string]any
+		_ = json.Unmarshal(b, &reqBody)
+		streaming, _ := reqBody["stream"].(bool)
+
 		reqMu.Lock()
 		requestCount++
 		n := requestCount
 		reqMu.Unlock()
 
-		w.Header().Set("Content-Type", "application/json")
-		switch n {
-		case 1:
-			_, _ = w.Write([]byte(`{
-  "id": "resp_1",
-  "model": "gpt-5.2",
-  "output": [{"type":"function_call","id":"call_1","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
-		case 2:
-			_, _ = w.Write([]byte(`{
-  "id": "resp_2",
-  "model": "gpt-5.2",
-  "output": [{"type":"function_call","id":"call_2","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
-		case 3:
-			_, _ = w.Write([]byte(`{
-  "id": "resp_3",
-  "model": "gpt-5.2",
-  "output": [{"type":"function_call","id":"call_3","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
-		default:
-			_, _ = w.Write([]byte(`{
-  "id": "resp_4",
-  "model": "gpt-5.2",
-  "output": [{"type":"message","content":[{"type":"output_text","text":"done"}]}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
+		var responseObj map[string]any
+		if n <= toolRounds {
+			responseObj = map[string]any{
+				"id":    fmt.Sprintf("resp_%d", n),
+				"model": "gpt-5.2",
+				"output": []any{map[string]any{
+					"type": "function_call", "id": fmt.Sprintf("call_%d", n),
+					"name": "shell", "arguments": `{"command":"sleep 0.3"}`,
+				}},
+				"usage": map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+			}
+		} else {
+			responseObj = map[string]any{
+				"id":    "resp_final",
+				"model": "gpt-5.2",
+				"output": []any{map[string]any{
+					"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "done"}},
+				}},
+				"usage": map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+			}
+		}
+
+		if !streaming {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(responseObj)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		completedPayload, _ := json.Marshal(map[string]any{
+			"type":     "response.completed",
+			"response": responseObj,
+		})
+		lines := []string{
+			"event: response.completed",
+			"data: " + string(completedPayload),
+			"",
+		}
+		for _, line := range lines {
+			_, _ = w.Write([]byte(line + "\n"))
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
 		}
 	}))
 	t.Cleanup(openaiSrv.Close)
@@ -285,8 +307,8 @@ func TestRunWithConfig_APIBackend_SessionEventsPreventFalseStallWithoutHeartbeat
 	// watchdog behavior in this test.
 	t.Setenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL", "10s")
 
-	stallTimeout := 700
-	stallCheck := 50
+	stallTimeout := 1500
+	stallCheck := 100
 	disableProbe := false
 	cfg := &RunConfigFile{Version: 1}
 	cfg.Repo.Path = repo
@@ -314,9 +336,13 @@ digraph G {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	runStart := time.Now()
 	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "api-session-activity-test", LogsRoot: logsRoot})
 	if err != nil {
 		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if elapsed := time.Since(runStart); elapsed < time.Duration(stallTimeout)*time.Millisecond {
+		t.Fatalf("test runtime %s was shorter than stall timeout %dms; watchdog window not exercised", elapsed, stallTimeout)
 	}
 
 	progressPath := filepath.Join(res.LogsRoot, "progress.ndjson")

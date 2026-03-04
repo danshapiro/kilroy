@@ -12,6 +12,7 @@ const (
 	ProtocolOpenAIChatCompletions APIProtocol = "openai_chat_completions"
 	ProtocolAnthropicMessages     APIProtocol = "anthropic_messages"
 	ProtocolGoogleGenerateContent APIProtocol = "google_generate_content"
+	ProtocolCodexAppServer        APIProtocol = "codex_app_server"
 )
 
 type APISpec struct {

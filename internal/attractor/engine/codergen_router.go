@@ -94,8 +94,8 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 		return "", nil, fmt.Errorf("no backend configured for provider %s", prov)
 	}
 
-	// CLI-only model override: models like gpt-5.3-codex-spark have no API
-	// endpoint. Force CLI backend regardless of provider configuration.
+	// CLI-only model override: force CLI backend when a model is marked
+	// CLI-only in the registry.
 	if isCLIOnlyModel(modelID) && backend != BackendCLI {
 		warnEngine(exec, fmt.Sprintf("cli-only model override: node=%s model=%s backend=%s->cli", node.ID, modelID, backend))
 		backend = BackendCLI
@@ -192,15 +192,105 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 				warnEngine(execCtx, fmt.Sprintf("write api_request.json: %v", err))
 			}
 			policy := attractorLLMRetryPolicy(execCtx, node.ID, prov, mid)
-			resp, err := llm.Retry(ctx, policy, nil, nil, func() (llm.Response, error) {
-				return client.Complete(ctx, req)
+			stream, err := llm.Retry(ctx, policy, nil, nil, func() (llm.Stream, error) {
+				return client.Stream(ctx, req)
 			})
 			if err != nil {
 				return "", err
 			}
+
+			var emitter *streamProgressEmitter
+			if execCtx != nil && execCtx.Engine != nil {
+				runID := execCtx.Engine.Options.RunID
+				emitter = newStreamProgressEmitter(execCtx.Engine, node.ID, runID)
+				defer emitter.close()
+			}
+
+			acc := llm.NewStreamAccumulator()
+			var streamErr error
+			toolCallCount := 0
+			seenToolCallIDs := map[string]struct{}{}
+			recordToolCallStart := func(callID string) {
+				callID = strings.TrimSpace(callID)
+				if callID == "" {
+					toolCallCount++
+					return
+				}
+				if _, exists := seenToolCallIDs[callID]; exists {
+					return
+				}
+				seenToolCallIDs[callID] = struct{}{}
+				toolCallCount++
+			}
+			for ev := range stream.Events() {
+				acc.Process(ev)
+				if ev.Type == llm.StreamEventError && ev.Err != nil {
+					streamErr = ev.Err
+					break
+				}
+				if emitter != nil {
+					switch ev.Type {
+					case llm.StreamEventTextDelta:
+						if ev.Delta != "" {
+							emitter.appendDelta(ev.Delta)
+						}
+					case llm.StreamEventToolCallStart:
+						if ev.ToolCall != nil {
+							recordToolCallStart(ev.ToolCall.ID)
+							emitter.emitToolCallStart(ev.ToolCall.Name, ev.ToolCall.ID)
+						}
+					case llm.StreamEventToolCallEnd:
+						if ev.ToolCall != nil {
+							emitter.emitToolCallEnd(ev.ToolCall.Name, ev.ToolCall.ID, false)
+						}
+					case llm.StreamEventProviderEvent:
+						if lifecycle, ok := llm.ParseCodexAppServerToolLifecycle(ev); ok {
+							if lifecycle.Completed {
+								emitter.emitToolCallEnd(lifecycle.ToolName, lifecycle.CallID, lifecycle.IsError)
+							} else {
+								recordToolCallStart(lifecycle.CallID)
+								emitter.emitToolCallStart(lifecycle.ToolName, lifecycle.CallID)
+							}
+						}
+					}
+				}
+			}
+			_ = stream.Close()
+			if streamErr != nil {
+				return "", streamErr
+			}
+
+			resp := acc.Response()
+			if resp == nil {
+				return "", llm.NewStreamError(prov, "stream ended without finish event")
+			}
+
 			if err := writeJSON(filepath.Join(stageDir, "api_response.json"), resp.Raw); err != nil {
 				warnEngine(execCtx, fmt.Sprintf("write api_response.json: %v", err))
 			}
+
+			// WP-5: Record AssistantMessage CXDB turn for one_shot.
+			if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
+				eng := execCtx.Engine
+				text := resp.Text()
+				if strings.TrimSpace(text) != "" {
+					if _, _, cxErr := eng.CXDB.Append(ctx, "com.kilroy.attractor.AssistantMessage", 1, map[string]any{
+						"run_id":        eng.Options.RunID,
+						"node_id":       node.ID,
+						"text":          truncate(text, 8_000),
+						"input_tokens":  resp.Usage.InputTokens,
+						"output_tokens": resp.Usage.OutputTokens,
+						"timestamp_ms":  nowMS(),
+					}); cxErr != nil {
+						eng.Warn(fmt.Sprintf("cxdb append AssistantMessage failed (node=%s): %v", node.ID, cxErr))
+					}
+				}
+			}
+
+			if emitter != nil {
+				emitter.emitTurnEnd(len(resp.Text()), toolCallCount)
+			}
+
 			return resp.Text(), nil
 		})
 		if err != nil {
@@ -238,15 +328,24 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			if reasoning != "" {
 				sessCfg.ReasoningEffort = reasoning
 			}
-			if maxTokensPtr != nil {
-				sessCfg.MaxTokens = maxTokensPtr
+			if providerOptions := agentLoopProviderOptions(prov, execCtx.WorktreeDir); len(providerOptions) > 0 {
+				sessCfg.ProviderOptions = providerOptions
 			}
 			// Cerebras GLM 4.7: preserve reasoning across agent-loop turns.
 			// clear_thinking defaults to true on the API, which strips prior
 			// reasoning context — counterproductive for multi-step agentic work.
 			if normalizeProviderKey(prov) == "cerebras" {
-				sessCfg.ProviderOptions = map[string]any{
-					"cerebras": map[string]any{"clear_thinking": false},
+				if sessCfg.ProviderOptions == nil {
+					sessCfg.ProviderOptions = map[string]any{}
+				}
+				if existing, ok := sessCfg.ProviderOptions["cerebras"]; ok {
+					if cerebrasOpts, ok := existing.(map[string]any); ok {
+						cerebrasOpts["clear_thinking"] = false
+					} else {
+						sessCfg.ProviderOptions["cerebras"] = map[string]any{"clear_thinking": false}
+					}
+				} else {
+					sessCfg.ProviderOptions["cerebras"] = map[string]any{"clear_thinking": false}
 				}
 			}
 			if v := parseInt(node.Attr("max_agent_turns", ""), 0); v > 0 {
@@ -286,7 +385,16 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			var eventsMu sync.Mutex
 			var events []agent.SessionEvent
 			done := make(chan struct{})
+			// Streaming progress emitter: throttles text deltas, forwards tool events.
+			var emitter *streamProgressEmitter
+			if execCtx != nil && execCtx.Engine != nil {
+				emitter = newStreamProgressEmitter(execCtx.Engine, node.ID, execCtx.Engine.Options.RunID)
+			}
+
 			go func() {
+				if emitter != nil {
+					defer emitter.close()
+				}
 				enc := json.NewEncoder(eventsFile)
 				encodeFailed := false
 				for ev := range sess.Events() {
@@ -306,6 +414,10 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 					// Spec §9.7: execute tool hooks around tool calls.
 					if execCtx != nil && execCtx.Engine != nil {
 						executeToolHookForEvent(ctx, execCtx, node, ev, stageDir)
+					}
+					// Forward LLM-level events as streaming progress.
+					if emitter != nil {
+						emitStreamProgress(emitter, ev)
 					}
 					eventsMu.Lock()
 					events = append(events, ev)
@@ -380,6 +492,36 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		return text, nil, nil
 	default:
 		return "", nil, fmt.Errorf("invalid codergen_mode: %q (want one_shot|agent_loop)", mode)
+	}
+}
+
+func agentLoopProviderOptions(provider string, worktreeDir string) map[string]any {
+	switch normalizeProviderKey(provider) {
+	case "cerebras":
+		// Cerebras GLM 4.7: preserve reasoning across agent-loop turns.
+		// clear_thinking defaults to true on the API, which strips prior
+		// reasoning context, this is counterproductive for multi-step agentic work.
+		return map[string]any{
+			"cerebras": map[string]any{"clear_thinking": false},
+		}
+	case "codex-app-server":
+		opts := map[string]any{
+			"approvalPolicy": "never",
+			// Keep both thread-level and turn-level sandbox knobs set.
+			// App-server surfaces use different fields/casing across thread/start and turn/start.
+			"sandbox": "danger-full-access",
+			"sandboxPolicy": map[string]any{
+				"type": "dangerFullAccess",
+			},
+		}
+		if wt := strings.TrimSpace(worktreeDir); wt != "" {
+			opts["cwd"] = wt
+		}
+		return map[string]any{
+			"codex_app_server": opts,
+		}
+	default:
+		return nil
 	}
 }
 
@@ -1836,6 +1978,34 @@ func fileSize(path string) (int64, error) {
 	return info.Size(), nil
 }
 
+func emitStreamProgress(emitter *streamProgressEmitter, ev agent.SessionEvent) {
+	if emitter == nil {
+		return
+	}
+	switch ev.Kind {
+	case agent.EventAssistantTextDelta:
+		if delta, _ := ev.Data["delta"].(string); delta != "" {
+			emitter.appendDelta(delta)
+		}
+	case agent.EventToolCallStart:
+		toolName, _ := ev.Data["tool_name"].(string)
+		callID, _ := ev.Data["call_id"].(string)
+		emitter.emitToolCallStart(toolName, callID)
+	case agent.EventToolCallEnd:
+		toolName, _ := ev.Data["tool_name"].(string)
+		callID, _ := ev.Data["call_id"].(string)
+		isErr, _ := ev.Data["is_error"].(bool)
+		emitter.emitToolCallEnd(toolName, callID, isErr)
+	case agent.EventAssistantTextEnd:
+		text, _ := ev.Data["text"].(string)
+		toolCount := 0
+		if tc, ok := ev.Data["tool_call_count"].(int); ok {
+			toolCount = tc
+		}
+		emitter.emitTurnEnd(len(text), toolCount)
+	}
+}
+
 func emitCXDBToolTurns(ctx context.Context, eng *Engine, nodeID string, ev agent.SessionEvent) {
 	if eng == nil || eng.CXDB == nil {
 		return
@@ -1878,6 +2048,19 @@ func emitCXDBToolTurns(ctx context.Context, eng *Engine, nodeID string, ev agent
 			"is_error":  isErr,
 		}); err != nil {
 			eng.Warn(fmt.Sprintf("cxdb append ToolResult failed (node=%s tool=%s call_id=%s): %v", nodeID, toolName, callID, err))
+		}
+	case agent.EventAssistantTextEnd:
+		text := strings.TrimSpace(fmt.Sprint(ev.Data["text"]))
+		if text == "" {
+			return
+		}
+		if _, _, err := eng.CXDB.Append(ctx, "com.kilroy.attractor.AssistantMessage", 1, map[string]any{
+			"run_id":       runID,
+			"node_id":      nodeID,
+			"text":         truncate(text, 8_000),
+			"timestamp_ms": nowMS(),
+		}); err != nil {
+			eng.Warn(fmt.Sprintf("cxdb append AssistantMessage failed (node=%s): %v", nodeID, err))
 		}
 	}
 }

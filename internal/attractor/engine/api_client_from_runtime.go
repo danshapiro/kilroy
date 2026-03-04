@@ -8,6 +8,7 @@ import (
 
 	"github.com/danshapiro/kilroy/internal/llm"
 	"github.com/danshapiro/kilroy/internal/llm/providers/anthropic"
+	"github.com/danshapiro/kilroy/internal/llm/providers/codexappserver"
 	"github.com/danshapiro/kilroy/internal/llm/providers/google"
 	"github.com/danshapiro/kilroy/internal/llm/providers/openai"
 	"github.com/danshapiro/kilroy/internal/llm/providers/openaicompat"
@@ -21,7 +22,15 @@ func newAPIClientFromProviderRuntimes(runtimes map[string]ProviderRuntime) (*llm
 		if rt.Backend != BackendAPI {
 			continue
 		}
-		apiKey := strings.TrimSpace(os.Getenv(rt.API.DefaultAPIKeyEnv))
+		apiKeyEnv := strings.TrimSpace(rt.API.DefaultAPIKeyEnv)
+		if rt.API.Protocol == providerspec.ProtocolCodexAppServer && apiKeyEnv == "" {
+			c.Register(codexappserver.NewAdapter(codexappserver.AdapterOptions{Provider: key}))
+			continue
+		}
+		if apiKeyEnv == "" {
+			continue
+		}
+		apiKey := strings.TrimSpace(os.Getenv(apiKeyEnv))
 		if apiKey == "" {
 			continue
 		}
@@ -41,6 +50,8 @@ func newAPIClientFromProviderRuntimes(runtimes map[string]ProviderRuntime) (*llm
 				OptionsKey:   rt.API.ProviderOptionsKey,
 				ExtraHeaders: rt.APIHeaders(),
 			}))
+		case providerspec.ProtocolCodexAppServer:
+			c.Register(codexappserver.NewAdapter(codexappserver.AdapterOptions{Provider: key}))
 		default:
 			return nil, fmt.Errorf("unsupported api protocol %q for provider %s", rt.API.Protocol, key)
 		}

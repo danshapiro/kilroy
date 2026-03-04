@@ -16,6 +16,28 @@ import (
 	"github.com/danshapiro/kilroy/internal/llm"
 )
 
+func assertRateLimitInfo(t *testing.T, rl *llm.RateLimitInfo) {
+	t.Helper()
+	if rl == nil {
+		t.Fatalf("expected rate limit info, got nil")
+	}
+	if rl.RequestsRemaining == nil || *rl.RequestsRemaining != 9 {
+		t.Fatalf("requests_remaining: %#v", rl.RequestsRemaining)
+	}
+	if rl.RequestsLimit == nil || *rl.RequestsLimit != 10 {
+		t.Fatalf("requests_limit: %#v", rl.RequestsLimit)
+	}
+	if rl.TokensRemaining == nil || *rl.TokensRemaining != 90 {
+		t.Fatalf("tokens_remaining: %#v", rl.TokensRemaining)
+	}
+	if rl.TokensLimit == nil || *rl.TokensLimit != 100 {
+		t.Fatalf("tokens_limit: %#v", rl.TokensLimit)
+	}
+	if rl.ResetAt != "2025-01-01T00:00:10Z" {
+		t.Fatalf("reset_at: %q", rl.ResetAt)
+	}
+}
+
 func TestAdapter_Complete_MapsToResponsesAPI(t *testing.T) {
 	var gotBody map[string]any
 
@@ -29,6 +51,11 @@ func TestAdapter_Complete_MapsToResponsesAPI(t *testing.T) {
 		_ = json.Unmarshal(b, &gotBody)
 
 		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("x-ratelimit-remaining-requests", "9")
+		w.Header().Set("x-ratelimit-limit-requests", "10")
+		w.Header().Set("x-ratelimit-remaining-tokens", "90")
+		w.Header().Set("x-ratelimit-limit-tokens", "100")
+		w.Header().Set("x-ratelimit-reset-requests", "Wed, 01 Jan 2025 00:00:10 GMT")
 		_, _ = w.Write([]byte(`{
   "id": "resp_1",
   "model": "gpt-5.2",
@@ -67,6 +94,7 @@ func TestAdapter_Complete_MapsToResponsesAPI(t *testing.T) {
 	if strings.TrimSpace(resp.Text()) != "Hello" {
 		t.Fatalf("resp text: %q", resp.Text())
 	}
+	assertRateLimitInfo(t, resp.RateLimit)
 
 	// Assert request mapping.
 	if gotBody == nil {
@@ -86,6 +114,48 @@ func TestAdapter_Complete_MapsToResponsesAPI(t *testing.T) {
 	}
 	if inputAny, ok := gotBody["input"].([]any); !ok || len(inputAny) == 0 {
 		t.Fatalf("input: %#v", gotBody["input"])
+	}
+}
+
+func TestAdapter_Complete_NormalizesProviderPrefixedModelID(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		_ = json.Unmarshal(b, &gotBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "id": "resp_1",
+  "model": "gpt-5.2",
+  "output": [{"type": "message", "content": [{"type":"output_text", "text":"ok"}]}],
+  "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := a.Complete(ctx, llm.Request{Model: "openai/gpt-5.2", Messages: []llm.Message{llm.User("hi")}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if gotBody == nil {
+		t.Fatalf("server did not capture request body")
+	}
+	gotModel, ok := gotBody["model"].(string)
+	if !ok {
+		t.Fatalf("request model field type: %#v", gotBody["model"])
+	}
+	if got := strings.TrimSpace(gotModel); got != "gpt-5.2" {
+		t.Fatalf("request model: got %q want %q", got, "gpt-5.2")
 	}
 }
 
@@ -333,6 +403,11 @@ func TestAdapter_Stream_YieldsTextDeltasAndFinish(t *testing.T) {
 		_ = json.Unmarshal(b, &gotBody)
 
 		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("x-ratelimit-remaining-requests", "9")
+		w.Header().Set("x-ratelimit-limit-requests", "10")
+		w.Header().Set("x-ratelimit-remaining-tokens", "90")
+		w.Header().Set("x-ratelimit-limit-tokens", "100")
+		w.Header().Set("x-ratelimit-reset-requests", "Wed, 01 Jan 2025 00:00:10 GMT")
 		f, _ := w.(http.Flusher)
 
 		write := func(event string, data string) {
@@ -377,6 +452,7 @@ func TestAdapter_Stream_YieldsTextDeltasAndFinish(t *testing.T) {
 	if finish == nil || strings.TrimSpace(finish.Text()) != "Hello" {
 		t.Fatalf("finish response: %+v", finish)
 	}
+	assertRateLimitInfo(t, finish.RateLimit)
 
 	if gotBody == nil {
 		t.Fatalf("server did not capture request body")
@@ -408,6 +484,52 @@ func TestAdapter_Stream_YieldsTextDeltasAndFinish(t *testing.T) {
 	}
 	if !foundFinish {
 		t.Fatalf("expected FINISH event (kinds=%v)", kinds)
+	}
+}
+
+func TestAdapter_Stream_NormalizesProviderPrefixedModelID(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		_ = json.Unmarshal(b, &gotBody)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		f, _ := w.(http.Flusher)
+		_, _ = io.WriteString(w, "event: response.completed\n")
+		_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.2","output":[{"type":"message","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`+"\n\n")
+		if f != nil {
+			f.Flush()
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	stream, err := a.Stream(ctx, llm.Request{Model: "openai/gpt-5.2", Messages: []llm.Message{llm.User("hi")}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+	for range stream.Events() {
+	}
+
+	if gotBody == nil {
+		t.Fatalf("server did not capture request body")
+	}
+	gotModel, ok := gotBody["model"].(string)
+	if !ok {
+		t.Fatalf("request model field type: %#v", gotBody["model"])
+	}
+	if got := strings.TrimSpace(gotModel); got != "gpt-5.2" {
+		t.Fatalf("request model: got %q want %q", got, "gpt-5.2")
 	}
 }
 

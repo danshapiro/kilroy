@@ -139,6 +139,29 @@ func NewOpenAIProfile(model string) ProviderProfile {
 	}
 }
 
+func NewCodexAppServerProfile(model string) ProviderProfile {
+	return &baseProfile{
+		id:            "codex-app-server",
+		model:         strings.TrimSpace(model),
+		parallel:      true,
+		contextWindow: 1_047_576,
+		basePrompt:    openAIProfileBasePrompt,
+		docFiles:      []string{"AGENTS.md", ".codex/instructions.md"},
+		toolDefs: []llm.ToolDefinition{
+			defReadFile(),
+			defApplyPatch(),
+			defWriteFile(),
+			defShell(),
+			defGrep(),
+			defGlob(),
+			defSpawnAgent(),
+			defSendInput(),
+			defWait(),
+			defCloseAgent(),
+		},
+	}
+}
+
 func NewAnthropicProfile(model string) ProviderProfile {
 	return &baseProfile{
 		id:            "anthropic",
