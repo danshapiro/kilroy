@@ -16,7 +16,6 @@ const (
 	runOwnershipLockFile        = "run.lock.json"
 	runOwnershipAcquireAttempts = 20
 	runOwnershipRetryDelay      = 25 * time.Millisecond
-	runOwnershipUnreadableGrace = 250 * time.Millisecond
 )
 
 type runOwnershipRecord struct {
@@ -108,16 +107,6 @@ func acquireRunOwnership(logsRoot, runID string) (func(), error) {
 		existing, readErr := readRunOwnership(lockPath)
 		if readErr != nil {
 			lastReadErr = readErr
-			stale, staleErr := unreadableLockIsStale(lockPath, time.Now().UTC())
-			if staleErr != nil && !errors.Is(staleErr, os.ErrNotExist) {
-				return nil, fmt.Errorf("stat unreadable run ownership lock %q: %w", lockPath, staleErr)
-			}
-			if stale {
-				if removeErr := os.Remove(lockPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
-					return nil, fmt.Errorf("remove unreadable stale run ownership lock %q: %w", lockPath, removeErr)
-				}
-				continue
-			}
 			time.Sleep(runOwnershipRetryDelay)
 			continue
 		}
@@ -176,14 +165,6 @@ func runOwnershipMatchesLiveProcess(rec runOwnershipRecord) bool {
 		return true
 	}
 	return start == rec.PIDStartTime
-}
-
-func unreadableLockIsStale(lockPath string, now time.Time) (bool, error) {
-	info, err := os.Stat(lockPath)
-	if err != nil {
-		return false, err
-	}
-	return now.Sub(info.ModTime()) >= runOwnershipUnreadableGrace, nil
 }
 
 func releaseRunOwnership(lockPath string, ownerPID int, ownerStartTime uint64) {

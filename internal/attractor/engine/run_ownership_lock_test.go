@@ -73,7 +73,7 @@ func TestAcquireRunOwnership_ReclaimsStaleOwner(t *testing.T) {
 	}
 }
 
-func TestAcquireRunOwnership_ReclaimsUnreadableStaleLock(t *testing.T) {
+func TestAcquireRunOwnership_UnreadableLockConflicts(t *testing.T) {
 	t.Parallel()
 
 	logsRoot := t.TempDir()
@@ -81,23 +81,21 @@ func TestAcquireRunOwnership_ReclaimsUnreadableStaleLock(t *testing.T) {
 	if err := os.WriteFile(lockPath, []byte("{"), 0o644); err != nil {
 		t.Fatalf("write unreadable lock: %v", err)
 	}
-	old := time.Now().Add(-2 * time.Second)
-	if err := os.Chtimes(lockPath, old, old); err != nil {
-		t.Fatalf("os.Chtimes: %v", err)
-	}
 
-	release, err := acquireRunOwnership(logsRoot, "new-run")
+	_, err := acquireRunOwnership(logsRoot, "new-run")
 	if err != nil {
-		t.Fatalf("acquireRunOwnership: %v", err)
+		var ownershipErr *runOwnershipConflictError
+		if !errors.As(err, &ownershipErr) {
+			t.Fatalf("expected runOwnershipConflictError, got %T (%v)", err, err)
+		}
+		if ownershipErr.Reason == "" {
+			t.Fatalf("expected conflict reason for unreadable lock, got empty reason")
+		}
+	} else {
+		t.Fatalf("expected ownership conflict for unreadable lock, got nil")
 	}
-	defer release()
-
-	got, err := readRunOwnership(lockPath)
-	if err != nil {
-		t.Fatalf("readRunOwnership: %v", err)
-	}
-	if got.RunID != "new-run" {
-		t.Fatalf("owner run_id: got %q want %q", got.RunID, "new-run")
+	if _, statErr := os.Stat(lockPath); statErr != nil {
+		t.Fatalf("expected unreadable lock to be preserved, stat err: %v", statErr)
 	}
 }
 
