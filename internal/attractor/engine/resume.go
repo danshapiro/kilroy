@@ -70,26 +70,26 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		runID         string
 		checkpointSHA string
 		eng           *Engine
+		releaseLock   func()
 	)
 	defer func() {
-		if err == nil {
-			return
+		if err != nil && !isRunOwnershipConflict(err) {
+			if eng != nil {
+				eng.persistFatalOutcome(ctx, err)
+			} else if strings.TrimSpace(logsRoot) != "" && strings.TrimSpace(runID) != "" {
+				final := runtime.FinalOutcome{
+					Timestamp:         time.Now().UTC(),
+					Status:            runtime.FinalFail,
+					RunID:             runID,
+					FinalGitCommitSHA: strings.TrimSpace(checkpointSHA),
+					FailureReason:     strings.TrimSpace(err.Error()),
+				}
+				_ = final.Save(filepath.Join(logsRoot, "final.json"))
+			}
 		}
-		if eng != nil {
-			eng.persistFatalOutcome(ctx, err)
-			return
+		if releaseLock != nil {
+			releaseLock()
 		}
-		if strings.TrimSpace(logsRoot) == "" || strings.TrimSpace(runID) == "" {
-			return
-		}
-		final := runtime.FinalOutcome{
-			Timestamp:         time.Now().UTC(),
-			Status:            runtime.FinalFail,
-			RunID:             runID,
-			FinalGitCommitSHA: strings.TrimSpace(checkpointSHA),
-			FailureReason:     strings.TrimSpace(err.Error()),
-		}
-		_ = final.Save(filepath.Join(logsRoot, "final.json"))
 	}()
 
 	m, err := loadManifest(filepath.Join(logsRoot, "manifest.json"))
@@ -97,6 +97,10 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		return nil, err
 	}
 	runID = strings.TrimSpace(m.RunID)
+	releaseLock, err = acquireRunOwnership(logsRoot, runID)
+	if err != nil {
+		return nil, err
+	}
 	cp, err := runtime.LoadCheckpoint(filepath.Join(logsRoot, "checkpoint.json"))
 	if err != nil {
 		return nil, err

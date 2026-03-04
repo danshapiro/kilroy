@@ -373,9 +373,13 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	runCtx, cancelRun := context.WithCancelCause(ctx)
 	defer cancelRun(nil)
 
+	var releaseOwnership func()
 	defer func() {
-		if err != nil {
+		if err != nil && !isRunOwnershipConflict(err) {
 			e.persistFatalOutcome(ctx, err)
+		}
+		if releaseOwnership != nil {
+			releaseOwnership()
 		}
 	}()
 
@@ -401,6 +405,10 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	}
 	e.baseSHA = baseSHA
 	if err := os.MkdirAll(e.LogsRoot, 0o755); err != nil {
+		return nil, err
+	}
+	releaseOwnership, err = acquireRunOwnership(e.LogsRoot, e.Options.RunID)
+	if err != nil {
 		return nil, err
 	}
 	// Record PID so attractor status can detect a running process.
