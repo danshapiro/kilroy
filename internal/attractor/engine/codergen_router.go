@@ -328,21 +328,30 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 				ticker := time.NewTicker(interval)
 				defer ticker.Stop()
 				var lastCount int
+				lastEventTime := time.Now()
 				for {
 					select {
 					case <-ticker.C:
 						eventsMu.Lock()
 						count := len(events)
 						eventsMu.Unlock()
-						if count > lastCount {
+						eventsGrew := count > lastCount
+						if eventsGrew {
 							lastCount = count
-							if execCtx != nil && execCtx.Engine != nil {
-								execCtx.Engine.appendProgress(map[string]any{
-									"event":       "stage_heartbeat",
-									"node_id":     node.ID,
-									"elapsed_s":   int(time.Since(apiStart).Seconds()),
-									"event_count": count,
-								})
+							lastEventTime = time.Now()
+						}
+						if execCtx != nil && execCtx.Engine != nil {
+							ev := map[string]any{
+								"event":               "stage_heartbeat",
+								"node_id":             node.ID,
+								"elapsed_s":           int(time.Since(apiStart).Seconds()),
+								"event_count":         count,
+								"since_last_output_s": int(time.Since(lastEventTime).Seconds()),
+							}
+							if eventsGrew {
+								execCtx.Engine.appendProgress(ev)
+							} else {
+								execCtx.Engine.appendProgressLivenessOnly(ev)
 							}
 						}
 					case <-heartbeatStop:
@@ -1159,22 +1168,31 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			ticker := time.NewTicker(interval)
 			defer ticker.Stop()
 			var lastStdoutSz, lastStderrSz int64
+			lastOutputTime := time.Now()
 			for {
 				select {
 				case <-ticker.C:
 					stdoutSz, _ := fileSize(stdoutPath)
 					stderrSz, _ := fileSize(stderrPath)
-					if stdoutSz > lastStdoutSz || stderrSz > lastStderrSz {
+					outputGrew := stdoutSz > lastStdoutSz || stderrSz > lastStderrSz
+					if outputGrew {
 						lastStdoutSz = stdoutSz
 						lastStderrSz = stderrSz
-						if execCtx != nil && execCtx.Engine != nil {
-							execCtx.Engine.appendProgress(map[string]any{
-								"event":        "stage_heartbeat",
-								"node_id":      node.ID,
-								"elapsed_s":    int(time.Since(start).Seconds()),
-								"stdout_bytes": stdoutSz,
-								"stderr_bytes": stderrSz,
-							})
+						lastOutputTime = time.Now()
+					}
+					if execCtx != nil && execCtx.Engine != nil {
+						ev := map[string]any{
+							"event":               "stage_heartbeat",
+							"node_id":             node.ID,
+							"elapsed_s":           int(time.Since(start).Seconds()),
+							"stdout_bytes":        stdoutSz,
+							"stderr_bytes":        stderrSz,
+							"since_last_output_s": int(time.Since(lastOutputTime).Seconds()),
+						}
+						if outputGrew {
+							execCtx.Engine.appendProgress(ev)
+						} else {
+							execCtx.Engine.appendProgressLivenessOnly(ev)
 						}
 					}
 				case <-heartbeatStop:

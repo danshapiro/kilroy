@@ -350,7 +350,9 @@ digraph G {
 // TestRunWithConfig_APIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine verifies
 // that the stall watchdog still fires when the API agent_loop session is truly
 // stalled (no new session events) even though the heartbeat goroutine is running.
-// The conditional heartbeat should NOT emit progress when event_count is static.
+// Heartbeat events are emitted unconditionally for observability but use
+// appendProgressLivenessOnly when no new events are produced, which does not
+// reset the stall watchdog timer.
 func TestRunWithConfig_APIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
@@ -417,7 +419,9 @@ digraph G {
 // TestRunWithConfig_CLIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine verifies
 // that the stall watchdog still fires when the CLI codergen process is truly
 // stalled (no stdout/stderr output) even though the heartbeat goroutine is running.
-// The conditional heartbeat should NOT emit progress when file sizes are static.
+// Heartbeat events are emitted unconditionally for observability but use
+// appendProgressLivenessOnly when no output growth is detected, which does not
+// reset the stall watchdog timer.
 func TestRunWithConfig_CLIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
@@ -470,6 +474,95 @@ digraph G {
 		t.Fatalf("expected stall watchdog error, got: %v", err)
 	}
 	t.Logf("stall watchdog fired as expected: %v", err)
+}
+
+func TestRunWithConfig_HeartbeatEmitsDuringQuietPeriods(t *testing.T) {
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+
+	pinned := writePinnedCatalog(t)
+	cxdbSrv := newCXDBTestServer(t)
+
+	// Create a mock codex CLI that produces initial output, then goes quiet,
+	// then produces more output. The quiet period should still produce heartbeats.
+	cli := filepath.Join(t.TempDir(), "codex")
+	if err := os.WriteFile(cli, []byte(`#!/usr/bin/env bash
+set -euo pipefail
+echo '{"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"starting"}]}}' >&1
+# Quiet period: no output for 3 seconds.
+sleep 3
+echo '{"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}' >&1
+`), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL", "1s")
+	t.Setenv("KILROY_CODEX_IDLE_TIMEOUT", "10s")
+
+	cfg := &RunConfigFile{Version: 1}
+	cfg.Repo.Path = repo
+	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
+	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
+	cfg.LLM.CLIProfile = "test_shim"
+	cfg.LLM.Providers = map[string]ProviderConfig{
+		"openai": {Backend: BackendCLI, Executable: cli},
+	}
+	cfg.ModelDB.OpenRouterModelInfoPath = pinned
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+	cfg.Git.RunBranchPrefix = "attractor/run"
+
+	dot := []byte(`
+digraph G {
+  graph [goal="test quiet period heartbeats"]
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do something quiet"]
+  start -> a -> exit
+}
+`)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "quiet-heartbeat-test", LogsRoot: logsRoot, AllowTestShim: true})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+
+	progressPath := filepath.Join(res.LogsRoot, "progress.ndjson")
+	data, err := os.ReadFile(progressPath)
+	if err != nil {
+		t.Fatalf("read progress.ndjson: %v", err)
+	}
+
+	heartbeats := 0
+	var hasQuietHeartbeat bool
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ev map[string]any
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		if ev["event"] == "stage_heartbeat" && ev["node_id"] == "a" {
+			heartbeats++
+			if _, ok := ev["since_last_output_s"]; !ok {
+				t.Error("heartbeat missing since_last_output_s field")
+			}
+			sinceOutput, _ := ev["since_last_output_s"].(float64)
+			if sinceOutput >= 1 {
+				hasQuietHeartbeat = true
+			}
+		}
+	}
+	if heartbeats < 2 {
+		t.Fatalf("expected at least 2 heartbeat events (some during quiet period), got %d", heartbeats)
+	}
+	if !hasQuietHeartbeat {
+		t.Fatal("expected at least one heartbeat with since_last_output_s >= 1 (quiet period heartbeat)")
+	}
+	t.Logf("found %d heartbeat events, quiet period heartbeats present", heartbeats)
 }
 
 func TestRunWithConfig_HeartbeatStopsAfterProcessExit(t *testing.T) {
