@@ -560,11 +560,16 @@ func TestIntegration_FailedPipelineStatus(t *testing.T) {
 	// Mark as failed.
 	ps.SetResult(nil, fmt.Errorf("node X exploded"))
 
-	resp, _ := http.Get(ts.URL + "/pipelines/" + runID)
+	resp, err := http.Get(ts.URL + "/pipelines/" + runID)
+	if err != nil {
+		t.Fatalf("GET /pipelines/%s: %v", runID, err)
+	}
 	defer resp.Body.Close()
 
 	var status PipelineStatus
-	json.NewDecoder(resp.Body).Decode(&status)
+	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
+		t.Fatalf("decode pipeline status: %v", err)
+	}
 	if status.State != "fail" {
 		t.Errorf("expected state=fail, got %q", status.State)
 	}

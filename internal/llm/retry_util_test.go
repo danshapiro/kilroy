@@ -229,4 +229,3 @@ func TestRetry_UnknownErrors_DefaultRetryable(t *testing.T) {
 		t.Fatalf("attempts: got %d want 3", attempts)
 	}
 }
-

@@ -365,13 +365,13 @@ func dispatchParallelBranchesStreaming(
 			if shouldCancel {
 				terminated = true
 				exec.Engine.appendProgress(map[string]any{
-					"event":        "early_termination",
-					"node_id":      sourceNodeID,
-					"reason":       reason,
-					"received":     received,
-					"total":        total,
+					"event":          "early_termination",
+					"node_id":        sourceNodeID,
+					"reason":         reason,
+					"received":       received,
+					"total":          total,
 					"success_so_far": successSoFar,
-					"fail_so_far":   failSoFar,
+					"fail_so_far":    failSoFar,
 				})
 				cancel() // Cancel remaining branches immediately.
 			}

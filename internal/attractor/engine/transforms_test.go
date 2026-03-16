@@ -182,4 +182,3 @@ digraph G {
 		t.Fatalf("$goal placeholder still present: %q", got)
 	}
 }
-

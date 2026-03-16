@@ -83,4 +83,3 @@ func initGitRepo(t *testing.T, dir string) {
 	run("add", "README.md")
 	run("commit", "-m", "init")
 }
-

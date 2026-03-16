@@ -154,12 +154,12 @@ func buildStageRuntimePreamble(execCtx *Execution, nodeID string) string {
 		return ""
 	}
 	return strings.TrimSpace(
-		"Execution context:\n"+
-			"- $"+runIDEnvKey+"="+runID+"\n"+
-			"- $"+logsRootEnvKey+"="+logsRoot+"\n"+
-			"- $"+stageLogsDirEnvKey+"="+stageDir+"\n"+
-			"- $"+worktreeDirEnvKey+"="+worktree+"\n"+
-			"- $"+nodeIDEnvKey+"="+strings.TrimSpace(nodeID)+"\n",
+		"Execution context:\n" +
+			"- $" + runIDEnvKey + "=" + runID + "\n" +
+			"- $" + logsRootEnvKey + "=" + logsRoot + "\n" +
+			"- $" + stageLogsDirEnvKey + "=" + stageDir + "\n" +
+			"- $" + worktreeDirEnvKey + "=" + worktree + "\n" +
+			"- $" + nodeIDEnvKey + "=" + strings.TrimSpace(nodeID) + "\n",
 	)
 }
 

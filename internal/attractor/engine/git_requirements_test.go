@@ -43,4 +43,3 @@ func TestRun_FailsWhenNotAGitRepo(t *testing.T) {
 		t.Fatalf("expected error, got nil")
 	}
 }
-

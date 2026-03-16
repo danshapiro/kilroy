@@ -81,11 +81,11 @@ func TestManagerLoop_StopCondition_ReturnsSuccess(t *testing.T) {
 	node := &model.Node{
 		ID: "manager2",
 		Attrs: map[string]string{
-			"manager.max_cycles":      "100",
-			"manager.poll_interval":   "1ms",
-			"manager.actions":         "wait",
-			"manager.stop_condition":  "context.should_stop = yes",
-			"stack.child_autostart":   "false",
+			"manager.max_cycles":     "100",
+			"manager.poll_interval":  "1ms",
+			"manager.actions":        "wait",
+			"manager.stop_condition": "context.should_stop = yes",
+			"stack.child_autostart":  "false",
 		},
 	}
 	graph := &model.Graph{
@@ -124,11 +124,11 @@ func TestManagerLoop_StopConditionNotMet_CyclesExhaust(t *testing.T) {
 	node := &model.Node{
 		ID: "manager3",
 		Attrs: map[string]string{
-			"manager.max_cycles":      "5",
-			"manager.poll_interval":   "1ms",
-			"manager.actions":         "wait",
-			"manager.stop_condition":  "context.should_stop = yes",
-			"stack.child_autostart":   "false",
+			"manager.max_cycles":     "5",
+			"manager.poll_interval":  "1ms",
+			"manager.actions":        "wait",
+			"manager.stop_condition": "context.should_stop = yes",
+			"stack.child_autostart":  "false",
 		},
 	}
 	graph := &model.Graph{
@@ -299,10 +299,10 @@ func TestManagerLoop_AutostartFalseWithoutDotfile_DoesNotFailFast(t *testing.T) 
 	node := &model.Node{
 		ID: "manager-no-autostart",
 		Attrs: map[string]string{
-			"manager.max_cycles":     "2",
-			"manager.poll_interval":  "1ms",
-			"manager.actions":        "wait",
-			"stack.child_autostart":  "false",
+			"manager.max_cycles":    "2",
+			"manager.poll_interval": "1ms",
+			"manager.actions":       "wait",
+			"stack.child_autostart": "false",
 			// stack.child_dotfile intentionally absent
 		},
 	}

@@ -128,4 +128,3 @@ func TestLoadModelCatalogFromOpenRouterJSON_GetListLatest_Extended(t *testing.T)
 		t.Fatalf("expected no google reasoning model in sample catalog; got %+v", latestReasoning)
 	}
 }
-

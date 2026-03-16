@@ -74,4 +74,3 @@ digraph G {
 		t.Fatalf("routed.txt: got %q want %q", got, "fail")
 	}
 }
-

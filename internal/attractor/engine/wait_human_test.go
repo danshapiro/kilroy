@@ -205,4 +205,3 @@ func newTestGraph(t *testing.T, gateID string, edgeLabelTargets ...string) *mode
 	}
 	return g
 }
-

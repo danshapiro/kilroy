@@ -85,4 +85,3 @@ func DefaultClient() (*Client, error) {
 	defaultClientMu.Unlock()
 	return c, err
 }
-

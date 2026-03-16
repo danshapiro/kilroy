@@ -274,12 +274,12 @@ func TestFormatCXDBTurn_AssistantMessage(t *testing.T) {
 		TypeVersion: 1,
 		Depth:       8,
 		Payload: map[string]any{
-			"timestamp_ms":  float64(1739163625000),
-			"model":         "claude-sonnet-4-5-20250929",
-			"input_tokens":  float64(1500),
-			"output_tokens": float64(42),
+			"timestamp_ms":   float64(1739163625000),
+			"model":          "claude-sonnet-4-5-20250929",
+			"input_tokens":   float64(1500),
+			"output_tokens":  float64(42),
 			"tool_use_count": float64(2),
-			"text":          "Let me read the file and check the tests.",
+			"text":           "Let me read the file and check the tests.",
 		},
 	}
 	got := formatCXDBTurn(turn)
@@ -309,12 +309,12 @@ func TestFormatCXDBTurn_AssistantMessageTextOnly(t *testing.T) {
 		TypeVersion: 1,
 		Depth:       9,
 		Payload: map[string]any{
-			"timestamp_ms":  float64(1739163625000),
-			"model":         "claude-sonnet-4-5-20250929",
-			"input_tokens":  float64(500),
-			"output_tokens": float64(10),
+			"timestamp_ms":   float64(1739163625000),
+			"model":          "claude-sonnet-4-5-20250929",
+			"input_tokens":   float64(500),
+			"output_tokens":  float64(10),
 			"tool_use_count": float64(0),
-			"text":          "Done.",
+			"text":           "Done.",
 		},
 	}
 	got := formatCXDBTurn(turn)

@@ -53,4 +53,3 @@ func TestRequestValidate_ToolsValidated(t *testing.T) {
 		t.Fatalf("expected nil schema to be allowed; got %v", err)
 	}
 }
-

@@ -51,4 +51,3 @@ func validateToolParameters(params map[string]any) error {
 	}
 	return nil
 }
-

@@ -72,4 +72,3 @@ func TestRegistryBundle_FieldTagsAreNumericAndUnique(t *testing.T) {
 		}
 	}
 }
-

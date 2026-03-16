@@ -12,4 +12,3 @@ func TestNewFromEnv_ErrorsWhenNoProvidersConfigured(t *testing.T) {
 		t.Fatalf("expected error, got nil")
 	}
 }
-

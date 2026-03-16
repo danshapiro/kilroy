@@ -56,4 +56,3 @@ digraph G {
 		t.Fatalf("expected error, got nil")
 	}
 }
-

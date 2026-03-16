@@ -23,9 +23,9 @@ func (e *nonHTTPErrorBase) Error() string {
 	}
 	return fmt.Sprintf("%s error: %s", e.provider, msg)
 }
-func (e *nonHTTPErrorBase) Provider() string          { return e.provider }
-func (e *nonHTTPErrorBase) StatusCode() int           { return 0 }
-func (e *nonHTTPErrorBase) Retryable() bool           { return e.retryable }
+func (e *nonHTTPErrorBase) Provider() string           { return e.provider }
+func (e *nonHTTPErrorBase) StatusCode() int            { return 0 }
+func (e *nonHTTPErrorBase) Retryable() bool            { return e.retryable }
 func (e *nonHTTPErrorBase) RetryAfter() *time.Duration { return e.retryAfter }
 
 type AbortError struct{ nonHTTPErrorBase }

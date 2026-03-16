@@ -46,4 +46,3 @@ func DataURI(mimeType string, data []byte) string {
 	}
 	return fmt.Sprintf("data:%s;base64,%s", mimeType, base64.StdEncoding.EncodeToString(data))
 }
-
