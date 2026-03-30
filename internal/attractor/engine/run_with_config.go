@@ -330,8 +330,8 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 		bin        *cxdb.BinaryClient
 		startup    *CXDBStartupInfo
 	)
-	if !overrides.DisableCXDB {
-		// CXDB is required in v1 and must be reachable.
+	cxdbConfigured := strings.TrimSpace(cfg.CXDB.BinaryAddr) != "" && strings.TrimSpace(cfg.CXDB.HTTPBaseURL) != ""
+	if !overrides.DisableCXDB && cxdbConfigured {
 		var cxdbStartup *CXDBStartupInfo
 		cxdbClient, bin, cxdbStartup, err = ensureCXDBReady(ctx, cfg, opts.LogsRoot, opts.RunID)
 		if err != nil {

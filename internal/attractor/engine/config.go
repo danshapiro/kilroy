@@ -309,9 +309,6 @@ func validateConfig(cfg *RunConfigFile) error {
 	if strings.TrimSpace(cfg.Repo.Path) == "" {
 		return fmt.Errorf("repo.path is required")
 	}
-	if strings.TrimSpace(cfg.CXDB.BinaryAddr) == "" || strings.TrimSpace(cfg.CXDB.HTTPBaseURL) == "" {
-		return fmt.Errorf("cxdb.binary_addr and cxdb.http_base_url are required in v1")
-	}
 	if cfg.CXDB.Autostart.WaitTimeoutMS < 0 {
 		return fmt.Errorf("cxdb.autostart.wait_timeout_ms must be >= 0")
 	}
