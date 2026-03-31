@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -20,6 +21,9 @@ func TestResolveToolShellPathWith_NonWindowsUsesLookPath(t *testing.T) {
 }
 
 func TestResolveToolShellPathWith_WindowsPrefersGitBashWhenBashIsWSLShim(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-specific path handling")
+	}
 	lookPath := func(name string) (string, error) {
 		switch name {
 		case "bash":
@@ -41,6 +45,9 @@ func TestResolveToolShellPathWith_WindowsPrefersGitBashWhenBashIsWSLShim(t *test
 }
 
 func TestResolveToolShellPathWith_WindowsFallsBackToCommonGitBashWhenBashMissing(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows-specific path handling")
+	}
 	lookPath := func(name string) (string, error) {
 		return "", errors.New("not found")
 	}

@@ -254,7 +254,7 @@ func TestEmitCXDBToolTurns_ShouldRecordAssistantMessageOnTextEnd(t *testing.T) {
 	}
 }
 
-func TestEmitCXDBToolTurns_ShouldSkipEmptyAssistantText(t *testing.T) {
+func TestEmitCXDBToolTurns_EmptyAssistantTextRecordsFallback(t *testing.T) {
 	srv := newCXDBTestServer(t)
 	eng := newTestEngineWithCXDB(t, srv)
 
@@ -270,9 +270,17 @@ func TestEmitCXDBToolTurns_ShouldSkipEmptyAssistantText(t *testing.T) {
 		t.Fatal("expected at least one CXDB context")
 	}
 	turns := srv.Turns(ctxIDs[0])
+	found := false
 	for _, turn := range turns {
 		if turn["type_id"] == "com.kilroy.attractor.AssistantMessage" {
-			t.Fatal("should not record AssistantMessage for empty text")
+			found = true
+			payload, _ := turn["payload"].(map[string]any)
+			if text, _ := payload["text"].(string); text != "[tool_use]" {
+				t.Fatalf("expected [tool_use] fallback text, got %q", text)
+			}
 		}
+	}
+	if !found {
+		t.Fatal("expected AssistantMessage with [tool_use] fallback for empty text")
 	}
 }
