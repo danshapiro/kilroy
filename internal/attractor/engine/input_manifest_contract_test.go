@@ -73,6 +73,7 @@ digraph G {
 func TestInputManifestContract_DisabledSuppressesEnvPreambleAndEvents(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
+	t.Setenv(inputsManifestEnvKey, "/tmp/ambient-inputs-manifest.json")
 	mustWriteInputFile(t, filepath.Join(repo, ".ai", "definition_of_done.md"), "line by line")
 
 	cli := writeInputManifestProbeCLI(t, false)

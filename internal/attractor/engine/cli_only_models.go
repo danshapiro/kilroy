@@ -5,7 +5,8 @@ import "strings"
 // cliOnlyModelIDs lists models that MUST route through CLI backend regardless
 // of provider backend configuration. These models have no API endpoint.
 var cliOnlyModelIDs = map[string]bool{
-	"gpt-5.4-spark": true,
+	"gpt-5.3-codex-spark": true,
+	"gpt-5.4-spark":       true,
 }
 
 // isCLIOnlyModel returns true if the given model ID (with or without provider

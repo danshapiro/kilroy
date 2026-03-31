@@ -17,6 +17,17 @@ import (
 //
 // This is best-effort: progress logging must never block or fail a run.
 func (e *Engine) appendProgress(ev map[string]any) {
+	e.appendProgressImpl(ev, true)
+}
+
+// appendProgressLivenessOnly writes a progress event to progress.ndjson and
+// live.json for observability but does NOT reset the stall watchdog timer.
+// Use this for unconditional heartbeat emissions that should not mask true stalls.
+func (e *Engine) appendProgressLivenessOnly(ev map[string]any) {
+	e.appendProgressImpl(ev, false)
+}
+
+func (e *Engine) appendProgressImpl(ev map[string]any, updateStallTimer bool) {
 	if e == nil {
 		return
 	}
@@ -47,7 +58,9 @@ func (e *Engine) appendProgress(ev map[string]any) {
 
 	e.progressMu.Lock()
 	defer e.progressMu.Unlock()
-	e.lastProgressAt = now
+	if updateStallTimer {
+		e.lastProgressAt = now
+	}
 
 	// Append to progress.ndjson.
 	// Intentionally open/close on each event so writes are immediately flushed

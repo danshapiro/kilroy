@@ -110,7 +110,7 @@ func loadEnvFile(args []string) []string {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  kilroy --version")
-	fmt.Fprintln(os.Stderr, "  kilroy [--env-file <path>] attractor run [--detach] [--preflight|--test-run] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]")
+	fmt.Fprintln(os.Stderr, "  kilroy [--env-file <path>] attractor run [--detach] [--validate|--preflight|--test-run] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --logs-root <dir>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --cxdb <http_base_url> --context-id <id>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]")
@@ -175,7 +175,7 @@ func attractorRun(args []string) {
 		switch args[i] {
 		case "--detach":
 			detach = true
-		case "--preflight":
+		case "--preflight", "--validate":
 			preflightOnly = true
 		case "--test-run":
 			preflightOnly = true
@@ -233,7 +233,7 @@ func attractorRun(args []string) {
 		os.Exit(1)
 	}
 	if preflightOnly && detach {
-		fmt.Fprintln(os.Stderr, "--preflight/--test-run cannot be combined with --detach")
+		fmt.Fprintln(os.Stderr, "--validate/--preflight/--test-run cannot be combined with --detach")
 		os.Exit(1)
 	}
 	if err := ensureFreshKilroyBuild(confirmStaleBuild); err != nil {

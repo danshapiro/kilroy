@@ -59,6 +59,29 @@ func TestBuildBaseNodeEnv_StripsClaudeCode(t *testing.T) {
 	}
 }
 
+func TestBuildBaseNodeEnv_StripsKilroyContractEnvKeys(t *testing.T) {
+	outerValues := map[string]string{
+		runIDEnvKey:                   "outer-run",
+		nodeIDEnvKey:                  "outer-node",
+		logsRootEnvKey:                "/tmp/outer-logs",
+		stageLogsDirEnvKey:            "/tmp/outer-logs/outer-node",
+		worktreeDirEnvKey:             "/tmp/outer-worktree",
+		inputsManifestEnvKey:          "/tmp/outer-inputs-manifest.json",
+		stageStatusPathEnvKey:         "/tmp/outer-status.json",
+		stageStatusFallbackPathEnvKey: "/tmp/outer-fallback-status.json",
+	}
+	for key, value := range outerValues {
+		t.Setenv(key, value)
+	}
+
+	env := buildBaseNodeEnv(ResolvedArtifactPolicy{})
+	for key := range outerValues {
+		if envHasKey(env, key) {
+			t.Fatalf("%s should be stripped from base env", key)
+		}
+	}
+}
+
 func TestBuildBaseNodeEnv_PreservesExplicitToolchainPaths(t *testing.T) {
 	home := t.TempDir()
 	cargoHome := filepath.Join(home, ".cargo")

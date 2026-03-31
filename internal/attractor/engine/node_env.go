@@ -15,12 +15,27 @@ const (
 	inputsManifestEnvKey = "KILROY_INPUTS_MANIFEST_PATH"
 )
 
+var baseNodeEnvStripKeys = []string{
+	"CLAUDECODE",
+	runIDEnvKey,
+	nodeIDEnvKey,
+	logsRootEnvKey,
+	stageLogsDirEnvKey,
+	worktreeDirEnvKey,
+	inputsManifestEnvKey,
+	stageStatusPathEnvKey,
+	stageStatusFallbackPathEnvKey,
+}
+
 // buildBaseNodeEnv constructs the base environment for any node execution.
 // It starts from os.Environ(), strips CLAUDECODE, then applies resolved
 // artifact policy environment variables.
 func buildBaseNodeEnv(rp ResolvedArtifactPolicy) []string {
 	base := os.Environ()
-	base = stripEnvKey(base, "CLAUDECODE")
+	// Scrub inherited process state that can corrupt stage-local contracts.
+	for _, key := range baseNodeEnvStripKeys {
+		base = stripEnvKey(base, key)
+	}
 
 	overrides := make(map[string]string, len(rp.Env.Vars))
 	for k, v := range rp.Env.Vars {

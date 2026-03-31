@@ -630,6 +630,31 @@ digraph G {
 	}
 }
 
+func TestAttractorRun_ValidateAlias_Accepted(t *testing.T) {
+	bin := buildKilroyBinary(t)
+	repo := initTestRepo(t)
+	catalog := writePinnedCatalog(t)
+	cfg := writeRunConfig(t, repo, "http://127.0.0.1:9", "127.0.0.1:9", catalog)
+
+	graph := filepath.Join(t.TempDir(), "validate.dot")
+	_ = os.WriteFile(graph, []byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit [shape=Msquare]
+  start -> exit
+}
+`), 0o644)
+
+	logsRoot := filepath.Join(t.TempDir(), "logs")
+	code, out := runKilroy(t, bin, "attractor", "run", "--graph", graph, "--config", cfg, "--run-id", "validate-flag", "--logs-root", logsRoot, "--no-cxdb", "--validate")
+	if code != 0 {
+		t.Fatalf("exit code: got %d want 0\n%s", code, out)
+	}
+	if !strings.Contains(out, "preflight=true") {
+		t.Fatalf("expected preflight marker, got:\n%s", out)
+	}
+}
+
 func TestAttractorRun_PreflightRejectsDetach(t *testing.T) {
 	bin := buildKilroyBinary(t)
 	repo := initTestRepo(t)
@@ -650,7 +675,7 @@ digraph G {
 	if code != 1 {
 		t.Fatalf("exit code: got %d want 1\n%s", code, out)
 	}
-	if !strings.Contains(out, "--preflight/--test-run cannot be combined with --detach") {
+	if !strings.Contains(out, "--validate/--preflight/--test-run cannot be combined with --detach") {
 		t.Fatalf("expected incompatible flag error, got:\n%s", out)
 	}
 }
@@ -781,6 +806,9 @@ func TestUsage_IncludesPreflightFlags(t *testing.T) {
 	code, out := runKilroy(t, bin)
 	if code != 1 {
 		t.Fatalf("exit code: got %d want 1\n%s", code, out)
+	}
+	if !strings.Contains(out, "--validate") {
+		t.Fatalf("usage should include --validate; output:\n%s", out)
 	}
 	if !strings.Contains(out, "--preflight") {
 		t.Fatalf("usage should include --preflight; output:\n%s", out)

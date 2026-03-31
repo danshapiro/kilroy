@@ -44,6 +44,59 @@ func TestInputReferenceScan_IgnoresURLsAndParsesWindowsGlobToken(t *testing.T) {
 	requireRefKind(t, got, "docs/spec.md", InputReferenceKindPath)
 }
 
+func TestInputReferenceScan_RejectsNaturalLanguageWithBrackets(t *testing.T) {
+	scanner := deterministicInputReferenceScanner{}
+	// These tokens from issue #48 should NOT be classified as globs.
+	badTokens := []string{
+		`you are wielding ([ch]) [weapon`,
+		`DEFAULT_TOOL_LIMITS[tool_name`,
+		`array[index`,
+		`map[string]any`,
+	}
+	for _, token := range badTokens {
+		refs := scanner.Scan("test.md", []byte(token))
+		for _, ref := range refs {
+			if ref.Kind == InputReferenceKindGlob {
+				t.Errorf("token %q should not be classified as glob, but got pattern=%q kind=%q", token, ref.Pattern, ref.Kind)
+			}
+		}
+	}
+}
+
+func TestInputReferenceScan_AcceptsValidGlobBrackets(t *testing.T) {
+	scanner := deterministicInputReferenceScanner{}
+	// These ARE valid globs with matched brackets.
+	content := strings.Join([]string{
+		`"src/[abc]/*.go"`,
+		`"docs/[a-z]*.md"`,
+	}, "\n")
+	refs := scanner.Scan("test.md", []byte(content))
+	got := map[string]InputReferenceKind{}
+	for _, ref := range refs {
+		got[ref.Pattern] = ref.Kind
+	}
+	requireRefKind(t, got, "src/[abc]/*.go", InputReferenceKindGlob)
+	requireRefKind(t, got, "docs/[a-z]*.md", InputReferenceKindGlob)
+}
+
+func TestIsLikelyArtifactInputPath_ExcludesWorktrees(t *testing.T) {
+	cases := []struct {
+		path string
+		want bool
+	}{
+		{".worktrees/rogue-logs/worktree/.cargo-target/foo.rs", true},
+		{".worktrees/some-branch/src/main.go", true},
+		{"src/.cargo-target/debug/build/foo.o", true},
+		{"src/main.go", false},
+		{"docs/spec.md", false},
+	}
+	for _, tc := range cases {
+		if got := isLikelyArtifactInputPath(tc.path); got != tc.want {
+			t.Errorf("isLikelyArtifactInputPath(%q) = %v, want %v", tc.path, got, tc.want)
+		}
+	}
+}
+
 func requireRefKind(t *testing.T, got map[string]InputReferenceKind, pattern string, want InputReferenceKind) {
 	t.Helper()
 	kind, ok := got[pattern]

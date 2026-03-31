@@ -163,13 +163,17 @@ func looksLikeReferenceToken(token string) bool {
 	if strings.ContainsAny(token, "<>|") {
 		return false
 	}
+	// Reject tokens with spaces - they are natural language, not paths/globs.
+	if strings.ContainsAny(token, " \t") {
+		return false
+	}
 	if strings.Contains(token, "/") || strings.Contains(token, "\\") {
 		return true
 	}
 	if windowsAbsPathRE.MatchString(token) {
 		return true
 	}
-	if strings.ContainsAny(token, "*?[") {
+	if looksLikeGlobPattern(token) {
 		return true
 	}
 	return false
@@ -182,7 +186,7 @@ func looksLikeStructuredReferenceToken(token string) bool {
 	if strings.Contains(token, "](") || strings.ContainsAny(token, "<>|") {
 		return false
 	}
-	if strings.ContainsAny(token, "*?[") {
+	if looksLikeGlobPattern(token) {
 		return true
 	}
 	// Structured captures (markdown links/quoted tokens) may contain local file
@@ -194,8 +198,44 @@ func looksLikeStructuredReferenceToken(token string) bool {
 }
 
 func classifyReferenceKind(pattern string) InputReferenceKind {
-	if strings.ContainsAny(pattern, "*?[") {
+	if looksLikeGlobPattern(pattern) {
 		return InputReferenceKindGlob
 	}
 	return InputReferenceKindPath
+}
+
+// looksLikeGlobPattern returns true if token contains valid glob metacharacters.
+// Tokens containing * or ? are always treated as globs. Tokens containing [
+// are only treated as globs if the bracket forms a valid character class (i.e.
+// has a matching ]) AND the token also has path-like context (a path separator,
+// * or ?) - this prevents natural language fragments like
+// "DEFAULT_TOOL_LIMITS[tool_name" and programming constructs like
+// "map[string]any" from being classified as globs.
+func looksLikeGlobPattern(token string) bool {
+	if strings.ContainsAny(token, "*?") {
+		return true
+	}
+	if !strings.Contains(token, "[") {
+		return false
+	}
+	// Validate that every [ has a matching ] (valid character class).
+	hasValidBracket := false
+	for i := 0; i < len(token); i++ {
+		if token[i] == '[' {
+			j := strings.IndexByte(token[i+1:], ']')
+			if j < 0 {
+				// Unmatched [ - not a valid glob.
+				return false
+			}
+			hasValidBracket = true
+			// Skip past the matched ]
+			i += j + 1
+		}
+	}
+	if !hasValidBracket {
+		return false
+	}
+	// Brackets alone (e.g. "map[string]any") are not enough to be a glob.
+	// Require a path separator to disambiguate from programming constructs.
+	return strings.ContainsAny(token, "/\\")
 }

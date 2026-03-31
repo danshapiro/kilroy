@@ -9,17 +9,20 @@ import (
 type StageStatus string
 
 const (
-	StatusSuccess        StageStatus = "success"
-	StatusPartialSuccess StageStatus = "partial_success"
-	StatusRetry          StageStatus = "retry"
-	StatusFail           StageStatus = "fail"
-	StatusSkipped        StageStatus = "skipped"
+	StatusSuccess         StageStatus = "success"
+	StatusDegradedSuccess StageStatus = "degraded_success"
+	StatusPartialSuccess  StageStatus = "partial_success"
+	StatusRetry           StageStatus = "retry"
+	StatusFail            StageStatus = "fail"
+	StatusSkipped         StageStatus = "skipped"
 )
 
 func ParseStageStatus(s string) (StageStatus, error) {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "success", "ok":
 		return StatusSuccess, nil
+	case "degraded_success", "degradedsuccess", "degraded-success":
+		return StatusDegradedSuccess, nil
 	case "partial_success", "partialsuccess", "partial-success":
 		return StatusPartialSuccess, nil
 	case "retry":
@@ -49,20 +52,36 @@ func (s StageStatus) Valid() bool {
 // (success, partial_success, retry, fail, skipped) rather than a custom routing value.
 func (s StageStatus) IsCanonical() bool {
 	switch s {
-	case StatusSuccess, StatusPartialSuccess, StatusRetry, StatusFail, StatusSkipped:
+	case StatusSuccess, StatusDegradedSuccess, StatusPartialSuccess, StatusRetry, StatusFail, StatusSkipped:
 		return true
 	default:
 		return false
 	}
 }
 
+// VerificationResult captures the outcome of verification commands run during a stage.
+type VerificationResult struct {
+	Status        string              `json:"status"`                   // "passed", "failed", or "blocked"
+	BlockedReason string              `json:"blocked_reason,omitempty"` // why verification could not run
+	Commands      []VerificationEntry `json:"commands,omitempty"`       // individual command results
+}
+
+// VerificationEntry records the result of a single verification command.
+type VerificationEntry struct {
+	Command  string `json:"command"`
+	ExitCode int    `json:"exit_code"`
+	Blocked  bool   `json:"blocked,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
 type Outcome struct {
-	Status           StageStatus    `json:"status"`
-	PreferredLabel   string         `json:"preferred_label,omitempty"`
-	SuggestedNextIDs []string       `json:"suggested_next_ids,omitempty"`
-	ContextUpdates   map[string]any `json:"context_updates,omitempty"`
-	Notes            string         `json:"notes,omitempty"`
-	FailureReason    string         `json:"failure_reason,omitempty"`
+	Status           StageStatus         `json:"status"`
+	PreferredLabel   string              `json:"preferred_label,omitempty"`
+	SuggestedNextIDs []string            `json:"suggested_next_ids,omitempty"`
+	ContextUpdates   map[string]any      `json:"context_updates,omitempty"`
+	Notes            string              `json:"notes,omitempty"`
+	FailureReason    string              `json:"failure_reason,omitempty"`
+	Verification     *VerificationResult `json:"verification,omitempty"`
 	// Details is optional structured information for failures (or for debugging).
 	// The engine does not use it for routing, but it must be preserved when present.
 	Details any `json:"details,omitempty"`
