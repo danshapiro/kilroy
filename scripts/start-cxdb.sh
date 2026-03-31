@@ -131,6 +131,14 @@ case "$container_state" in
     ;;
 esac
 
+# The CXDB Docker image bakes nginx with proxy_pass to the default HTTP port.
+# When using non-default ports, patch the nginx config to proxy to the actual port.
+current_proxy="$(docker exec "$CONTAINER_NAME" grep -oP 'proxy_pass http://127\.0\.0\.1:\K[0-9]+' /etc/nginx/nginx.conf 2>/dev/null | head -1 || true)"
+if [[ -n "$current_proxy" && "$current_proxy" != "$HTTP_PORT" ]]; then
+  docker exec "$CONTAINER_NAME" sed -i "s|proxy_pass http://127.0.0.1:${current_proxy}|proxy_pass http://127.0.0.1:${HTTP_PORT}|g" /etc/nginx/nginx.conf
+  docker exec "$CONTAINER_NAME" nginx -s reload 2>/dev/null || true
+fi
+
 poll_seconds="0.250"
 if (( POLL_INTERVAL_MS > 0 )); then
   poll_seconds="$(awk -v ms="$POLL_INTERVAL_MS" 'BEGIN { printf "%.3f", ms/1000 }')"
