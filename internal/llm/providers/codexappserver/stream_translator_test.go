@@ -148,3 +148,25 @@ func TestTranslateStream_ProviderEventPassthrough(t *testing.T) {
 		t.Fatalf("event_type: got %q want %q", events[0].EventType, "model/rerouted")
 	}
 }
+
+func TestTranslateStream_ItemCompletedToolEventPassthrough(t *testing.T) {
+	events := collectStreamEvents([]map[string]any{
+		streamNotification("item/completed", map[string]any{
+			"item": map[string]any{
+				"id":     "cmd_1",
+				"type":   "commandExecution",
+				"status": "completed",
+			},
+		}),
+	})
+
+	if len(events) != 1 {
+		t.Fatalf("event count: got %d want 1", len(events))
+	}
+	if events[0].Type != llm.StreamEventProviderEvent {
+		t.Fatalf("event type: got %q want %q", events[0].Type, llm.StreamEventProviderEvent)
+	}
+	if events[0].EventType != "item/completed" {
+		t.Fatalf("event_type: got %q want %q", events[0].EventType, "item/completed")
+	}
+}

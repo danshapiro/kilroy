@@ -175,7 +175,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 	}
 
 	body := map[string]any{
-		"model":               req.Model,
+		"model":               modelmeta.ProviderRelativeModelID("openai", req.Model),
 		"instructions":        instructions,
 		"input":               inputItems,
 		"parallel_tool_calls": false,

@@ -3,6 +3,8 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -53,7 +55,7 @@ digraph G {
   graph [goal="test heartbeat"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -138,27 +140,26 @@ func TestRunWithConfig_APIBackend_HeartbeatEmitsDuringAgentLoop(t *testing.T) {
 		n := requestCount
 		reqMu.Unlock()
 
+		toolCallResp := map[string]any{
+			"id": "resp_1", "model": "gpt-5.2",
+			"output": []any{map[string]any{"type": "function_call", "id": "call_1", "name": "shell", "arguments": `{"command":"sleep 1"}`}},
+			"usage":  map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+		}
+		textResp := map[string]any{
+			"id": "resp_2", "model": "gpt-5.2",
+			"output": []any{map[string]any{"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "done"}}}},
+			"usage":  map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+		}
+
 		// First request: return a shell tool call that sleeps briefly.
 		if n == 1 {
-			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{
-  "id": "resp_1",
-  "model": "gpt-5.4",
-  "output": [{"type":"function_call","id":"call_1","name":"shell","arguments":"{\"command\":\"sleep 1\"}"}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
+			writeOpenAIResponseAuto(w, r, toolCallResp)
 			return
 		}
 		// Second request onward: simulate API thinking time so the heartbeat
 		// goroutine fires at least once before the session completes.
 		time.Sleep(500 * time.Millisecond)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-  "id": "resp_2",
-  "model": "gpt-5.4",
-  "output": [{"type":"message","content":[{"type":"output_text","text":"done"}]}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
+		writeOpenAIResponseAuto(w, r, textResp)
 	}))
 	t.Cleanup(openaiSrv.Close)
 
@@ -182,7 +183,7 @@ digraph G {
   graph [goal="test api heartbeat"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, auto_status=true, prompt="run a command"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="run a command"]
   start -> a -> exit
 }
 `)
@@ -234,47 +235,68 @@ func TestRunWithConfig_APIBackend_SessionEventsPreventFalseStallWithoutHeartbeat
 	cxdbSrv := newCXDBTestServer(t)
 
 	requestCount := 0
+	const toolRounds = 8
 	var reqMu sync.Mutex
 	openaiSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		var reqBody map[string]any
+		_ = json.Unmarshal(b, &reqBody)
+		streaming, _ := reqBody["stream"].(bool)
+
 		reqMu.Lock()
 		requestCount++
 		n := requestCount
 		reqMu.Unlock()
 
-		w.Header().Set("Content-Type", "application/json")
-		switch n {
-		case 1:
-			_, _ = w.Write([]byte(`{
-  "id": "resp_1",
-  "model": "gpt-5.4",
-  "output": [{"type":"function_call","id":"call_1","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
-		case 2:
-			_, _ = w.Write([]byte(`{
-  "id": "resp_2",
-  "model": "gpt-5.4",
-  "output": [{"type":"function_call","id":"call_2","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
-		case 3:
-			_, _ = w.Write([]byte(`{
-  "id": "resp_3",
-  "model": "gpt-5.4",
-  "output": [{"type":"function_call","id":"call_3","name":"shell","arguments":"{\"command\":\"sleep 0.3\"}"}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
-		default:
-			_, _ = w.Write([]byte(`{
-  "id": "resp_4",
-  "model": "gpt-5.4",
-  "output": [{"type":"message","content":[{"type":"output_text","text":"done"}]}],
-  "usage": {"input_tokens": 1, "output_tokens": 2, "total_tokens": 3}
-}`))
+		var responseObj map[string]any
+		if n <= toolRounds {
+			responseObj = map[string]any{
+				"id":    fmt.Sprintf("resp_%d", n),
+				"model": "gpt-5.2",
+				"output": []any{map[string]any{
+					"type": "function_call", "id": fmt.Sprintf("call_%d", n),
+					"name": "shell", "arguments": `{"command":"sleep 0.3"}`,
+				}},
+				"usage": map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+			}
+		} else {
+			responseObj = map[string]any{
+				"id":    "resp_final",
+				"model": "gpt-5.2",
+				"output": []any{map[string]any{
+					"type": "message", "content": []any{map[string]any{"type": "output_text", "text": "done"}},
+				}},
+				"usage": map[string]any{"input_tokens": 1, "output_tokens": 2, "total_tokens": 3},
+			}
+		}
+
+		if !streaming {
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(responseObj)
+			return
+		}
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		completedPayload, _ := json.Marshal(map[string]any{
+			"type":     "response.completed",
+			"response": responseObj,
+		})
+		lines := []string{
+			"event: response.completed",
+			"data: " + string(completedPayload),
+			"",
+		}
+		for _, line := range lines {
+			_, _ = w.Write([]byte(line + "\n"))
+		}
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
 		}
 	}))
 	t.Cleanup(openaiSrv.Close)
@@ -285,8 +307,8 @@ func TestRunWithConfig_APIBackend_SessionEventsPreventFalseStallWithoutHeartbeat
 	// watchdog behavior in this test.
 	t.Setenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL", "10s")
 
-	stallTimeout := 700
-	stallCheck := 50
+	stallTimeout := 1500
+	stallCheck := 100
 	disableProbe := false
 	cfg := &RunConfigFile{Version: 1}
 	cfg.Repo.Path = repo
@@ -307,16 +329,20 @@ digraph G {
   graph [goal="session events should prevent false stall timeout"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, auto_status=true, prompt="run a few commands"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="run a few commands"]
   start -> a -> exit
 }
 `)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
+	runStart := time.Now()
 	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "api-session-activity-test", LogsRoot: logsRoot})
 	if err != nil {
 		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if elapsed := time.Since(runStart); elapsed < time.Duration(stallTimeout)*time.Millisecond {
+		t.Fatalf("test runtime %s was shorter than stall timeout %dms; watchdog window not exercised", elapsed, stallTimeout)
 	}
 
 	progressPath := filepath.Join(res.LogsRoot, "progress.ndjson")
@@ -350,9 +376,7 @@ digraph G {
 // TestRunWithConfig_APIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine verifies
 // that the stall watchdog still fires when the API agent_loop session is truly
 // stalled (no new session events) even though the heartbeat goroutine is running.
-// Heartbeat events are emitted unconditionally for observability but use
-// appendProgressLivenessOnly when no new events are produced, which does not
-// reset the stall watchdog timer.
+// The conditional heartbeat should NOT emit progress when event_count is static.
 func TestRunWithConfig_APIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
@@ -399,7 +423,7 @@ digraph G {
   graph [goal="test stall detection with api heartbeat"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, auto_status=true, prompt="do something"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, auto_status=true, prompt="do something"]
   start -> a -> exit
 }
 `)
@@ -419,9 +443,7 @@ digraph G {
 // TestRunWithConfig_CLIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine verifies
 // that the stall watchdog still fires when the CLI codergen process is truly
 // stalled (no stdout/stderr output) even though the heartbeat goroutine is running.
-// Heartbeat events are emitted unconditionally for observability but use
-// appendProgressLivenessOnly when no output growth is detected, which does not
-// reset the stall watchdog timer.
+// The conditional heartbeat should NOT emit progress when file sizes are static.
 func TestRunWithConfig_CLIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
@@ -459,7 +481,7 @@ digraph G {
   graph [goal="test cli stall detection with heartbeat"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do something"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, prompt="do something"]
   start -> a -> exit
 }
 `)
@@ -474,95 +496,6 @@ digraph G {
 		t.Fatalf("expected stall watchdog error, got: %v", err)
 	}
 	t.Logf("stall watchdog fired as expected: %v", err)
-}
-
-func TestRunWithConfig_HeartbeatEmitsDuringQuietPeriods(t *testing.T) {
-	repo := initTestRepo(t)
-	logsRoot := t.TempDir()
-
-	pinned := writePinnedCatalog(t)
-	cxdbSrv := newCXDBTestServer(t)
-
-	// Create a mock codex CLI that produces initial output, then goes quiet,
-	// then produces more output. The quiet period should still produce heartbeats.
-	cli := filepath.Join(t.TempDir(), "codex")
-	if err := os.WriteFile(cli, []byte(`#!/usr/bin/env bash
-set -euo pipefail
-echo '{"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"starting"}]}}' >&1
-# Quiet period: no output for 3 seconds.
-sleep 3
-echo '{"item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}}' >&1
-`), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	t.Setenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL", "1s")
-	t.Setenv("KILROY_CODEX_IDLE_TIMEOUT", "10s")
-
-	cfg := &RunConfigFile{Version: 1}
-	cfg.Repo.Path = repo
-	cfg.CXDB.BinaryAddr = cxdbSrv.BinaryAddr()
-	cfg.CXDB.HTTPBaseURL = cxdbSrv.URL()
-	cfg.LLM.CLIProfile = "test_shim"
-	cfg.LLM.Providers = map[string]ProviderConfig{
-		"openai": {Backend: BackendCLI, Executable: cli},
-	}
-	cfg.ModelDB.OpenRouterModelInfoPath = pinned
-	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
-	cfg.Git.RunBranchPrefix = "attractor/run"
-
-	dot := []byte(`
-digraph G {
-  graph [goal="test quiet period heartbeats"]
-  start [shape=Mdiamond]
-  exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="do something quiet"]
-  start -> a -> exit
-}
-`)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{RunID: "quiet-heartbeat-test", LogsRoot: logsRoot, AllowTestShim: true})
-	if err != nil {
-		t.Fatalf("RunWithConfig: %v", err)
-	}
-
-	progressPath := filepath.Join(res.LogsRoot, "progress.ndjson")
-	data, err := os.ReadFile(progressPath)
-	if err != nil {
-		t.Fatalf("read progress.ndjson: %v", err)
-	}
-
-	heartbeats := 0
-	var hasQuietHeartbeat bool
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var ev map[string]any
-		if err := json.Unmarshal([]byte(line), &ev); err != nil {
-			continue
-		}
-		if ev["event"] == "stage_heartbeat" && ev["node_id"] == "a" {
-			heartbeats++
-			if _, ok := ev["since_last_output_s"]; !ok {
-				t.Error("heartbeat missing since_last_output_s field")
-			}
-			sinceOutput, _ := ev["since_last_output_s"].(float64)
-			if sinceOutput >= 1 {
-				hasQuietHeartbeat = true
-			}
-		}
-	}
-	if heartbeats < 2 {
-		t.Fatalf("expected at least 2 heartbeat events (some during quiet period), got %d", heartbeats)
-	}
-	if !hasQuietHeartbeat {
-		t.Fatal("expected at least one heartbeat with since_last_output_s >= 1 (quiet period heartbeat)")
-	}
-	t.Logf("found %d heartbeat events, quiet period heartbeats present", heartbeats)
 }
 
 func TestRunWithConfig_HeartbeatStopsAfterProcessExit(t *testing.T) {

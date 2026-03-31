@@ -117,6 +117,48 @@ func TestAdapter_Complete_MapsToResponsesAPI(t *testing.T) {
 	}
 }
 
+func TestAdapter_Complete_NormalizesProviderPrefixedModelID(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		_ = json.Unmarshal(b, &gotBody)
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+  "id": "resp_1",
+  "model": "gpt-5.2",
+  "output": [{"type": "message", "content": [{"type":"output_text", "text":"ok"}]}],
+  "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}
+}`))
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err := a.Complete(ctx, llm.Request{Model: "openai/gpt-5.2", Messages: []llm.Message{llm.User("hi")}})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if gotBody == nil {
+		t.Fatalf("server did not capture request body")
+	}
+	gotModel, ok := gotBody["model"].(string)
+	if !ok {
+		t.Fatalf("request model field type: %#v", gotBody["model"])
+	}
+	if got := strings.TrimSpace(gotModel); got != "gpt-5.2" {
+		t.Fatalf("request model: got %q want %q", got, "gpt-5.2")
+	}
+}
+
 func TestOpenAIAdapter_NewWithProvider_UsesConfiguredName(t *testing.T) {
 	a := NewWithProvider("kimi", "k", "https://api.example.com")
 	if got := a.Name(); got != "kimi" {
@@ -442,6 +484,52 @@ func TestAdapter_Stream_YieldsTextDeltasAndFinish(t *testing.T) {
 	}
 	if !foundFinish {
 		t.Fatalf("expected FINISH event (kinds=%v)", kinds)
+	}
+}
+
+func TestAdapter_Stream_NormalizesProviderPrefixedModelID(t *testing.T) {
+	var gotBody map[string]any
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/responses" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		b, _ := io.ReadAll(r.Body)
+		_ = r.Body.Close()
+		_ = json.Unmarshal(b, &gotBody)
+
+		w.Header().Set("Content-Type", "text/event-stream")
+		f, _ := w.(http.Flusher)
+		_, _ = io.WriteString(w, "event: response.completed\n")
+		_, _ = io.WriteString(w, `data: {"type":"response.completed","response":{"id":"resp_1","model":"gpt-5.2","output":[{"type":"message","content":[{"type":"output_text","text":"Hello"}]}],"usage":{"input_tokens":1,"output_tokens":2,"total_tokens":3}}}`+"\n\n")
+		if f != nil {
+			f.Flush()
+		}
+	}))
+	t.Cleanup(srv.Close)
+
+	a := &Adapter{APIKey: "k", BaseURL: srv.URL, Client: srv.Client()}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	stream, err := a.Stream(ctx, llm.Request{Model: "openai/gpt-5.2", Messages: []llm.Message{llm.User("hi")}})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	defer stream.Close()
+	for range stream.Events() {
+	}
+
+	if gotBody == nil {
+		t.Fatalf("server did not capture request body")
+	}
+	gotModel, ok := gotBody["model"].(string)
+	if !ok {
+		t.Fatalf("request model field type: %#v", gotBody["model"])
+	}
+	if got := strings.TrimSpace(gotModel); got != "gpt-5.2" {
+		t.Fatalf("request model: got %q want %q", got, "gpt-5.2")
 	}
 }
 
