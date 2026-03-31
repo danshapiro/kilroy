@@ -118,6 +118,7 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 		_, perr := parseChatCompletionsResponse(a.cfg.Provider, req.Model, resp)
 		return nil, perr
 	}
+	rateLimit := llm.ParseRateLimitInfo(resp.Header, time.Now())
 
 	s := llm.NewChanStream(cancelAll)
 	go func() {
@@ -127,9 +128,10 @@ func (a *Adapter) Stream(ctx context.Context, req llm.Request) (llm.Stream, erro
 
 		s.Send(llm.StreamEvent{Type: llm.StreamEventStreamStart})
 		state := &chatStreamState{
-			Provider: a.cfg.Provider,
-			Model:    req.Model,
-			TextID:   "assistant_text",
+			Provider:  a.cfg.Provider,
+			Model:     req.Model,
+			TextID:    "assistant_text",
+			RateLimit: rateLimit,
 		}
 
 		err := llm.ParseSSE(sctx, resp.Body, func(ev llm.SSEEvent) error {
@@ -235,7 +237,12 @@ func parseChatCompletionsResponse(provider, model string, resp *http.Response) (
 	if err := dec.Decode(&raw); err != nil {
 		return llm.Response{}, llm.WrapContextError(provider, err)
 	}
-	return fromChatCompletions(provider, model, raw)
+	out, err := fromChatCompletions(provider, model, raw)
+	if err != nil {
+		return llm.Response{}, err
+	}
+	out.RateLimit = llm.ParseRateLimitInfo(resp.Header, time.Now())
+	return out, nil
 }
 
 func toChatCompletionsMessages(msgs []llm.Message) []map[string]any {
@@ -441,9 +448,10 @@ func normalizeFinishReason(in string) string {
 }
 
 type chatStreamState struct {
-	Provider string
-	Model    string
-	TextID   string
+	Provider  string
+	Model     string
+	TextID    string
+	RateLimit *llm.RateLimitInfo
 
 	Text     strings.Builder
 	TextOpen bool
@@ -490,11 +498,12 @@ func (st *chatStreamState) FinalResponse() llm.Response {
 		finish = llm.FinishReason{Reason: "stop", Raw: "stop"}
 	}
 	return llm.Response{
-		Provider: st.Provider,
-		Model:    st.Model,
-		Message:  msg,
-		Finish:   finish,
-		Usage:    st.Usage,
+		Provider:  st.Provider,
+		Model:     st.Model,
+		Message:   msg,
+		Finish:    finish,
+		Usage:     st.Usage,
+		RateLimit: st.RateLimit,
 	}
 }
 

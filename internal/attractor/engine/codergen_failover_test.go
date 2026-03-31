@@ -392,3 +392,72 @@ func TestShouldFailoverLLMError_GetwdBootstrapErrorDoesNotFailover(t *testing.T)
 		t.Fatalf("getwd bootstrap errors should not trigger failover")
 	}
 }
+
+func TestAgentLoopProviderOptions_CodexAppServer_UsesFullAutonomousPermissions(t *testing.T) {
+	got := agentLoopProviderOptions("codex_app_server", "/tmp/worktree")
+	if len(got) != 1 {
+		t.Fatalf("provider options length=%d want 1", len(got))
+	}
+	raw, ok := got["codex_app_server"]
+	if !ok {
+		t.Fatalf("missing codex_app_server provider options: %#v", got)
+	}
+	opts, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("codex_app_server options type=%T want map[string]any", raw)
+	}
+	if gotCwd := fmt.Sprint(opts["cwd"]); gotCwd != "/tmp/worktree" {
+		t.Fatalf("cwd=%q want %q", gotCwd, "/tmp/worktree")
+	}
+	if gotApproval := fmt.Sprint(opts["approvalPolicy"]); gotApproval != "never" {
+		t.Fatalf("approvalPolicy=%q want %q", gotApproval, "never")
+	}
+	if gotSandbox := fmt.Sprint(opts["sandbox"]); gotSandbox != "danger-full-access" {
+		t.Fatalf("sandbox=%q want %q", gotSandbox, "danger-full-access")
+	}
+	rawSandboxPolicy, ok := opts["sandboxPolicy"]
+	if !ok {
+		t.Fatalf("missing sandboxPolicy in codex options: %#v", opts)
+	}
+	sandboxPolicy, ok := rawSandboxPolicy.(map[string]any)
+	if !ok {
+		t.Fatalf("sandboxPolicy type=%T want map[string]any", rawSandboxPolicy)
+	}
+	if gotType := fmt.Sprint(sandboxPolicy["type"]); gotType != "dangerFullAccess" {
+		t.Fatalf("sandboxPolicy.type=%q want %q", gotType, "dangerFullAccess")
+	}
+}
+
+func TestAgentLoopProviderOptions_Cerebras_PreservesReasoningHistory(t *testing.T) {
+	got := agentLoopProviderOptions("cerebras", "")
+	raw, ok := got["cerebras"]
+	if !ok {
+		t.Fatalf("missing cerebras provider options: %#v", got)
+	}
+	opts, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("cerebras options type=%T want map[string]any", raw)
+	}
+	clearThinking, ok := opts["clear_thinking"].(bool)
+	if !ok {
+		t.Fatalf("clear_thinking type=%T want bool", opts["clear_thinking"])
+	}
+	if clearThinking {
+		t.Fatalf("clear_thinking=%v want false", clearThinking)
+	}
+}
+
+func TestAgentLoopProviderOptions_CodexAppServer_OmitsCwdWhenWorktreeEmpty(t *testing.T) {
+	got := agentLoopProviderOptions("codex-app-server", "")
+	raw, ok := got["codex_app_server"]
+	if !ok {
+		t.Fatalf("missing codex_app_server provider options: %#v", got)
+	}
+	opts, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("codex_app_server options type=%T want map[string]any", raw)
+	}
+	if _, exists := opts["cwd"]; exists {
+		t.Fatalf("expected cwd to be omitted when worktreeDir is empty: %#v", opts["cwd"])
+	}
+}

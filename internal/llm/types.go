@@ -94,6 +94,9 @@ type ContentPart struct {
 	ToolCall   *ToolCallData   `json:"tool_call,omitempty"`
 	ToolResult *ToolResultData `json:"tool_result,omitempty"`
 	Thinking   *ThinkingData   `json:"thinking,omitempty"`
+
+	// Data carries provider-specific payload for custom content kinds.
+	Data any `json:"data,omitempty"`
 }
 
 type ImageData struct {

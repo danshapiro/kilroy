@@ -10,6 +10,14 @@ import (
 )
 
 func TestCLIOnlyModelOverride_SwitchesBackendAndWarns(t *testing.T) {
+	orig := cliOnlyModelIDs
+	cliOnlyModelIDs = map[string]bool{
+		"test-cli-only-model": true,
+	}
+	t.Cleanup(func() {
+		cliOnlyModelIDs = orig
+	})
+
 	// Set up router with openai configured as API backend.
 	runtimes := map[string]ProviderRuntime{
 		"openai": {Key: "openai", Backend: BackendAPI},
@@ -24,7 +32,7 @@ func TestCLIOnlyModelOverride_SwitchesBackendAndWarns(t *testing.T) {
 	// Create a node using the CLI-only model.
 	node := model.NewNode("spark-test")
 	node.Attrs["llm_provider"] = "openai"
-	node.Attrs["llm_model"] = "gpt-5.4-spark"
+	node.Attrs["llm_model"] = "test-cli-only-model"
 	node.Attrs["shape"] = "box"
 
 	// Create an execution with temp dirs to isolate artifacts and an Engine
