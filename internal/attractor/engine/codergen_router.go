@@ -1464,9 +1464,8 @@ func buildCodexIsolatedEnvWithName(stageDir string, homeDirName string, baseEnv 
 	seeded := []string{}
 	seedErrors := []string{}
 	// Seed codex config from the ORIGINAL home (before isolation).
-	// Use os.Getenv("HOME") since baseEnv may already have HOME pinned
-	// to the original value by buildBaseNodeEnv.
-	srcHome := strings.TrimSpace(os.Getenv("HOME"))
+	// Prefer HOME, then Windows home vars, then os.UserHomeDir().
+	srcHome := codexSourceHome(baseEnv)
 	if srcHome != "" {
 		for _, name := range []string{"auth.json", "config.toml"} {
 			src := filepath.Join(srcHome, ".codex", name)
@@ -1526,7 +1525,7 @@ func codexStateBaseRoot() string {
 	}
 	base := strings.TrimSpace(os.Getenv("XDG_STATE_HOME"))
 	if base == "" {
-		home := strings.TrimSpace(os.Getenv("HOME"))
+		home := codexSourceHome(nil)
 		if home == "" {
 			base = "."
 		} else {
@@ -1538,6 +1537,46 @@ func codexStateBaseRoot() string {
 		return abs
 	}
 	return root
+}
+
+func codexSourceHome(baseEnv []string) string {
+	candidates := []string{
+		envSliceValue(baseEnv, "HOME"),
+		os.Getenv("HOME"),
+		envSliceValue(baseEnv, "USERPROFILE"),
+		os.Getenv("USERPROFILE"),
+		windowsHomeFromParts(envSliceValue(baseEnv, "HOMEDRIVE"), envSliceValue(baseEnv, "HOMEPATH")),
+		windowsHomeFromParts(os.Getenv("HOMEDRIVE"), os.Getenv("HOMEPATH")),
+	}
+	for _, candidate := range candidates {
+		if home := strings.TrimSpace(candidate); home != "" {
+			return home
+		}
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(home)
+}
+
+func envSliceValue(env []string, key string) string {
+	prefix := key + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(entry, prefix))
+		}
+	}
+	return ""
+}
+
+func windowsHomeFromParts(homeDrive string, homePath string) string {
+	drive := strings.TrimSpace(homeDrive)
+	path := strings.TrimSpace(homePath)
+	if drive == "" || path == "" {
+		return ""
+	}
+	return filepath.Clean(drive + path)
 }
 
 func copyIfExists(src string, dst string) (bool, error) {

@@ -1,0 +1,189 @@
+digraph rogue_pipeline {
+    graph [
+        goal="Port Rogue 5.4.4 from C to Rust/WebAssembly: exact 1:1 mechanical translation of all game systems (dungeon generation, monster AI, combat math, item tables, RNG formula), playable in browser at demo/rogue/rogue-wasm/www/index.html with classic 80x24 ASCII terminal rendering. Original C source at demo/rogue/original-rogue/ (~16,800 lines, 33 files). Replace ncurses I/O with WASM bridge to JS terminal renderer; save/load uses localStorage.",
+        rankdir=LR,
+        default_max_retry=3,
+        provenance_version="1",
+        model_stylesheet="
+            * { llm_model: gpt-5.3-codex-spark; llm_provider: openai; }
+            .hard { llm_model: gpt-5.3-codex-spark; llm_provider: openai; }
+            .verify { llm_model: gpt-5.3-codex-spark; llm_provider: openai; }
+        "
+    ]
+
+    exit  [shape=Msquare, label="Exit"]
+
+    subgraph cluster_bootstrap {
+        label="Bootstrap"
+        start [shape=Mdiamond, label="Start"]
+
+        check_toolchain [
+            shape=parallelogram,
+            max_retries=0,
+            tool_command="set -e; for d in \"$HOME/.cargo/bin\" \"$USERPROFILE/.cargo/bin\"; do [ -d \"$d\" ] && PATH=\"$d:$PATH\"; done; export PATH; command -v cargo >/dev/null 2>&1 || { echo 'FAIL: cargo not found' >&2; exit 1; }; command -v rustup >/dev/null 2>&1 || { echo 'FAIL: rustup not found' >&2; exit 1; }; command -v wasm-pack >/dev/null 2>&1 || { echo 'FAIL: wasm-pack not found' >&2; exit 1; }; rustup target list --installed | grep -qx wasm32-unknown-unknown || { echo 'FAIL: wasm32-unknown-unknown target not installed' >&2; exit 1; }; echo 'All toolchain checks passed: cargo, rustup, wasm-pack, wasm32-unknown-unknown target'"
+        ]
+
+        expand_spec [
+            shape=box,
+            auto_status=true,
+            prompt="Goal: $goal\n\nExpand the requirements into a detailed spec for the Rogue 5.4.4 C-to-Rust/WASM port.\n\nRead the original C source listing at demo/rogue/original-rogue/ to understand every game system:\n- Dungeon generation (rooms, corridors, mazes, doors, stairs)\n- Monster definitions, AI, chase logic, special abilities (A-Z)\n- Combat math (attack/defense, hit tables, damage dice)\n- Item tables (potions, scrolls, rings, weapons, armor, food, wands, amulet)\n- RNG formula and seed handling\n- Player stats, experience, leveling, hunger\n- Save/load serialization format\n\nRead any existing Rust source at demo/rogue/rogue-wasm/src/ to understand what has already been ported.\n\nThe spec must cover:\n1. Module decomposition mapping each C file to a Rust module.\n2. Data structure translations (C structs -> Rust structs/enums).\n3. ncurses replacement strategy (WASM bridge to JS canvas/DOM terminal renderer).\n4. localStorage save/load replacing filesystem I/O.\n5. Build pipeline: wasm-pack build -> www/index.html integration.\n6. Fidelity contract: same algorithms, same constants, same behavior.\n\nWrite the spec to .ai/spec.md."
+        ]
+
+        check_dod [
+            shape=box,
+            auto_status=true,
+            label="DoD exists?",
+            prompt="Goal: $goal\n\nAudit whether .ai/definition_of_done.md exists and is credible, then summarize findings in .ai/check_dod_notes.md.\n\nDoD rubric (must be specific, verifiable, and not over-prescriptive):\n- Scope: defines what is in-scope and what is out-of-scope.\n- Deliverables: names concrete outputs/outcomes (artifacts, behaviors, docs), not implementation steps.\n- Acceptance criteria: includes observable pass/fail criteria a reviewer can verify.\n- Verification: includes how to verify (commands or steps) appropriate for a Rust/WASM project.\n- Quality/safety: includes project-appropriate quality expectations (build/tests/lint) stated as outcomes/evidence.\n- Non-goals/deferrals: explicitly calls out what is intentionally not being done in this iteration."
+        ]
+    }
+
+    subgraph cluster_dod {
+        label="Definition Of Done"
+
+        consolidate_dod [
+            shape=box,
+            auto_status=true,
+            prompt="Goal: $goal\n\nPropose a project Definition of Done (DoD) for the Rogue C-to-Rust/WASM port. Read .ai/spec.md.\n\nRequirements:\n- DoD must be a checklist of outcomes/evidence, not a plan.\n- Each item must be verifiable (someone can check it and say pass/fail).\n- Avoid prescribing the implementation approach unless the spec explicitly requires it.\n- Include scope, deliverables, acceptance criteria, verification approach, and explicit non-goals/deferrals.\n- Verification must include: cargo build --target wasm32-unknown-unknown succeeds, cargo test passes, wasm-pack build --target web succeeds, index.html loads and renders 80x24 grid.\n- Fidelity criteria: dungeon generation, monster behavior, combat math, item effects must match original C.\n\nWrite the final DoD to .ai/definition_of_done.md."
+        ]
+    }
+
+    subgraph cluster_planning {
+        label="Planning"
+
+        debate_consolidate [
+            shape=box,
+            auto_status=true,
+            prompt="Goal: $goal\n\nCreate a final implementation plan for the Rogue C-to-Rust/WASM port.\nRead .ai/spec.md, .ai/definition_of_done.md.\nIf .ai/postmortem_latest.md exists, incorporate its lessons.\n\nThe plan must address:\n1. Module-by-module porting order (dependency-aware).\n2. Data structure translations with Rust idioms.\n3. ncurses -> WASM bridge architecture.\n4. localStorage save/load strategy.\n5. Progressive compilation milestones.\n6. www/index.html integration with wasm-pack output.\n\nRead existing Rust source at demo/rogue/rogue-wasm/src/ to build on what exists.\nRead original C source at demo/rogue/original-rogue/ for reference.\nResolve conflicts. Ensure dependency order.\nIf .ai/postmortem_latest.md exists, verify the plan addresses every issue.\nWrite to .ai/plan_final.md."
+        ]
+
+        prepare_ai_inputs [
+            shape=parallelogram,
+            max_retries=0,
+            tool_command="set -e; mkdir -p .ai; [ -f .ai/spec.md ] || { [ -f demo/rogue/spec.md ] && cp demo/rogue/spec.md .ai/spec.md || true; }; [ -f .ai/definition_of_done.md ] || { [ -f demo/rogue/DoD.md ] && cp demo/rogue/DoD.md .ai/definition_of_done.md || true; }; if [ ! -f .ai/plan_final.md ]; then printf '%s\n' '# Rogue fast fallback plan' '' '- Preserve existing work; do not restart from scratch.' '- Implement highest-impact missing pieces first.' '- Run fmt, build, and tests and capture exact failures.' '- Update .ai/implementation_log.md and .ai/verify_fidelity.md with evidence.' > .ai/plan_final.md; fi; [ -f .ai/implementation_log.md ] || printf '%s\n' '# Implementation Log' '' '- Initialized by prepare_ai_inputs stage.' > .ai/implementation_log.md; [ -f .ai/review_consensus.md ] || printf '%s\n' '# Review Consensus' '' '- Initialized by prepare_ai_inputs stage.' > .ai/review_consensus.md; [ -f .ai/verify_fidelity.md ] || printf '%s\n' '# Fidelity Review' '' '- Initialized by prepare_ai_inputs stage.' > .ai/verify_fidelity.md; echo 'Prepared .ai inputs for implement stage'"
+        ]
+    }
+
+    subgraph cluster_implement_verify {
+        label="Implement And Verify"
+
+        implement [
+            shape=box,
+            class="hard",
+            auto_status=false,
+            max_retries=2,
+            prompt="Goal: $goal\n\nExecute .ai/plan_final.md. Read .ai/definition_of_done.md for acceptance criteria.\nIf .ai/postmortem_latest.md exists, prioritize fixing those issues.\n\nOriginal C source: demo/rogue/original-rogue/\nRust target: demo/rogue/rogue-wasm/\nHTML deliverable: demo/rogue/rogue-wasm/www/index.html\n\nThis is an exact mechanical port. Every C function must have a Rust equivalent with identical behavior:\n- Same dungeon generation algorithms (rooms, corridors, mazes).\n- Same monster stats table, AI chase logic, special abilities.\n- Same combat math (hit tables, damage dice, armor class).\n- Same item tables (potions, scrolls, rings, weapons, armor, food, wands, amulet of Yendor).\n- Same RNG formula and seed handling.\n- Same player progression (XP, leveling, hunger).\n\nReplace ncurses with a WASM bridge to a JS terminal renderer.\nReplace filesystem save/load with localStorage.\n\nUse progressive compilation: get each module compiling before starting the next.\nLog progress to .ai/implementation_log.md.\n\nWrite status JSON to $KILROY_STAGE_STATUS_PATH.\noutcome=success if build passes, outcome=fail with failure_reason, failure_class, and failure_signature otherwise."
+        ]
+
+        fix_fmt [
+            shape=parallelogram,
+            tool_command="set -e; for d in \"$HOME/.cargo/bin\" \"$USERPROFILE/.cargo/bin\"; do [ -d \"$d\" ] && PATH=\"$d:$PATH\"; done; export PATH; cd demo/rogue/rogue-wasm && cargo fmt 2>&1"
+        ]
+
+        verify_fmt [
+            shape=parallelogram,
+            tool_command="set -e; for d in \"$HOME/.cargo/bin\" \"$USERPROFILE/.cargo/bin\"; do [ -d \"$d\" ] && PATH=\"$d:$PATH\"; done; export PATH; cd demo/rogue/rogue-wasm && cargo fmt --check 2>&1"
+        ]
+
+        verify_build [
+            shape=parallelogram,
+            tool_command="set -e; for d in \"$HOME/.cargo/bin\" \"$USERPROFILE/.cargo/bin\"; do [ -d \"$d\" ] && PATH=\"$d:$PATH\"; done; export PATH; cd demo/rogue/rogue-wasm && wasm-pack build --target web 2>&1"
+        ]
+
+        verify_test [
+            shape=parallelogram,
+            tool_command="set -e; for d in \"$HOME/.cargo/bin\" \"$USERPROFILE/.cargo/bin\"; do [ -d \"$d\" ] && PATH=\"$d:$PATH\"; done; export PATH; cd demo/rogue/rogue-wasm && cargo test 2>&1"
+        ]
+
+        verify_artifacts [
+            shape=parallelogram,
+            tool_command="set -e; DIRTY=$(git diff --name-only HEAD -- demo/rogue/rogue-wasm/ | grep -E '\\.(o|a|so|dylib|wasm|d|rmeta|rlib|fingerprint)$|/target/|/pkg/\\.gitignore' || true); if [ -n \"$DIRTY\" ]; then echo \"FAIL: build artifacts in diff: $DIRTY\" >&2; exit 1; fi; echo 'No build artifacts in diff'"
+        ]
+
+        verify_fidelity [
+            shape=box,
+            class="verify",
+            auto_status=true,
+            prompt="Perform semantic fidelity review after deterministic checks pass.\n\nThis is the critical gate for a faithful 1:1 port. Verify:\n1. Read demo/rogue/original-rogue/*.c and compare against demo/rogue/rogue-wasm/src/*.rs.\n2. Dungeon generation: room placement, corridor carving, maze generation, door/stair placement use same algorithms.\n3. Monster table: all 26 monster types (A-Z) have correct stats, flags, and special abilities.\n4. Combat math: attack rolls, hit tables, damage dice, armor class calculations match original.\n5. Item tables: all potion/scroll/ring/weapon/armor/food/wand types and effects match.\n6. RNG: same formula and seed propagation as original.\n7. Player systems: XP thresholds, level-up stats, hunger ticks match.\n8. I/O bridge: ncurses calls map to WASM-exported functions.\n9. Save/load: serialization covers all game state, localStorage integration works.\n10. HTML: demo/rogue/rogue-wasm/www/index.html exists with 80x24 ASCII grid, monospace font, dark background.\n\nIf semantic gaps exist, outcome=fail with stable failure_reason code (e.g., fidelity_gap_monster_stats) and details listing each discrepancy.\n\nWrite results to .ai/verify_fidelity.md.\n\nReport outcome=success if semantic review passes; otherwise report outcome=fail with failure_reason and details."
+        ]
+    }
+
+    subgraph cluster_review {
+        label="Review"
+
+        review_consensus [
+            shape=box,
+            goal_gate=true,
+            auto_status=true,
+            prompt="Goal: $goal\n\nReview the implementation against .ai/definition_of_done.md.\nCheck: wasm-pack build succeeds, cargo test passes, completeness of port (all 33 C files accounted for), correctness of game logic, www/index.html renders properly.\nVerify fidelity: spot-check monster stats, combat math constants, RNG formula against original C source.\n\nConsensus policy:\n- If criteria are met and no critical gaps: outcome=success.\n- Otherwise: outcome=retry with failure_reason listing specific issues.\n\nWrite review to .ai/review_consensus.md with APPROVED or REJECTED verdict.\n\nReport outcome=success or outcome=retry with failure_reason."
+        ]
+    }
+
+    subgraph cluster_postmortem {
+        label="Postmortem"
+
+        postmortem [
+            shape=box,
+            auto_status=true,
+            prompt="Goal: $goal\n\nAnalyze why the implementation failed.\nRead .ai/review_consensus.md.\nRead .ai/implementation_log.md.\nRead .ai/verify_fidelity.md if it exists.\n\nProduce actionable guidance: root causes, what worked, what failed, specific fixes.\nFor fidelity issues, reference exact C source lines and expected Rust equivalents.\nThe next iteration must NOT start from scratch - preserve working code and fix gaps.\n\nWrite to .ai/postmortem_latest.md (overwrite previous)."
+        ]
+    }
+
+    // =========================================================================
+    // Flow
+    // =========================================================================
+
+    start -> check_toolchain
+    check_toolchain -> expand_spec [condition="outcome=success"]
+    check_toolchain -> postmortem [condition="outcome=fail"]
+    check_toolchain -> postmortem
+    expand_spec -> check_dod
+
+    // keep DoD/planning linear in fast mode
+    check_dod -> consolidate_dod
+    consolidate_dod -> prepare_ai_inputs
+    prepare_ai_inputs -> debate_consolidate
+
+    debate_consolidate -> implement
+
+    prepare_ai_inputs -> implement [condition="outcome=success"]
+    prepare_ai_inputs -> postmortem [condition="outcome=fail"]
+    prepare_ai_inputs -> postmortem
+
+    implement -> fix_fmt [condition="outcome=success"]
+    implement -> implement [condition="outcome=fail && context.failure_class=transient_infra", loop_restart=true]
+    implement -> postmortem [condition="outcome=fail && context.failure_class!=transient_infra"]
+    implement -> postmortem
+
+    fix_fmt -> verify_fmt [condition="outcome=success"]
+    fix_fmt -> postmortem [condition="outcome=fail"]
+    fix_fmt -> postmortem
+
+    verify_fmt -> verify_build [condition="outcome=success"]
+    verify_fmt -> postmortem [condition="outcome=fail"]
+    verify_fmt -> postmortem
+
+    verify_build -> verify_test [condition="outcome=success"]
+    verify_build -> postmortem [condition="outcome=fail"]
+    verify_build -> postmortem
+
+    verify_test -> verify_artifacts [condition="outcome=success"]
+    verify_test -> postmortem [condition="outcome=fail"]
+    verify_test -> postmortem
+
+    verify_artifacts -> verify_fidelity [condition="outcome=success"]
+    verify_artifacts -> postmortem [condition="outcome=fail"]
+    verify_artifacts -> postmortem
+
+    verify_fidelity -> review_consensus [condition="outcome=success"]
+    verify_fidelity -> postmortem [condition="outcome=fail"]
+    verify_fidelity -> postmortem
+
+    review_consensus -> exit [condition="outcome=success"]
+    review_consensus -> postmortem [condition="outcome=retry"]
+    review_consensus -> postmortem [condition="outcome=fail"]
+    review_consensus -> postmortem
+
+    postmortem -> debate_consolidate [condition="context.failure_class=transient_infra", loop_restart=true]
+    postmortem -> debate_consolidate [condition="context.failure_class!=transient_infra"]
+    postmortem -> debate_consolidate
+}

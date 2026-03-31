@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	goruntime "runtime"
 	"strings"
 	"time"
 
@@ -824,10 +825,11 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		}
 	}
 
+	shellPath := resolveToolShellPath()
 	if err := writeJSON(filepath.Join(stageDir, toolInvocationFileName), map[string]any{
-		"tool": "bash",
+		"tool": filepath.Base(shellPath),
 		// Use a non-login, non-interactive shell to avoid sourcing user dotfiles.
-		"argv":        []string{"bash", "-c", cmdStr},
+		"argv":        []string{shellPath, "-c", cmdStr},
 		"command":     cmdStr,
 		"working_dir": execCtx.WorktreeDir,
 		"timeout_ms":  timeout.Milliseconds(),
@@ -838,7 +840,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 
 	cctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(cctx, "bash", "-c", cmdStr)
+	cmd := exec.CommandContext(cctx, shellPath, "-c", cmdStr)
 	cmd.Dir = execCtx.WorktreeDir
 	cmd.Env = buildBaseNodeEnv(artifactPolicyFromExecution(execCtx))
 	// Avoid hanging on interactive reads; tool_command doesn't provide a way to supply stdin.
@@ -1016,6 +1018,68 @@ func looksActionableToolOutputLine(line string) bool {
 		}
 	}
 	return false
+}
+
+func resolveToolShellPath() string {
+	return resolveToolShellPathWith(goruntime.GOOS, exec.LookPath, pathExists)
+}
+
+func resolveToolShellPathWith(goos string, lookPath func(string) (string, error), exists func(string) bool) string {
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	if exists == nil {
+		exists = pathExists
+	}
+	if path, err := lookPath("bash"); err == nil && strings.TrimSpace(path) != "" {
+		if strings.EqualFold(goos, "windows") && isWindowsBashShim(path) {
+			if preferred := preferredWindowsBashPath(lookPath, exists); preferred != "" {
+				return preferred
+			}
+		}
+		return path
+	}
+	if strings.EqualFold(goos, "windows") {
+		if preferred := preferredWindowsBashPath(lookPath, exists); preferred != "" {
+			return preferred
+		}
+	}
+	return "bash"
+}
+
+func preferredWindowsBashPath(lookPath func(string) (string, error), exists func(string) bool) string {
+	candidates := []string{
+		filepath.Clean(`C:\Program Files\Git\bin\bash.exe`),
+		filepath.Clean(`C:\Program Files\Git\usr\bin\bash.exe`),
+	}
+	if lookPath != nil {
+		if gitPath, err := lookPath("git"); err == nil && strings.TrimSpace(gitPath) != "" {
+			gitDir := filepath.Dir(gitPath)
+			candidates = append(candidates,
+				filepath.Clean(filepath.Join(gitDir, "bash.exe")),
+				filepath.Clean(filepath.Join(gitDir, "..", "usr", "bin", "bash.exe")),
+			)
+		}
+	}
+	for _, candidate := range candidates {
+		if exists != nil && exists(candidate) {
+			return candidate
+		}
+	}
+	return ""
+}
+
+func isWindowsBashShim(path string) bool {
+	clean := strings.ToLower(filepath.Clean(strings.TrimSpace(path)))
+	return strings.HasSuffix(clean, `\windows\system32\bash.exe`) || strings.HasSuffix(clean, `\windows\sysnative\bash.exe`)
+}
+
+func pathExists(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
 }
 
 func truncate(s string, n int) string {

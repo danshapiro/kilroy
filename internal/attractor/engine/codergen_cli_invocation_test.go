@@ -187,6 +187,51 @@ func TestBuildCodexIsolatedEnv_ConfiguresCodexScopedOverrides(t *testing.T) {
 	}
 }
 
+func TestBuildCodexIsolatedEnv_SeedsFromUserProfileWhenHomeUnset(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte(`{"token":"x"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, ".codex", "config.toml"), []byte(`model = "gpt-5"`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
+	t.Setenv("KILROY_CODEX_STATE_BASE", filepath.Join(t.TempDir(), "codex-state-base"))
+
+	stageDir := t.TempDir()
+	_, meta, err := buildCodexIsolatedEnv(stageDir, os.Environ())
+	if err != nil {
+		t.Fatalf("buildCodexIsolatedEnv: %v", err)
+	}
+
+	stateRoot := strings.TrimSpace(anyToString(meta["state_root"]))
+	assertExists(t, filepath.Join(stateRoot, "auth.json"))
+	assertExists(t, filepath.Join(stateRoot, "config.toml"))
+}
+
+func TestCodexStateBaseRoot_FallsBackToUserProfileWhenHomeUnset(t *testing.T) {
+	userProfile := t.TempDir()
+	t.Setenv("KILROY_CODEX_STATE_BASE", "")
+	t.Setenv("XDG_STATE_HOME", "")
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", userProfile)
+	t.Setenv("HOMEDRIVE", "")
+	t.Setenv("HOMEPATH", "")
+
+	got := codexStateBaseRoot()
+	want := filepath.Join(userProfile, ".local", "state", "kilroy", "attractor", "codex-state")
+	if got != want {
+		t.Fatalf("codexStateBaseRoot: got %q want %q", got, want)
+	}
+}
+
 func TestEnvHasKey(t *testing.T) {
 	env := []string{"HOME=/tmp", "PATH=/usr/bin", "CARGO_TARGET_DIR=/foo/bar"}
 	if !envHasKey(env, "CARGO_TARGET_DIR") {
