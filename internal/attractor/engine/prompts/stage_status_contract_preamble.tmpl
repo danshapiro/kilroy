@@ -4,3 +4,6 @@ ${{.StageStatusFallbackPathEnvKey}} = {{.FallbackPath}}
 - Write your status JSON to ${{.StageStatusPathEnvKey}}. If that write fails, use run-scoped fallback ${{.StageStatusFallbackPathEnvKey}}.
 - Do not write status.json to nested module directories.
 - To end this stage: write the status file, then return your response. Do NOT call close_agent or any session-management tool.
+- Verification reporting: if you ran verification commands (tests, linters, type checks) and any failed or were blocked by infra issues (missing tools, DNS errors, network failures), you MUST set status to "degraded_success" instead of "success" and include a "verification" object:
+  {"status": "degraded_success", "verification": {"status": "blocked", "blocked_reason": "npm registry DNS failure", "commands": [{"command": "npx tsc", "exit_code": 1, "blocked": true, "reason": "EAI_AGAIN"}]}, ...}
+- Use "success" only when all verification commands actually executed and passed, or when no verification was needed.

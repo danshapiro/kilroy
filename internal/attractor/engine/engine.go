@@ -1223,7 +1223,7 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			_ = writeJSON(filepath.Join(stageDir, "status.json"), fo)
 			return fo, nil
 		}
-		if out.Status == runtime.StatusSuccess || out.Status == runtime.StatusPartialSuccess || out.Status == runtime.StatusSkipped {
+		if out.Status == runtime.StatusSuccess || out.Status == runtime.StatusDegradedSuccess || out.Status == runtime.StatusPartialSuccess || out.Status == runtime.StatusSkipped {
 			retries[node.ID] = 0
 			return out, nil
 		}
@@ -1957,7 +1957,7 @@ func checkGoalGates(g *model.Graph, outcomes map[string]runtime.Outcome) (bool, 
 		if !strings.EqualFold(n.Attr("goal_gate", "false"), "true") {
 			continue
 		}
-		if out.Status != runtime.StatusSuccess && out.Status != runtime.StatusPartialSuccess {
+		if out.Status != runtime.StatusSuccess && out.Status != runtime.StatusDegradedSuccess && out.Status != runtime.StatusPartialSuccess {
 			return false, id
 		}
 	}

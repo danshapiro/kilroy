@@ -11,12 +11,15 @@ func TestParseStageStatus_CanonicalAndLegacy(t *testing.T) {
 		want StageStatus
 	}{
 		{"success", StatusSuccess},
+		{"degraded_success", StatusDegradedSuccess},
 		{"partial_success", StatusPartialSuccess},
 		{"retry", StatusRetry},
 		{"fail", StatusFail},
 		{"skipped", StatusSkipped},
 		// Compatibility aliases.
 		{"ok", StatusSuccess},
+		{"degraded-success", StatusDegradedSuccess},
+		{"degradedsuccess", StatusDegradedSuccess},
 		{"error", StatusFail},
 		{"SUCCESS", StatusSuccess},
 		{"FAIL", StatusFail},
@@ -67,6 +70,9 @@ func TestParseStageStatus_CustomOutcomes(t *testing.T) {
 func TestStageStatus_IsCanonical(t *testing.T) {
 	if !StatusSuccess.IsCanonical() {
 		t.Fatalf("StatusSuccess should be canonical")
+	}
+	if !StatusDegradedSuccess.IsCanonical() {
+		t.Fatalf("StatusDegradedSuccess should be canonical")
 	}
 	if !StatusFail.IsCanonical() {
 		t.Fatalf("StatusFail should be canonical")
@@ -161,6 +167,72 @@ func TestDecodeOutcomeJSON_LegacyFailDetails_PopulatesFailureReason(t *testing.T
 	}
 	if !strings.Contains(strings.ToLower(o.FailureReason), "module") {
 		t.Fatalf("failure_reason should summarize details, got: %q", o.FailureReason)
+	}
+}
+
+func TestDecodeOutcomeJSON_DegradedSuccessWithVerification(t *testing.T) {
+	input := `{
+		"status": "degraded_success",
+		"notes": "implementation complete but tsc blocked by DNS failure",
+		"verification": {
+			"status": "blocked",
+			"blocked_reason": "npm registry DNS failure",
+			"commands": [
+				{"command": "npx tsc", "exit_code": 1, "blocked": true, "reason": "EAI_AGAIN"}
+			]
+		}
+	}`
+	o, err := DecodeOutcomeJSON([]byte(input))
+	if err != nil {
+		t.Fatalf("DecodeOutcomeJSON: %v", err)
+	}
+	if o.Status != StatusDegradedSuccess {
+		t.Fatalf("status: got %q want %q", o.Status, StatusDegradedSuccess)
+	}
+	if o.Verification == nil {
+		t.Fatal("expected non-nil verification")
+	}
+	if o.Verification.Status != "blocked" {
+		t.Fatalf("verification status: got %q want %q", o.Verification.Status, "blocked")
+	}
+	if o.Verification.BlockedReason != "npm registry DNS failure" {
+		t.Fatalf("verification blocked_reason: got %q", o.Verification.BlockedReason)
+	}
+	if len(o.Verification.Commands) != 1 {
+		t.Fatalf("expected 1 verification command, got %d", len(o.Verification.Commands))
+	}
+	cmd := o.Verification.Commands[0]
+	if cmd.Command != "npx tsc" || cmd.ExitCode != 1 || !cmd.Blocked {
+		t.Fatalf("unexpected verification command: %+v", cmd)
+	}
+}
+
+func TestDecodeOutcomeJSON_SuccessWithPassedVerification(t *testing.T) {
+	input := `{
+		"status": "success",
+		"verification": {
+			"status": "passed",
+			"commands": [
+				{"command": "go test ./...", "exit_code": 0},
+				{"command": "go vet ./...", "exit_code": 0}
+			]
+		}
+	}`
+	o, err := DecodeOutcomeJSON([]byte(input))
+	if err != nil {
+		t.Fatalf("DecodeOutcomeJSON: %v", err)
+	}
+	if o.Status != StatusSuccess {
+		t.Fatalf("status: got %q want %q", o.Status, StatusSuccess)
+	}
+	if o.Verification == nil {
+		t.Fatal("expected non-nil verification")
+	}
+	if o.Verification.Status != "passed" {
+		t.Fatalf("verification status: got %q want %q", o.Verification.Status, "passed")
+	}
+	if len(o.Verification.Commands) != 2 {
+		t.Fatalf("expected 2 verification commands, got %d", len(o.Verification.Commands))
 	}
 }
 
