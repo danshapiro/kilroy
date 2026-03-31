@@ -1845,6 +1845,24 @@ func emitCXDBToolTurns(ctx context.Context, eng *Engine, nodeID string, ev agent
 	}
 	runID := eng.Options.RunID
 	switch ev.Kind {
+	case agent.EventAssistantTextEnd:
+		text := strings.TrimSpace(fmt.Sprint(ev.Data["text"]))
+		// Keep a queryable assistant turn even when the model turn is tool-only.
+		if text == "" {
+			text = "[tool_use]"
+		}
+		if _, _, err := eng.CXDB.Append(ctx, "com.kilroy.attractor.AssistantMessage", 1, map[string]any{
+			"run_id":         runID,
+			"node_id":        nodeID,
+			"text":           truncate(text, 8_000),
+			"model":          "",
+			"input_tokens":   uint64(0),
+			"output_tokens":  uint64(0),
+			"tool_use_count": uint32(0),
+			"timestamp_ms":   nowMS(),
+		}); err != nil {
+			eng.Warn(fmt.Sprintf("cxdb append AssistantMessage failed (node=%s): %v", nodeID, err))
+		}
 	case agent.EventToolCallStart:
 		toolName := strings.TrimSpace(fmt.Sprint(ev.Data["tool_name"]))
 		callID := strings.TrimSpace(fmt.Sprint(ev.Data["call_id"]))
