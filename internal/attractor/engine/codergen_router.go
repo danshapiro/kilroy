@@ -81,12 +81,14 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 	if modelID == "" {
 		return "", nil, fmt.Errorf("missing llm_model on node %s", node.ID)
 	}
+	selectionSource := "graph_attrs"
 	if exec != nil && exec.Engine != nil {
 		if forcedModelID, forced := forceModelForProvider(exec.Engine.Options.ForceModels, prov); forced {
 			if !strings.EqualFold(modelID, forcedModelID) {
 				warnEngine(exec, fmt.Sprintf("force-model override applied: node=%s provider=%s model=%s (was %s)", node.ID, prov, forcedModelID, modelID))
 			}
 			modelID = forcedModelID
+			selectionSource = "force_model"
 		}
 	}
 	backend := r.backendForProvider(prov)
@@ -99,6 +101,20 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 	if isCLIOnlyModel(modelID) && backend != BackendCLI {
 		warnEngine(exec, fmt.Sprintf("cli-only model override: node=%s model=%s backend=%s->cli", node.ID, modelID, backend))
 		backend = BackendCLI
+		if selectionSource == "graph_attrs" {
+			selectionSource = "cli_only_override"
+		}
+	}
+
+	if exec != nil && exec.Engine != nil {
+		exec.Engine.appendProgress(map[string]any{
+			"event":    "provider_selected",
+			"node_id":  node.ID,
+			"provider": prov,
+			"model":    modelID,
+			"backend":  string(backend),
+			"source":   selectionSource,
+		})
 	}
 
 	switch backend {
