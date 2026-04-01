@@ -181,7 +181,7 @@ func runSubgraphUntil(ctx context.Context, eng *Engine, startNodeID, stopNodeID 
 			return canceledReturn(node.ID, lastOutcome, err)
 		}
 
-		next, err := selectNextEdge(eng.Graph, node.ID, out, eng.Context)
+		next, err := selectNextEdge(eng.Graph, node.ID, out, eng.Context, eng.appendProgress)
 		if err != nil {
 			return parallelBranchResult{}, err
 		}

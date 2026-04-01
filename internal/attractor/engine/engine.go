@@ -699,7 +699,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		// Implicit fan-out: when a non-parallel node has multiple eligible outgoing
 		// edges that converge at a common downstream node, dispatch them in parallel.
 		if !isExplicitParallel {
-			allEdges, edgeErr := selectAllEligibleEdges(e.Graph, node.ID, out, e.Context)
+			allEdges, edgeErr := selectAllEligibleEdges(e.Graph, node.ID, out, e.Context, e.appendProgress)
 			if edgeErr != nil {
 				return nil, edgeErr
 			}
@@ -1987,8 +1987,8 @@ func findStartNodeID(g *model.Graph) string {
 }
 
 // selectNextEdge implements attractor-spec edge selection with deterministic tie-breaks (metaspec).
-func selectNextEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context) (*model.Edge, error) {
-	edges, err := selectAllEligibleEdges(g, from, out, ctx)
+func selectNextEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ...ProgressFunc) (*model.Edge, error) {
+	edges, err := selectAllEligibleEdges(g, from, out, ctx, progress...)
 	if err != nil {
 		return nil, err
 	}
@@ -2030,7 +2030,7 @@ func hasMatchingOutgoingCondition(g *model.Graph, nodeID string, out runtime.Out
 // When multiple edges are returned, the caller should treat this as an implicit fan-out.
 // Preferred-label and suggested-next-ID narrowing still apply — if they narrow to a single edge,
 // only that edge is returned (no fan-out).
-func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context) ([]*model.Edge, error) {
+func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ...ProgressFunc) ([]*model.Edge, error) {
 	rawEdges := g.Outgoing(from)
 	if len(rawEdges) == 0 {
 		return nil, nil
@@ -2047,6 +2047,12 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		return nil, nil
 	}
 
+	// Resolve optional progress callback.
+	var emit ProgressFunc
+	if len(progress) > 0 && progress[0] != nil {
+		emit = progress[0]
+	}
+
 	// Step 1: Eligible conditional edges.
 	var condMatched []*model.Edge
 	for _, e := range edges {
@@ -2057,6 +2063,15 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		ok, err := cond.Evaluate(c, out, ctx)
 		if err != nil {
 			return nil, err
+		}
+		if emit != nil {
+			emit(map[string]any{
+				"event":     "edge_condition_evaluated",
+				"node_id":   from,
+				"edge_to":   e.To,
+				"condition": c,
+				"matched":   ok,
+			})
 		}
 		if ok {
 			condMatched = append(condMatched, e)
