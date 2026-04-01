@@ -1,0 +1,90 @@
+// Single-PR review workflow: setup repo, build/test, review, produce report.
+// Usage: PR_REPO=owner/repo PR_NUMBER=123 kilroy attractor run --graph pr-review.dot --config run.yaml
+
+digraph pr_review {
+    graph [
+        goal="Review GitHub pull request: checkout, build, test, and assess for merge readiness",
+        model_stylesheet="
+            * { llm_model: claude-sonnet-4.6; llm_provider: anthropic; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    exit  [shape=Msquare, label="Exit"]
+
+    // Checkout PR branch, merge main, fetch metadata and diff
+    setup_pr [
+        shape=parallelogram,
+        label="Setup PR",
+        tool_command="sh workflows/pr-review/scripts/setup-pr.sh"
+    ]
+
+    // Build, test, format check — always exit 0, results saved to files
+    build_test [
+        shape=parallelogram,
+        label="Build & Test",
+        tool_command="sh workflows/pr-review/scripts/build-test.sh"
+    ]
+
+    // Single agent: review code + produce final report
+    review [
+        shape=box,
+        label="Review & Report",
+        auto_status=true,
+        prompt="You are a PR reviewer. The PR branch is already checked out in your working directory. Build and test results are available.
+
+READ THESE FILES FIRST:
+- .ai/pr-data/pr-view.txt (PR description)
+- .ai/pr-data/pr-meta.json (metadata: files, author, branches)
+- .ai/pr-data/pr-diff.patch (the diff)
+- .ai/pr-data/merge-result.txt (clean or conflict)
+- .ai/pr-data/build-result.txt (pass or fail)
+- .ai/pr-data/test-result.txt (pass or fail)
+- .ai/pr-data/test-output.txt (full test output)
+- .ai/pr-data/gofmt-result.txt (pass or fail)
+
+You also have the full codebase available. Use it. Read the actual source files that were changed — not just the diff. Understand the surrounding context.
+
+YOUR JOB:
+Assess whether this PR should be merged. Be concise and actionable.
+
+Write .ai/pr-data/review-report.md in EXACTLY this format:
+
+---
+## Decision: [one of: MERGE | MERGE-FIX | FIX-MERGE | CHERRY-PICK | SPLIT | REJECT]
+
+## Rationale
+[3-5 sentences max. Why this decision? What does the PR do and is it worth merging?]
+
+## Build & Test
+- Build: [pass/fail]
+- Tests: [pass/fail, note any failures and whether they are pre-existing or introduced by this PR]
+- Format: [pass/fail]
+
+## Blockers
+[List anything that MUST be fixed before merge. If none, write 'None'.]
+
+## Follow-up Tasks
+[Discrete tasks that should happen after merge — each with enough context that another agent could implement it without re-reading this PR. If none, write 'None'.]
+
+Example follow-up format:
+- FIX: Remove duplicate test entry {\"gpt-5.4\", false} in internal/attractor/engine/cli_only_models_test.go line 13-14. The same case appears twice. Remove one and consider replacing it with a test for gpt-5.4-spark.
+---
+
+RULES:
+- Bias toward landing contributions. Prefer MERGE-FIX over FIX-MERGE for minor issues.
+- Do NOT pad the report. No tables, no severity tags, no dimensions matrix. Just the sections above.
+- Every follow-up task must specify: the file, what to change, and why.
+- If build/test fails, check whether failures are pre-existing on main or introduced by this PR.
+- Verify claims in the PR description against what the code actually does.
+
+On failure, write to $KILROY_STAGE_STATUS_PATH (fallback $KILROY_STAGE_STATUS_FALLBACK_PATH):
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
+    ]
+
+    start -> setup_pr
+    setup_pr -> build_test [condition="outcome=success"]
+    setup_pr -> exit
+    build_test -> review
+    review -> exit
+}
