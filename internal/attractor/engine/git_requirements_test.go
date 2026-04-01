@@ -24,7 +24,7 @@ func TestRun_FailsWhenRepoIsDirty(t *testing.T) {
 	dot := []byte(`digraph G { start [shape=Mdiamond] exit [shape=Msquare] start -> exit }`)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo})
+	_, err := runForTest(t, ctx, dot, RunOptions{RepoPath: repo, RequireClean: true})
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
