@@ -315,6 +315,71 @@ func TestToolGraph_ZeroConfig(t *testing.T) {
 	}
 }
 
+func TestToolGraph_PartialConfigAutoDetectsProviders(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-partial-config")
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+
+	dot := []byte(`digraph partial {
+  graph [goal="Test partial config with auto-detected providers"]
+  start [shape=Mdiamond]
+  step [shape=parallelogram, tool_command="echo partial_config_ok"]
+  done [shape=Msquare]
+  start -> step -> done
+}`)
+	// Config with repo.path and pinned catalog but NO providers section.
+	// Auto-detection should fill in anthropic from ANTHROPIC_API_KEY.
+	cfg := &RunConfigFile{}
+	cfg.Version = 1
+	cfg.Repo.Path = repo
+	cfg.ModelDB.OpenRouterModelInfoPath = pinned
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+	cfg.LLM.CLIProfile = "test_shim"
+	applyConfigDefaults(cfg)
+	// Simulate what loadOrBuildConfig does: auto-detect and apply.
+	detected := DetectProviders()
+	ApplyDetectedProviders(cfg, detected)
+
+	var foundAnthropic bool
+	for _, dp := range detected {
+		if dp.Key == "anthropic" {
+			foundAnthropic = true
+		}
+	}
+	if !foundAnthropic {
+		t.Fatal("expected anthropic to be auto-detected from ANTHROPIC_API_KEY")
+	}
+	if _, ok := cfg.LLM.Providers["anthropic"]; !ok {
+		t.Fatal("expected anthropic provider to be applied to config")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       "partial-config-test",
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("expected success, got %q", res.FinalStatus)
+	}
+
+	stdout := filepath.Join(logsRoot, "step", "stdout.log")
+	data, err := os.ReadFile(stdout)
+	if err != nil {
+		t.Fatalf("read step stdout: %v", err)
+	}
+	if !strings.Contains(string(data), "partial_config_ok") {
+		t.Fatalf("step stdout: got %q, want to contain %q", string(data), "partial_config_ok")
+	}
+}
+
 // minimalToolGraphConfig returns a RunConfigFile suitable for tool-node-only graphs.
 func minimalToolGraphConfig(repoPath, pinnedCatalogPath string) *RunConfigFile {
 	cfg := &RunConfigFile{}
