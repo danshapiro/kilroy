@@ -699,7 +699,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		// Implicit fan-out: when a non-parallel node has multiple eligible outgoing
 		// edges that converge at a common downstream node, dispatch them in parallel.
 		if !isExplicitParallel {
-			allEdges, edgeErr := selectAllEligibleEdges(e.Graph, node.ID, out, e.Context, e.appendProgress)
+			allEdges, edgeErr := selectAllEligibleEdges(e.Graph, node.ID, out, e.Context)
 			if edgeErr != nil {
 				return nil, edgeErr
 			}
