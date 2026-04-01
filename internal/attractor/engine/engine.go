@@ -744,7 +744,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		}
 
 		// Resolve next hop with fan-in failure policy.
-		nextHop, err := resolveNextHop(e.Graph, node.ID, out, e.Context, failureClass)
+		nextHop, err := resolveNextHop(e.Graph, node.ID, out, e.Context, failureClass, e.appendProgress)
 		if err != nil {
 			return nil, err
 		}

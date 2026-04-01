@@ -414,7 +414,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		}
 	}
 
-	nextHop, err := resolveNextHop(eng.Graph, lastNodeID, lastOutcome, eng.Context, classifyFailureClass(lastOutcome))
+	nextHop, err := resolveNextHop(eng.Graph, lastNodeID, lastOutcome, eng.Context, classifyFailureClass(lastOutcome), eng.appendProgress)
 	if err != nil {
 		return nil, err
 	}

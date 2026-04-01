@@ -8,6 +8,10 @@ import (
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
+// ProgressFunc is an optional callback for emitting structured progress events.
+// Routing functions accept this to log decisions without depending on the engine.
+type ProgressFunc func(map[string]any)
+
 type nextHopSource string
 
 const (
@@ -22,7 +26,7 @@ type resolvedNextHop struct {
 	RetryTargetSource string
 }
 
-func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, failureClass string) (*resolvedNextHop, error) {
+func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, failureClass string, progress ProgressFunc) (*resolvedNextHop, error) {
 	if g == nil {
 		return nil, nil
 	}
@@ -32,7 +36,7 @@ func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runti
 	}
 
 	if isFanInFailureLike(g, from, out.Status) {
-		conditional, err := selectMatchingConditionalEdge(g, from, out, ctx)
+		conditional, err := selectMatchingConditionalEdge(g, from, out, ctx, progress)
 		if err != nil {
 			return nil, err
 		}
@@ -79,7 +83,7 @@ func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runti
 	}, nil
 }
 
-func selectMatchingConditionalEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context) (*model.Edge, error) {
+func selectMatchingConditionalEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ProgressFunc) (*model.Edge, error) {
 	edges := g.Outgoing(from)
 	if len(edges) == 0 {
 		return nil, nil
@@ -96,6 +100,15 @@ func selectMatchingConditionalEdge(g *model.Graph, from string, out runtime.Outc
 		ok, err := cond.Evaluate(c, out, ctx)
 		if err != nil {
 			return nil, err
+		}
+		if progress != nil {
+			progress(map[string]any{
+				"event":     "edge_condition_evaluated",
+				"node_id":   from,
+				"edge_to":   e.To,
+				"condition": c,
+				"matched":   ok,
+			})
 		}
 		if ok {
 			condMatched = append(condMatched, e)
