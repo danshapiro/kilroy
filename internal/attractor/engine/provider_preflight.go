@@ -235,7 +235,7 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 				Status:   preflightStatusFail,
 				Message:  "api key env is not configured",
 			})
-			return fmt.Errorf("preflight: provider %s api key env is not configured", provider)
+			return fmt.Errorf("preflight: provider %s api key env is not configured\n  hint: set api_key_env in your run config under llm.providers.%s.api, or use backend: cli to skip API keys", provider, provider)
 		}
 		if strings.TrimSpace(os.Getenv(keyEnv)) == "" {
 			report.addCheck(providerPreflightCheck{
@@ -244,7 +244,7 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 				Status:   preflightStatusFail,
 				Message:  fmt.Sprintf("required api key env %s is not set", keyEnv),
 			})
-			return fmt.Errorf("preflight: provider %s missing api key env %s", provider, keyEnv)
+			return fmt.Errorf("preflight: provider %s missing api key env %s\n  hint: export %s=<your-api-key> or switch to backend: cli in your run config", provider, keyEnv, keyEnv)
 		}
 		report.addCheck(providerPreflightCheck{
 			Name:     "provider_api_credentials",
