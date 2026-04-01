@@ -1273,8 +1273,9 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		if promptMode == "stdin" {
 			cmd.Stdin = strings.NewReader(prompt)
 		} else {
-			// Avoid interactive reads if the CLI tries stdin for confirmations.
-			cmd.Stdin = strings.NewReader("")
+			// Auto-accept any interactive confirmation prompts (e.g. the
+			// --dangerously-skip-permissions warning in Claude CLI).
+			cmd.Stdin = strings.NewReader("y\n")
 		}
 		stdoutFile, err := os.Create(stdoutPath)
 		if err != nil {
