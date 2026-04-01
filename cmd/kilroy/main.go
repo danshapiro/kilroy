@@ -110,7 +110,7 @@ func loadEnvFile(args []string) []string {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  kilroy --version")
-	fmt.Fprintln(os.Stderr, "  kilroy [--env-file <path>] attractor run [--detach] [--validate|--preflight|--test-run] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]")
+	fmt.Fprintln(os.Stderr, "  kilroy [--env-file <path>] attractor run [--detach] [--validate|--preflight|--test-run] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> [--config <run.yaml>] [--run-id <id>] [--logs-root <dir>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --logs-root <dir>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --cxdb <http_base_url> --context-id <id>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]")
@@ -228,7 +228,7 @@ func attractorRun(args []string) {
 		}
 	}
 
-	if graphPath == "" || configPath == "" {
+	if graphPath == "" {
 		usage()
 		os.Exit(1)
 	}
@@ -247,7 +247,7 @@ func attractorRun(args []string) {
 	}
 
 	if detach {
-		cfg, err := engine.LoadRunConfigFile(configPath)
+		cfg, err := loadOrBuildConfig(configPath, nil)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -284,7 +284,10 @@ func attractorRun(args []string) {
 		configPath = absConfigPath
 		logsRoot = absLogsRoot
 
-		childArgs := []string{"attractor", "run", "--graph", graphPath, "--config", configPath}
+		childArgs := []string{"attractor", "run", "--graph", graphPath}
+		if configPath != "" {
+			childArgs = append(childArgs, "--config", configPath)
+		}
 		if runID != "" {
 			childArgs = append(childArgs, "--run-id", runID)
 		}
@@ -318,7 +321,7 @@ func attractorRun(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	cfg, err := engine.LoadRunConfigFile(configPath)
+	cfg, err := loadOrBuildConfig(configPath, dotSource)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -459,6 +462,34 @@ func normalizeRunProviderKey(provider string) string {
 func isSupportedForceModelProvider(provider string) bool {
 	_, ok := providerspec.Builtin(provider)
 	return ok
+}
+
+// loadOrBuildConfig loads a config from file, or builds a zero-config default
+// when configPath is empty. For zero-config, providers are auto-detected from
+// environment and graph provider requirements are validated.
+func loadOrBuildConfig(configPath string, dotSource []byte) (*engine.RunConfigFile, error) {
+	if configPath != "" {
+		return engine.LoadRunConfigFile(configPath)
+	}
+	cfg, err := engine.DefaultRunConfig()
+	if err != nil {
+		return nil, err
+	}
+	detected := engine.DetectProviders()
+	engine.ApplyDetectedProviders(cfg, detected)
+	if len(detected) > 0 {
+		for _, dp := range detected {
+			fmt.Fprintf(os.Stderr, "auto-detected provider %s (backend=%s)\n", dp.Key, dp.Backend)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "no providers auto-detected from environment (set API key env vars for your LLM providers)")
+	}
+	if dotSource != nil {
+		if err := engine.ValidateGraphProviders(dotSource, cfg); err != nil {
+			return nil, err
+		}
+	}
+	return cfg, nil
 }
 
 func runConfigUsesCLIProviders(cfg *engine.RunConfigFile) bool {

@@ -13,9 +13,6 @@ func resolveDetachedPaths(graphPath, configPath, logsRoot string) (string, strin
 	if graphPath == "" {
 		return "", "", "", fmt.Errorf("graph path is required")
 	}
-	if configPath == "" {
-		return "", "", "", fmt.Errorf("config path is required")
-	}
 	if logsRoot == "" {
 		return "", "", "", fmt.Errorf("logs root is required")
 	}
@@ -24,9 +21,12 @@ func resolveDetachedPaths(graphPath, configPath, logsRoot string) (string, strin
 	if err != nil {
 		return "", "", "", err
 	}
-	absConfig, err := filepath.Abs(configPath)
-	if err != nil {
-		return "", "", "", err
+	var absConfig string
+	if configPath != "" {
+		absConfig, err = filepath.Abs(configPath)
+		if err != nil {
+			return "", "", "", err
+		}
 	}
 	absLogs, err := filepath.Abs(logsRoot)
 	if err != nil {
