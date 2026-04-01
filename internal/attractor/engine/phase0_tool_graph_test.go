@@ -264,6 +264,57 @@ func TestToolGraph_WorkspaceLifecycle(t *testing.T) {
 	}
 }
 
+func TestToolGraph_ZeroConfig(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+
+	dot := []byte(`digraph zero_config {
+  graph [goal="Test zero-config run"]
+  start [shape=Mdiamond]
+  step_a [shape=parallelogram, tool_command="echo hello_zero_config"]
+  done [shape=Msquare]
+  start -> step_a -> done
+}`)
+
+	// Build a config the same way DefaultRunConfig does, but pointing at
+	// the test repo instead of CWD.
+	cfg := &RunConfigFile{}
+	cfg.Version = 1
+	cfg.Repo.Path = repo
+	cfg.LLM.CLIProfile = "test_shim"
+	// No ModelDB configured — bootstrap should fall back to embedded catalog.
+	applyConfigDefaults(cfg)
+	if err := validateConfig(cfg); err != nil {
+		t.Fatalf("validateConfig: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       "zero-config-test",
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("expected success, got %q", res.FinalStatus)
+	}
+
+	// Verify the tool step executed.
+	stdout := filepath.Join(logsRoot, "step_a", "stdout.log")
+	data, err := os.ReadFile(stdout)
+	if err != nil {
+		t.Fatalf("read step_a stdout: %v", err)
+	}
+	if !strings.Contains(string(data), "hello_zero_config") {
+		t.Fatalf("step_a stdout: got %q, want to contain %q", string(data), "hello_zero_config")
+	}
+}
+
 // minimalToolGraphConfig returns a RunConfigFile suitable for tool-node-only graphs.
 func minimalToolGraphConfig(repoPath, pinnedCatalogPath string) *RunConfigFile {
 	cfg := &RunConfigFile{}
