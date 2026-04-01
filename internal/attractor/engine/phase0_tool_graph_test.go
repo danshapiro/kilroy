@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -312,6 +313,50 @@ func TestToolGraph_ZeroConfig(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "hello_zero_config") {
 		t.Fatalf("step_a stdout: got %q, want to contain %q", string(data), "hello_zero_config")
+	}
+}
+
+func TestToolGraph_RunIDInjected(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+	markerFile := filepath.Join(t.TempDir(), "run_id_check.txt")
+
+	dot := []byte(fmt.Sprintf(`digraph run_id {
+  graph [goal="Test KILROY_RUN_ID injection into tool nodes"]
+  start [shape=Mdiamond]
+  check [shape=parallelogram, tool_command="echo $KILROY_RUN_ID > %s"]
+  done [shape=Msquare]
+  start -> check -> done
+}`, markerFile))
+	cfg := minimalToolGraphConfig(repo, pinned)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	runID := "env-inject-test"
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       runID,
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("expected success, got %q", res.FinalStatus)
+	}
+
+	data, err := os.ReadFile(markerFile)
+	if err != nil {
+		t.Fatalf("read marker file: %v", err)
+	}
+	got := strings.TrimSpace(string(data))
+	if got == "" {
+		t.Fatal("KILROY_RUN_ID was empty in tool node environment")
+	}
+	if got != runID {
+		t.Fatalf("KILROY_RUN_ID: got %q, want %q", got, runID)
 	}
 }
 
