@@ -318,17 +318,18 @@ func validateConfig(cfg *RunConfigFile) error {
 	if cfg.CXDB.Autostart.Enabled && len(cfg.CXDB.Autostart.Command) == 0 {
 		return fmt.Errorf("cxdb.autostart.command is required when cxdb.autostart.enabled=true")
 	}
-	if strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoPath) == "" {
-		return fmt.Errorf("modeldb.openrouter_model_info_path is required")
-	}
-	switch strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)) {
-	case "pinned", "on_run_start":
-		// ok
-	default:
-		return fmt.Errorf("invalid modeldb.openrouter_model_info_update_policy: %q (want pinned|on_run_start)", cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)
-	}
-	if strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)) == "on_run_start" && strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoURL) == "" {
-		return fmt.Errorf("modeldb.openrouter_model_info_url is required when update_policy=on_run_start")
+	// Model catalog is optional: when no path is configured the engine falls
+	// back to the embedded catalog at bootstrap time.
+	if strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoPath) != "" {
+		switch strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)) {
+		case "pinned", "on_run_start":
+			// ok
+		default:
+			return fmt.Errorf("invalid modeldb.openrouter_model_info_update_policy: %q (want pinned|on_run_start)", cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)
+		}
+		if strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy)) == "on_run_start" && strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoURL) == "" {
+			return fmt.Errorf("modeldb.openrouter_model_info_url is required when update_policy=on_run_start")
+		}
 	}
 	switch strings.ToLower(strings.TrimSpace(cfg.LLM.CLIProfile)) {
 	case "real", "test_shim":

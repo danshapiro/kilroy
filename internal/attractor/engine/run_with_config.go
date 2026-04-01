@@ -290,20 +290,41 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 	}
 
 	// Resolve + snapshot the model catalog for this run (repeatability).
-	resolved, err := modeldb.ResolveModelCatalog(
-		ctx,
-		cfg.ModelDB.OpenRouterModelInfoPath,
-		opts.LogsRoot,
-		modeldb.CatalogUpdatePolicy(strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy))),
-		cfg.ModelDB.OpenRouterModelInfoURL,
-		time.Duration(cfg.ModelDB.OpenRouterModelInfoFetchTimeoutMS)*time.Millisecond,
+	// When no catalog path is configured, fall back to the embedded catalog.
+	var (
+		catalog            *modeldb.Catalog
+		modelCatalogSource string
+		modelCatalogPath   string
+		resolvedWarning    string
 	)
-	if err != nil {
-		return nil, err
-	}
-	catalog, err := loadCatalogForRun(resolved.SnapshotPath)
-	if err != nil {
-		return nil, err
+	if strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoPath) != "" {
+		resolved, resolveErr := modeldb.ResolveModelCatalog(
+			ctx,
+			cfg.ModelDB.OpenRouterModelInfoPath,
+			opts.LogsRoot,
+			modeldb.CatalogUpdatePolicy(strings.ToLower(strings.TrimSpace(cfg.ModelDB.OpenRouterModelInfoUpdatePolicy))),
+			cfg.ModelDB.OpenRouterModelInfoURL,
+			time.Duration(cfg.ModelDB.OpenRouterModelInfoFetchTimeoutMS)*time.Millisecond,
+		)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		cat, loadErr := loadCatalogForRun(resolved.SnapshotPath)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+		catalog = cat
+		modelCatalogSource = resolved.Source
+		modelCatalogPath = resolved.SnapshotPath
+		resolvedWarning = strings.TrimSpace(resolved.Warning)
+	} else {
+		cat, loadErr := modeldb.LoadEmbeddedCatalog()
+		if loadErr != nil {
+			return nil, fmt.Errorf("no model catalog configured and embedded catalog unavailable: %w", loadErr)
+		}
+		catalog = cat
+		modelCatalogSource = "embedded"
+		modelCatalogPath = ""
 	}
 	catalogChecks, catalogErr := validateProviderModelPairs(g, runtimes, catalog, opts)
 	if catalogErr != nil {
@@ -343,7 +364,6 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 		}
 	}
 
-	resolvedWarning := strings.TrimSpace(resolved.Warning)
 	inputInfererInitWarning = strings.TrimSpace(inputInfererInitWarning)
 	combinedWarnings := []string{}
 	if resolvedWarning != "" {
@@ -372,8 +392,8 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 		Registry:                reg,
 		ResolvedArtifactPolicy:  resolvedArtifactPolicy,
 		Catalog:                 catalog,
-		ModelCatalogSource:      resolved.Source,
-		ModelCatalogPath:        resolved.SnapshotPath,
+		ModelCatalogSource:      modelCatalogSource,
+		ModelCatalogPath:        modelCatalogPath,
 		Runtimes:                runtimes,
 		InputInferer:            inputInferer,
 		ResolvedWarning:         resolvedWarning,
