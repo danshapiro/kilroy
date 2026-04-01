@@ -94,8 +94,9 @@ func (o *RunOptions) applyDefaults() error {
 	if o.RunBranchPrefix == "" {
 		o.RunBranchPrefix = "attractor/run"
 	}
-	// metaspec: require_clean defaults to true; an allow-dirty override is not required for v1.
-	o.RequireClean = true
+	// require_clean defaults to false: kilroy creates its own worktree,
+	// so the parent repo's cleanliness is irrelevant for correctness.
+	o.RequireClean = false
 	if o.RunID == "" {
 		id, err := NewRunID()
 		if err != nil {

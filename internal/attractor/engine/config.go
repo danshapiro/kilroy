@@ -222,10 +222,11 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	if !cfg.Git.CommitPerNode {
 		cfg.Git.CommitPerNode = true
 	}
-	// metaspec default: require_clean defaults to true when not specified.
+	// require_clean defaults to false: kilroy creates its own worktree, so
+	// the parent repo's cleanliness is irrelevant for correctness.
 	if cfg.Git.RequireClean == nil {
-		t := true
-		cfg.Git.RequireClean = &t
+		f := false
+		cfg.Git.RequireClean = &f
 	}
 	cfg.Git.CheckpointExcludeGlobs = trimNonEmpty(cfg.Git.CheckpointExcludeGlobs)
 	applyArtifactPolicyDefaults(cfg)
@@ -434,10 +435,10 @@ func trimNonEmpty(parts []string) []string {
 }
 
 // resolveRequireClean returns the effective require_clean value from the config,
-// defaulting to true when the config is nil or the field is unset.
+// defaulting to false when the config is nil or the field is unset.
 func resolveRequireClean(cfg *RunConfigFile) bool {
 	if cfg == nil || cfg.Git.RequireClean == nil {
-		return true
+		return false
 	}
 	return *cfg.Git.RequireClean
 }

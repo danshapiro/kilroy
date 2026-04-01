@@ -315,6 +315,42 @@ func TestToolGraph_ZeroConfig(t *testing.T) {
 	}
 }
 
+func TestToolGraph_DirtyRepoSucceedsWithDefaultConfig(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+
+	// Make the repo dirty with an uncommitted file.
+	if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("uncommitted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dot := []byte(`digraph dirty_repo {
+  graph [goal="Test dirty repo with default require_clean"]
+  start [shape=Mdiamond]
+  step [shape=parallelogram, tool_command="echo dirty_repo_ok"]
+  done [shape=Msquare]
+  start -> step -> done
+}`)
+	// Config does NOT set require_clean — the default (false) should allow the run.
+	cfg := minimalToolGraphConfig(repo, pinned)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       "dirty-repo-test",
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig with dirty repo: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("expected success with dirty repo, got %q", res.FinalStatus)
+	}
+}
+
 func TestToolGraph_PartialConfigAutoDetectsProviders(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	t.Setenv("ANTHROPIC_API_KEY", "sk-test-partial-config")
