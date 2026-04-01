@@ -292,10 +292,10 @@ func TestToolGraph_ZeroConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
+	// No DisableCXDB — CXDB config is empty, so bootstrap skips it automatically.
 	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{
-		RunID:       "zero-config-test",
-		LogsRoot:    logsRoot,
-		DisableCXDB: true,
+		RunID:    "zero-config-test",
+		LogsRoot: logsRoot,
 	})
 	if err != nil {
 		t.Fatalf("RunWithConfig: %v", err)
