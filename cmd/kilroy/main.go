@@ -247,7 +247,7 @@ func attractorRun(args []string) {
 	}
 
 	if detach {
-		cfg, err := loadOrBuildConfig(configPath, nil)
+		cfg, err := loadOrBuildConfig(configPath)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -321,7 +321,7 @@ func attractorRun(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	cfg, err := loadOrBuildConfig(configPath, dotSource)
+	cfg, err := loadOrBuildConfig(configPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -466,8 +466,8 @@ func isSupportedForceModelProvider(provider string) bool {
 
 // loadOrBuildConfig loads a config from file, or builds a zero-config default
 // when configPath is empty. For zero-config, providers are auto-detected from
-// environment and graph provider requirements are validated.
-func loadOrBuildConfig(configPath string, dotSource []byte) (*engine.RunConfigFile, error) {
+// the environment. Graph-level provider validation happens later in bootstrap.
+func loadOrBuildConfig(configPath string) (*engine.RunConfigFile, error) {
 	if configPath != "" {
 		return engine.LoadRunConfigFile(configPath)
 	}
@@ -483,11 +483,6 @@ func loadOrBuildConfig(configPath string, dotSource []byte) (*engine.RunConfigFi
 		}
 	} else {
 		fmt.Fprintln(os.Stderr, "no providers auto-detected from environment (set API key env vars for your LLM providers)")
-	}
-	if dotSource != nil {
-		if err := engine.ValidateGraphProviders(dotSource, cfg); err != nil {
-			return nil, err
-		}
 	}
 	return cfg, nil
 }
