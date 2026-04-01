@@ -11,6 +11,10 @@ mkdir -p "$SCRATCH"
 
 echo "=== Setting up PR #${PR_NUMBER} from ${PR_REPO} ==="
 
+# Preserve workflow scripts before branch switch (PR branch won't have them)
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cp "$SCRIPT_DIR/build-test.sh" "$SCRATCH/build-test.sh" 2>/dev/null || true
+
 # Add the PR's repo as a remote if needed
 REMOTE_URL="https://github.com/${PR_REPO}.git"
 if ! git remote get-url pr-origin >/dev/null 2>&1; then

@@ -23,7 +23,7 @@ digraph pr_review {
     build_test [
         shape=parallelogram,
         label="Build & Test",
-        tool_command="sh workflows/pr-review/scripts/build-test.sh"
+        tool_command="sh .ai/pr-data/build-test.sh"
     ]
 
     // Single agent: review code + produce final report
