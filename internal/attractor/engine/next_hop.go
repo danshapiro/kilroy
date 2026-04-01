@@ -24,6 +24,7 @@ type resolvedNextHop struct {
 	Edge              *model.Edge
 	Source            nextHopSource
 	RetryTargetSource string
+	SelectionMeta     edgeSelectionMeta
 }
 
 func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, failureClass string, progress ProgressFunc) (*resolvedNextHop, error) {
@@ -36,14 +37,15 @@ func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runti
 	}
 
 	if isFanInFailureLike(g, from, out.Status) {
-		conditional, err := selectMatchingConditionalEdge(g, from, out, ctx, progress)
+		conditional, condMeta, err := selectMatchingConditionalEdge(g, from, out, ctx, progress)
 		if err != nil {
 			return nil, err
 		}
 		if conditional != nil {
 			return &resolvedNextHop{
-				Edge:   conditional,
-				Source: nextHopSourceConditional,
+				Edge:          conditional,
+				Source:        nextHopSourceConditional,
+				SelectionMeta: condMeta,
 			}, nil
 		}
 
@@ -70,7 +72,7 @@ func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runti
 		return nil, nil
 	}
 
-	next, err := selectNextEdge(g, from, out, ctx)
+	next, meta, err := selectNextEdgeWithMeta(g, from, out, ctx, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -78,16 +80,19 @@ func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runti
 		return nil, nil
 	}
 	return &resolvedNextHop{
-		Edge:   next,
-		Source: nextHopSourceEdgeSelection,
+		Edge:          next,
+		Source:        nextHopSourceEdgeSelection,
+		SelectionMeta: meta,
 	}, nil
 }
 
-func selectMatchingConditionalEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ProgressFunc) (*model.Edge, error) {
+func selectMatchingConditionalEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ProgressFunc) (*model.Edge, edgeSelectionMeta, error) {
 	edges := g.Outgoing(from)
+	meta := edgeSelectionMeta{}
 	if len(edges) == 0 {
-		return nil, nil
+		return nil, meta, nil
 	}
+	meta.CandidatesEvaluated = len(edges)
 	var condMatched []*model.Edge
 	for _, e := range edges {
 		if e == nil {
@@ -99,7 +104,7 @@ func selectMatchingConditionalEdge(g *model.Graph, from string, out runtime.Outc
 		}
 		ok, err := cond.Evaluate(c, out, ctx)
 		if err != nil {
-			return nil, err
+			return nil, meta, err
 		}
 		if progress != nil {
 			progress(map[string]any{
@@ -115,9 +120,11 @@ func selectMatchingConditionalEdge(g *model.Graph, from string, out runtime.Outc
 		}
 	}
 	if len(condMatched) == 0 {
-		return nil, nil
+		return nil, meta, nil
 	}
-	return bestEdge(condMatched), nil
+	meta.Method = "condition_match"
+	meta.ConditionsMatched = len(condMatched)
+	return bestEdge(condMatched), meta, nil
 }
 
 func resolveRetryTargetWithSource(g *model.Graph, nodeID string) (target string, source string) {
