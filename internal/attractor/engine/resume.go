@@ -366,7 +366,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	}
 
 	// Implicit fan-out: mirror forward-path logic for multi-edge convergence.
-	allEdges, edgeErr := selectAllEligibleEdges(eng.Graph, lastNodeID, lastOutcome, eng.Context)
+	allEdges, edgeErr := selectAllEligibleEdges(eng.Graph, lastNodeID, lastOutcome, eng.Context, eng.appendProgress)
 	if edgeErr != nil {
 		return nil, edgeErr
 	}
@@ -414,7 +414,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		}
 	}
 
-	nextHop, err := resolveNextHop(eng.Graph, lastNodeID, lastOutcome, eng.Context, classifyFailureClass(lastOutcome))
+	nextHop, err := resolveNextHop(eng.Graph, lastNodeID, lastOutcome, eng.Context, classifyFailureClass(lastOutcome), eng.appendProgress)
 	if err != nil {
 		return nil, err
 	}
