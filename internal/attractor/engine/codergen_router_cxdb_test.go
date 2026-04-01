@@ -33,10 +33,10 @@ func TestEmitCXDBToolTurns_EmitsAssistantToolCallAndToolResult(t *testing.T) {
 		Kind:      agent.EventToolCallEnd,
 		Timestamp: time.Now(),
 		Data: map[string]any{
-			"tool_name":  "Read",
-			"call_id":    "toolu_123",
+			"tool_name":   "Read",
+			"call_id":     "toolu_123",
 			"full_output": "hello world",
-			"is_error":   false,
+			"is_error":    false,
 		},
 	})
 
