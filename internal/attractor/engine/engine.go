@@ -1292,6 +1292,22 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		if canRetry {
 			willRetry = true
 		}
+		reason := out.FailureReason
+		if willRetry {
+			reason = fmt.Sprintf("%s, attempts remaining", out.FailureReason)
+		} else if attempt >= maxAttempts {
+			reason = fmt.Sprintf("%s, max retries exhausted", out.FailureReason)
+		} else {
+			reason = fmt.Sprintf("%s, failure_class=%s not retryable", out.FailureReason, failureClass)
+		}
+		e.appendProgress(map[string]any{
+			"event":       "retry_decision",
+			"node_id":     node.ID,
+			"attempt":     attempt,
+			"max_retries": maxRetries,
+			"will_retry":  willRetry,
+			"reason":      reason,
+		})
 		// Spec §9.6: emit StageFailed CXDB event.
 		e.cxdbStageFailed(ctx, node, out.FailureReason, willRetry, attempt)
 		if canRetry {
