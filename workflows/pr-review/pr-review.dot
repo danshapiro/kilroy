@@ -1,9 +1,9 @@
-// Single-PR review workflow: setup repo, build/test, review, produce report.
+// Single-PR review workflow: setup, investigate, decide.
 // Usage: PR_REPO=owner/repo PR_NUMBER=123 kilroy attractor run --graph pr-review.dot --config run.yaml
 
 digraph pr_review {
     graph [
-        goal="Review GitHub pull request: checkout, build, test, and assess for merge readiness",
+        goal="Review GitHub pull request for merge readiness",
         model_stylesheet="
             * { llm_model: claude-sonnet-4.6; llm_provider: anthropic; }
         "
@@ -12,79 +12,135 @@ digraph pr_review {
     start [shape=Mdiamond, label="Start"]
     exit  [shape=Msquare, label="Exit"]
 
-    // Checkout PR branch, merge main, fetch metadata and diff
-    setup_pr [
+    // Deterministic setup: fetch metadata, checkout PR branch, merge base, run build/test
+    setup [
         shape=parallelogram,
-        label="Setup PR",
+        label="Setup",
         tool_command="sh workflows/pr-review/scripts/setup-pr.sh"
     ]
 
-    // Build, test, format check — always exit 0, results saved to files
-    build_test [
-        shape=parallelogram,
-        label="Build & Test",
-        tool_command="sh .ai/pr-data/build-test.sh"
-    ]
-
-    // Single agent: review code + produce final report
-    review [
+    // Agentic investigation: deep review with full tool access
+    investigate [
         shape=box,
-        label="Review & Report",
+        label="Investigate",
         auto_status=true,
-        prompt="You are a PR reviewer. The PR branch is already checked out in your working directory. Build and test results are available.
+        prompt="You are investigating a GitHub pull request. The PR branch has been checked out
+and merged with the base branch. Build and test results are available.
 
-READ THESE FILES FIRST:
-- .ai/pr-data/pr-view.txt (PR description)
-- .ai/pr-data/pr-meta.json (metadata: files, author, branches)
-- .ai/pr-data/pr-diff.patch (the diff)
-- .ai/pr-data/merge-result.txt (clean or conflict)
-- .ai/pr-data/build-result.txt (pass or fail)
-- .ai/pr-data/test-result.txt (pass or fail)
+START by reading these files:
+- .ai/pr-data/pr-view.txt (PR description and discussion)
+- .ai/pr-data/pr-meta.json (structured metadata: files changed, author, branches)
+- .ai/pr-data/pr-diff.patch (the full diff)
+- .ai/pr-data/merge-result.txt (whether the merge was clean or had conflicts)
+- .ai/pr-data/build-result.txt (build pass/fail)
+- .ai/pr-data/build-stderr.txt (build errors if any)
+- .ai/pr-data/test-result.txt (test pass/fail)
 - .ai/pr-data/test-output.txt (full test output)
-- .ai/pr-data/gofmt-result.txt (pass or fail)
+- .ai/pr-data/gofmt-result.txt (format check pass/fail)
 
-You also have the full codebase available. Use it. Read the actual source files that were changed — not just the diff. Understand the surrounding context.
+THEN investigate the actual codebase. You have the full repo checked out. Use it:
+- Read the source files that were changed. Read the surrounding code for context.
+- If tests failed, determine whether failures are pre-existing on the base branch or
+  introduced by this PR. Check git blame, read the failing test code, understand why.
+- If the PR claims to fix something, verify the fix actually works.
+- If the PR adds functionality, check if it has tests and if they cover the key cases.
+- Look for: bugs, security issues, missing error handling, naming problems, scope creep.
+- Run additional targeted commands if needed (specific test files, linters, etc).
 
-YOUR JOB:
-Assess whether this PR should be merged. Be concise and actionable.
+Write your findings to .ai/pr-data/investigation.md as a structured evidence document:
 
-Write .ai/pr-data/review-report.md in EXACTLY this format:
+## PR Overview
+[1-2 sentences: what this PR does]
 
----
-## Decision: [one of: MERGE | MERGE-FIX | FIX-MERGE | CHERRY-PICK | SPLIT | REJECT]
-
-## Rationale
-[3-5 sentences max. Why this decision? What does the PR do and is it worth merging?]
-
-## Build & Test
+## Verification Results
 - Build: [pass/fail]
-- Tests: [pass/fail, note any failures and whether they are pre-existing or introduced by this PR]
-- Format: [pass/fail]
+- Tests: [pass/fail — list any failures and whether pre-existing or introduced]
+- Format: [pass/fail — list affected files]
+- Claims verified: [did you confirm the PR does what it says?]
 
-## Blockers
-[List anything that MUST be fixed before merge. If none, write 'None'.]
+## Code Review Findings
+[List each finding as a bullet. For each: what you found, where (file:line), and why it matters.
+Include positive findings too — things done well that should be preserved.]
 
-## Follow-up Tasks
-[Discrete tasks that should happen after merge — each with enough context that another agent could implement it without re-reading this PR. If none, write 'None'.]
+## Scope Assessment
+[Is this PR well-scoped? Does every changed file serve the stated purpose?
+Flag any unrelated changes that should be in a separate PR.]
 
-Example follow-up format:
-- FIX: Remove duplicate test entry {\"gpt-5.4\", false} in internal/attractor/engine/cli_only_models_test.go line 13-14. The same case appears twice. Remove one and consider replacing it with a test for gpt-5.4-spark.
----
+## Risk Factors
+[What could go wrong if merged? Edge cases, migration concerns, behavioral changes.
+If low risk, say so briefly and move on.]
 
-RULES:
-- Bias toward landing contributions. Prefer MERGE-FIX over FIX-MERGE for minor issues.
-- Do NOT pad the report. No tables, no severity tags, no dimensions matrix. Just the sections above.
-- Every follow-up task must specify: the file, what to change, and why.
-- If build/test fails, check whether failures are pre-existing on main or introduced by this PR.
-- Verify claims in the PR description against what the code actually does.
+Do NOT make recommendations or decisions. Your job is to gather evidence. The next step
+will use your findings to make the merge decision.
 
 On failure, write to $KILROY_STAGE_STATUS_PATH (fallback $KILROY_STAGE_STATUS_FALLBACK_PATH):
 {\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
     ]
 
-    start -> setup_pr
-    setup_pr -> build_test [condition="outcome=success"]
-    setup_pr -> exit
-    build_test -> review
-    review -> exit
+    // Decision agent: reads evidence, produces actionable verdict
+    decide [
+        shape=box,
+        label="Decide",
+        auto_status=true,
+        prompt="You are making a merge decision for a GitHub pull request based on evidence
+gathered by the investigation step.
+
+Read these files:
+- .ai/pr-data/investigation.md (detailed findings from the investigator)
+- .ai/pr-data/pr-view.txt (PR description for context)
+- .ai/pr-data/pr-meta.json (metadata)
+
+Do NOT run commands or read source code. The investigation is complete. Your job is to
+decide and direct.
+
+Write .ai/pr-data/review-report.md in EXACTLY this format:
+
+## Decision: [one of: MERGE | MERGE-FIX | FIX-MERGE | CHERRY-PICK | SPLIT | REJECT]
+
+## Rationale
+[3-5 sentences max. What does the PR do, is it worth merging, and why this decision.]
+
+## Verification Summary
+- Build: [pass/fail]
+- Tests: [pass/fail — note pre-existing vs introduced failures]
+- Format: [pass/fail]
+
+## Blockers
+[Things that MUST be fixed before merge. If none, write 'None'.]
+
+## Next Actions
+[Ordered list of what should happen now. Be specific and directive but not prescriptive —
+the downstream agent knows git mechanics. Tell it WHAT to do and WHY, not HOW to type it.
+
+Examples of good next actions:
+- Merge PR #74 into main.
+- Comment on PR with: 'Reviewed — merging. Follow-up PR incoming for cleanup items below.'
+- Create a follow-up PR from main that fixes gofmt drift in engine.go around line 806
+  (pre-existing from PR #76, map literal alignment) and removes the duplicate test entry
+  at cli_only_models_test.go line 14.
+- Reject PR #99. Comment: 'This PR bundles auth refactoring with unrelated UI changes.
+  Please split into separate PRs — happy to review the auth changes independently.'
+
+Examples of bad next actions:
+- Run `git checkout -b fix/cleanup && gofmt -w file.go && git add . && git commit...`
+  (too prescriptive — the downstream knows how to make a branch and commit)
+- Address the issues found in the review.
+  (too vague — which issues? what specifically should change?)
+]
+
+RULES:
+- Bias toward landing contributions. Prefer MERGE-FIX over FIX-MERGE for minor issues.
+- Every action must be specific enough that someone unfamiliar with the PR can execute it.
+- Keep the whole report under 40 lines. No padding, no tables, no filler.
+- If the investigation found nothing concerning, say so briefly and move on.
+
+On failure, write to $KILROY_STAGE_STATUS_PATH (fallback $KILROY_STAGE_STATUS_FALLBACK_PATH):
+{\"status\":\"fail\",\"failure_reason\":\"...\",\"failure_class\":\"deterministic\"}"
+    ]
+
+    start -> setup
+    setup -> investigate [condition="outcome=success"]
+    setup -> exit
+    investigate -> decide
+    decide -> exit
 }

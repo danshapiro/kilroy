@@ -1,5 +1,5 @@
 #!/bin/sh
-# Checkout a PR branch into the current worktree and merge main.
+# Checkout a PR branch into the current worktree via raw git, merge base branch.
 
 set -e
 
@@ -13,50 +13,62 @@ echo "=== Setting up PR #${PR_NUMBER} from ${PR_REPO} ==="
 
 # Preserve workflow scripts before branch switch (PR branch won't have them)
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-cp "$SCRIPT_DIR/build-test.sh" "$SCRATCH/build-test.sh" 2>/dev/null || true
+for f in "$SCRIPT_DIR"/*.sh; do
+    cp "$f" "$SCRATCH/" 2>/dev/null || true
+done
 
-# Add the PR's repo as a remote if needed
-REMOTE_URL="https://github.com/${PR_REPO}.git"
-if ! git remote get-url pr-origin >/dev/null 2>&1; then
-    git remote add pr-origin "$REMOTE_URL"
-fi
-
-# Fetch PR metadata via gh
+# Fetch PR metadata via gh (read-only, no state changes)
 gh pr view "$PR_NUMBER" --repo "$PR_REPO" \
   --json title,body,author,labels,files,baseRefName,headRefName,additions,deletions,changedFiles \
   > "$SCRATCH/pr-meta.json"
 gh pr view "$PR_NUMBER" --repo "$PR_REPO" > "$SCRATCH/pr-view.txt"
 gh pr diff "$PR_NUMBER" --repo "$PR_REPO" > "$SCRATCH/pr-diff.patch"
 
-# Checkout the PR branch
-gh pr checkout "$PR_NUMBER" --repo "$PR_REPO" --force
+# Extract metadata
+BASE_BRANCH=$(python3 -c "import json; print(json.load(open('$SCRATCH/pr-meta.json'))['baseRefName'])")
+HEAD_BRANCH=$(python3 -c "import json; print(json.load(open('$SCRATCH/pr-meta.json'))['headRefName'])")
+TITLE=$(python3 -c "import json; print(json.load(open('$SCRATCH/pr-meta.json'))['title'])")
 
-# Record the PR branch state
+# Add upstream remote for the PR's repo
+REMOTE_URL="https://github.com/${PR_REPO}.git"
+if ! git remote get-url upstream >/dev/null 2>&1; then
+    git remote add upstream "$REMOTE_URL"
+fi
+
+# Fetch PR ref and base branch via raw git
+echo "Fetching PR #${PR_NUMBER} head and base (${BASE_BRANCH})..."
+git fetch upstream "pull/${PR_NUMBER}/head" --quiet
+git fetch upstream "$BASE_BRANCH" --quiet
+
+# Checkout PR at FETCH_HEAD on a unique branch name for this run
+# Unique name avoids git worktree branch-lock conflicts with parallel runs
+RUN_TAG=$(echo "${KILROY_RUN_ID:-$$}" | tail -c 9)
+LOCAL_BRANCH="pr-review/${PR_NUMBER}-${RUN_TAG}"
+git checkout -b "$LOCAL_BRANCH" FETCH_HEAD --quiet
+
 PR_SHA=$(git rev-parse HEAD)
-echo "PR branch HEAD: $PR_SHA"
+echo "PR branch HEAD: $PR_SHA (local: $LOCAL_BRANCH)"
 
-# Merge main into the PR branch (no rebase — preserve history)
-BASE_BRANCH=$(cat "$SCRATCH/pr-meta.json" | python3 -c "import sys,json; print(json.load(sys.stdin)['baseRefName'])")
-echo "Merging ${BASE_BRANCH} into PR branch..."
-git fetch pr-origin "$BASE_BRANCH"
-if git merge "pr-origin/${BASE_BRANCH}" --no-edit 2>"$SCRATCH/merge-stderr.txt"; then
+# Merge base branch into PR branch (no rebase — preserve history)
+echo "Merging upstream/${BASE_BRANCH} into PR branch..."
+if git merge "upstream/${BASE_BRANCH}" --no-edit 2>"$SCRATCH/merge-stderr.txt"; then
     echo "MERGE_STATUS=clean" > "$SCRATCH/merge-result.txt"
     echo "Merge: clean"
 else
     echo "MERGE_STATUS=conflict" > "$SCRATCH/merge-result.txt"
     git diff --name-only --diff-filter=U > "$SCRATCH/conflict-files.txt" 2>/dev/null || true
     git merge --abort || true
-    echo "Merge: CONFLICTS detected (see $SCRATCH/conflict-files.txt)"
+    echo "Merge: CONFLICTS (see $SCRATCH/conflict-files.txt)"
 fi
 
-# Stats
-TITLE=$(python3 -c "import json; print(json.load(open('$SCRATCH/pr-meta.json'))['title'])")
+# Write setup summary
 FILES=$(python3 -c "import json; print(json.load(open('$SCRATCH/pr-meta.json'))['changedFiles'])")
 ADDS=$(python3 -c "import json; print(json.load(open('$SCRATCH/pr-meta.json'))['additions'])")
 DELS=$(python3 -c "import json; print(json.load(open('$SCRATCH/pr-meta.json'))['deletions'])")
 
 echo ""
 echo "PR #${PR_NUMBER}: ${TITLE}"
+echo "  Author: $(python3 -c "import json; print(json.load(open('$SCRATCH/pr-meta.json'))['author']['login'])")"
+echo "  Branch: ${HEAD_BRANCH} -> ${BASE_BRANCH}"
 echo "  Files changed: ${FILES}  (+${ADDS} / -${DELS})"
 echo "  Diff: $(wc -l < "$SCRATCH/pr-diff.patch" | tr -d ' ') lines"
-echo "  Data: $SCRATCH/"
