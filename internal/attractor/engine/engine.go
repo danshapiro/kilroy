@@ -94,8 +94,8 @@ func (o *RunOptions) applyDefaults() error {
 	if o.RunBranchPrefix == "" {
 		o.RunBranchPrefix = "attractor/run"
 	}
-	// metaspec: require_clean defaults to true; an allow-dirty override is not required for v1.
-	o.RequireClean = true
+	// require_clean defaults to false (zero value of bool): kilroy creates
+	// its own worktree, so the parent repo's cleanliness is irrelevant.
 	if o.RunID == "" {
 		id, err := NewRunID()
 		if err != nil {
@@ -339,7 +339,11 @@ func PrepareWithOptions(dotSource []byte, opts PrepareOptions) (*model.Graph, []
 	var errs []string
 	for _, d := range diags {
 		if d.Severity == validate.SeverityError {
-			errs = append(errs, d.Rule+": "+d.Message)
+			msg := d.Rule + ": " + d.Message
+			if d.Fix != "" {
+				msg += "\n  hint: " + d.Fix
+			}
+			errs = append(errs, msg)
 		}
 	}
 	if len(errs) > 0 {
@@ -744,7 +748,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		}
 
 		// Resolve next hop with fan-in failure policy.
-		nextHop, err := resolveNextHop(e.Graph, node.ID, out, e.Context, failureClass)
+		nextHop, err := resolveNextHop(e.Graph, node.ID, out, e.Context, failureClass, e.appendProgress)
 		if err != nil {
 			return nil, err
 		}
@@ -806,12 +810,15 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		}
 		next := nextHop.Edge
 		e.appendProgress(map[string]any{
-			"event":      "edge_selected",
-			"from_node":  node.ID,
-			"to_node":    next.To,
-			"label":      next.Label(),
-			"condition":  next.Condition(),
-			"hop_source": string(nextHop.Source),
+			"event":               "edge_selected",
+			"from_node":           node.ID,
+			"to_node":             next.To,
+			"label":               next.Label(),
+			"condition":           next.Condition(),
+			"hop_source":          string(nextHop.Source),
+			"selection_method":    nextHop.SelectionMeta.Method,
+			"candidates_evaluated": nextHop.SelectionMeta.CandidatesEvaluated,
+			"conditions_matched":  nextHop.SelectionMeta.ConditionsMatched,
 		})
 
 		// loop_restart (attractor-spec §3.2 Step 7): terminate current run, re-launch
@@ -1289,6 +1296,22 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		if canRetry {
 			willRetry = true
 		}
+		reason := out.FailureReason
+		if willRetry {
+			reason = fmt.Sprintf("%s, attempts remaining", out.FailureReason)
+		} else if attempt >= maxAttempts {
+			reason = fmt.Sprintf("%s, max retries exhausted", out.FailureReason)
+		} else {
+			reason = fmt.Sprintf("%s, failure_class=%s not retryable", out.FailureReason, failureClass)
+		}
+		e.appendProgress(map[string]any{
+			"event":       "retry_decision",
+			"node_id":     node.ID,
+			"attempt":     attempt,
+			"max_retries": maxRetries,
+			"will_retry":  willRetry,
+			"reason":      reason,
+		})
 		// Spec §9.6: emit StageFailed CXDB event.
 		e.cxdbStageFailed(ctx, node, out.FailureReason, willRetry, attempt)
 		if canRetry {
@@ -1987,15 +2010,31 @@ func findStartNodeID(g *model.Graph) string {
 }
 
 // selectNextEdge implements attractor-spec edge selection with deterministic tie-breaks (metaspec).
-func selectNextEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context) (*model.Edge, error) {
-	edges, err := selectAllEligibleEdges(g, from, out, ctx)
+func selectNextEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ...ProgressFunc) (*model.Edge, error) {
+	edge, _, err := selectNextEdgeWithMeta(g, from, out, ctx, progress...)
+	return edge, err
+}
+
+func selectNextEdgeWithMeta(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ...ProgressFunc) (*model.Edge, edgeSelectionMeta, error) {
+	edges, meta, err := selectAllEligibleEdgesWithMeta(g, from, out, ctx, progress...)
 	if err != nil {
-		return nil, err
+		return nil, meta, err
 	}
 	if len(edges) == 0 {
-		return nil, nil
+		return nil, meta, nil
 	}
-	return bestEdge(edges), nil
+	// Refine method: if weight selected from multiple candidates, check for tiebreak.
+	if meta.Method == "weight" && len(edges) > 1 {
+		best := bestEdge(edges)
+		// Check if the winner was determined by lexical tiebreak.
+		wi := parseInt(edges[0].Attr("weight", "0"), 0)
+		wj := parseInt(edges[1].Attr("weight", "0"), 0)
+		if wi == wj {
+			meta.Method = "lexical_tiebreak"
+		}
+		return best, meta, nil
+	}
+	return bestEdge(edges), meta, nil
 }
 
 // hasMatchingOutgoingCondition returns true if any outgoing edge from the given
@@ -2026,14 +2065,26 @@ func hasMatchingOutgoingCondition(g *model.Graph, nodeID string, out runtime.Out
 	return false
 }
 
+// edgeSelectionMeta captures how edge selection resolved for decision logging.
+type edgeSelectionMeta struct {
+	Method             string // condition_match, preferred_label, suggested_next_ids, weight, only_edge, fallback
+	CandidatesEvaluated int
+	ConditionsMatched   int
+}
+
 // selectAllEligibleEdges returns all edges that are eligible for traversal from the given node.
 // When multiple edges are returned, the caller should treat this as an implicit fan-out.
 // Preferred-label and suggested-next-ID narrowing still apply — if they narrow to a single edge,
 // only that edge is returned (no fan-out).
-func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context) ([]*model.Edge, error) {
+func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ...ProgressFunc) ([]*model.Edge, error) {
+	edges, _, err := selectAllEligibleEdgesWithMeta(g, from, out, ctx, progress...)
+	return edges, err
+}
+
+func selectAllEligibleEdgesWithMeta(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ...ProgressFunc) ([]*model.Edge, edgeSelectionMeta, error) {
 	rawEdges := g.Outgoing(from)
 	if len(rawEdges) == 0 {
-		return nil, nil
+		return nil, edgeSelectionMeta{}, nil
 	}
 
 	// Filter nil edges once for use in all subsequent steps.
@@ -2044,26 +2095,47 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		}
 	}
 	if len(edges) == 0 {
-		return nil, nil
+		return nil, edgeSelectionMeta{}, nil
+	}
+
+	meta := edgeSelectionMeta{CandidatesEvaluated: len(edges)}
+
+	// Resolve optional progress callback.
+	var emit ProgressFunc
+	if len(progress) > 0 && progress[0] != nil {
+		emit = progress[0]
 	}
 
 	// Step 1: Eligible conditional edges.
 	var condMatched []*model.Edge
+	conditionsEvaluated := 0
 	for _, e := range edges {
 		c := strings.TrimSpace(e.Condition())
 		if c == "" {
 			continue
 		}
+		conditionsEvaluated++
 		ok, err := cond.Evaluate(c, out, ctx)
 		if err != nil {
-			return nil, err
+			return nil, edgeSelectionMeta{}, err
+		}
+		if emit != nil {
+			emit(map[string]any{
+				"event":     "edge_condition_evaluated",
+				"node_id":   from,
+				"edge_to":   e.To,
+				"condition": c,
+				"matched":   ok,
+			})
 		}
 		if ok {
 			condMatched = append(condMatched, e)
 		}
 	}
 	if len(condMatched) > 0 {
-		return condMatched, nil
+		meta.Method = "condition_match"
+		meta.ConditionsMatched = len(condMatched)
+		return condMatched, meta, nil
 	}
 
 	// Step 2: Preferred label match narrows to one.
@@ -2075,7 +2147,8 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Order < sorted[j].Order })
 		for _, e := range sorted {
 			if normalizeLabel(e.Label()) == want {
-				return []*model.Edge{e}, nil
+				meta.Method = "preferred_label"
+				return []*model.Edge{e}, meta, nil
 			}
 		}
 	}
@@ -2089,7 +2162,8 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		for _, suggested := range out.SuggestedNextIDs {
 			for _, e := range sorted {
 				if e.To == suggested {
-					return []*model.Edge{e}, nil
+					meta.Method = "suggested_next_ids"
+					return []*model.Edge{e}, meta, nil
 				}
 			}
 		}
@@ -2103,7 +2177,12 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 		}
 	}
 	if len(uncond) > 0 {
-		return uncond, nil
+		if len(uncond) == 1 {
+			meta.Method = "only_edge"
+		} else {
+			meta.Method = "weight"
+		}
+		return uncond, meta, nil
 	}
 
 	// Fallback: any edge (spec §3.3). All edges have conditions and none
@@ -2116,7 +2195,8 @@ func selectAllEligibleEdges(g *model.Graph, from string, out runtime.Outcome, ct
 	// all_conditional_edges ERROR promotion).
 	fmt.Fprintf(os.Stderr, `{"event":"step5_all_conditional_fallback","node":%q,"edges_considered":%d,"outcome":%q}`+"\n",
 		from, len(edges), string(out.Status))
-	return edges, nil
+	meta.Method = "fallback"
+	return edges, meta, nil
 }
 
 func bestEdge(edges []*model.Edge) *model.Edge {

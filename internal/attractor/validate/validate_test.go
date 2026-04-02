@@ -115,6 +115,11 @@ digraph G {
 	}
 	diags := Validate(g)
 	assertHasRule(t, diags, "llm_provider_required", SeverityError)
+	for _, d := range diags {
+		if d.Rule == "llm_provider_required" && d.Fix == "" {
+			t.Error("llm_provider_required diagnostic should include a Fix hint")
+		}
+	}
 }
 
 func TestValidate_ToolCommandRequired_ParallelogramWithToolCommand_NoError(t *testing.T) {

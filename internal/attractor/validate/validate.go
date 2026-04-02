@@ -509,6 +509,7 @@ func lintStylesheetModelIDs(g *model.Graph, catalog *modeldb.Catalog) []Diagnost
 				Rule:     "stylesheet_unknown_model",
 				Severity: SeverityWarning,
 				Message:  fmt.Sprintf("model_stylesheet: model %q not found in catalog for provider %q", modelID, provider),
+				Fix:      fmt.Sprintf("check the model ID spelling; for Anthropic use dots in versions (e.g. claude-sonnet-4.6)"),
 			})
 		case modeldb.ModelFoundNonCanonical:
 			diags = append(diags, Diagnostic{
@@ -856,6 +857,7 @@ func lintLLMProviderPresent(g *model.Graph) []Diagnostic {
 				Severity: SeverityError,
 				Message:  "codergen node missing llm_provider (Kilroy forbids provider auto-detection)",
 				NodeID:   id,
+				Fix:      "add llm_provider in a model_stylesheet (e.g. * [llm_provider=anthropic])",
 			})
 		}
 	}

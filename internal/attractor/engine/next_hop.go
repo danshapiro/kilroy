@@ -8,6 +8,10 @@ import (
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
+// ProgressFunc is an optional callback for emitting structured progress events.
+// Routing functions accept this to log decisions without depending on the engine.
+type ProgressFunc func(map[string]any)
+
 type nextHopSource string
 
 const (
@@ -20,9 +24,10 @@ type resolvedNextHop struct {
 	Edge              *model.Edge
 	Source            nextHopSource
 	RetryTargetSource string
+	SelectionMeta     edgeSelectionMeta
 }
 
-func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, failureClass string) (*resolvedNextHop, error) {
+func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, failureClass string, progress ProgressFunc) (*resolvedNextHop, error) {
 	if g == nil {
 		return nil, nil
 	}
@@ -32,14 +37,15 @@ func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runti
 	}
 
 	if isFanInFailureLike(g, from, out.Status) {
-		conditional, err := selectMatchingConditionalEdge(g, from, out, ctx)
+		conditional, condMeta, err := selectMatchingConditionalEdge(g, from, out, ctx, progress)
 		if err != nil {
 			return nil, err
 		}
 		if conditional != nil {
 			return &resolvedNextHop{
-				Edge:   conditional,
-				Source: nextHopSourceConditional,
+				Edge:          conditional,
+				Source:        nextHopSourceConditional,
+				SelectionMeta: condMeta,
 			}, nil
 		}
 
@@ -66,7 +72,7 @@ func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runti
 		return nil, nil
 	}
 
-	next, err := selectNextEdge(g, from, out, ctx)
+	next, meta, err := selectNextEdgeWithMeta(g, from, out, ctx, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -74,16 +80,19 @@ func resolveNextHop(g *model.Graph, from string, out runtime.Outcome, ctx *runti
 		return nil, nil
 	}
 	return &resolvedNextHop{
-		Edge:   next,
-		Source: nextHopSourceEdgeSelection,
+		Edge:          next,
+		Source:        nextHopSourceEdgeSelection,
+		SelectionMeta: meta,
 	}, nil
 }
 
-func selectMatchingConditionalEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context) (*model.Edge, error) {
+func selectMatchingConditionalEdge(g *model.Graph, from string, out runtime.Outcome, ctx *runtime.Context, progress ProgressFunc) (*model.Edge, edgeSelectionMeta, error) {
 	edges := g.Outgoing(from)
+	meta := edgeSelectionMeta{}
 	if len(edges) == 0 {
-		return nil, nil
+		return nil, meta, nil
 	}
+	meta.CandidatesEvaluated = len(edges)
 	var condMatched []*model.Edge
 	for _, e := range edges {
 		if e == nil {
@@ -95,16 +104,27 @@ func selectMatchingConditionalEdge(g *model.Graph, from string, out runtime.Outc
 		}
 		ok, err := cond.Evaluate(c, out, ctx)
 		if err != nil {
-			return nil, err
+			return nil, meta, err
+		}
+		if progress != nil {
+			progress(map[string]any{
+				"event":     "edge_condition_evaluated",
+				"node_id":   from,
+				"edge_to":   e.To,
+				"condition": c,
+				"matched":   ok,
+			})
 		}
 		if ok {
 			condMatched = append(condMatched, e)
 		}
 	}
 	if len(condMatched) == 0 {
-		return nil, nil
+		return nil, meta, nil
 	}
-	return bestEdge(condMatched), nil
+	meta.Method = "condition_match"
+	meta.ConditionsMatched = len(condMatched)
+	return bestEdge(condMatched), meta, nil
 }
 
 func resolveRetryTargetWithSource(g *model.Graph, nodeID string) (target string, source string) {

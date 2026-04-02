@@ -842,7 +842,10 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	defer cancel()
 	cmd := exec.CommandContext(cctx, shellPath, "-c", cmdStr)
 	cmd.Dir = execCtx.WorktreeDir
-	cmd.Env = buildBaseNodeEnv(artifactPolicyFromExecution(execCtx))
+	cmd.Env = mergeEnvWithOverrides(
+		buildBaseNodeEnv(artifactPolicyFromExecution(execCtx)),
+		buildStageRuntimeEnv(execCtx, node.ID),
+	)
 	// Avoid hanging on interactive reads; tool_command doesn't provide a way to supply stdin.
 	cmd.Stdin = strings.NewReader("")
 	stdoutPath := filepath.Join(stageDir, "stdout.log")
@@ -918,6 +921,9 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		}
 		if failureReason == "" {
 			failureReason = "tool command failed"
+		}
+		if hint := worktreeNotFoundHint(stderrBytes, cmdStr, execCtx); hint != "" {
+			failureReason += "\n  hint: " + hint
 		}
 		if execCtx != nil && execCtx.Engine != nil && execCtx.Engine.CXDB != nil {
 			if _, _, err := execCtx.Engine.CXDB.Append(ctx, "com.kilroy.attractor.ToolResult", 1, map[string]any{
@@ -1018,6 +1024,71 @@ func looksActionableToolOutputLine(line string) bool {
 		}
 	}
 	return false
+}
+
+// worktreeNotFoundHint returns a hint when a tool command fails because a
+// referenced file doesn't exist in the worktree but does exist in the source
+// repo. Returns "" when no hint applies.
+func worktreeNotFoundHint(stderr []byte, cmdStr string, execCtx *Execution) string {
+	stderrStr := strings.ToLower(string(stderr))
+	if !strings.Contains(stderrStr, "not found") && !strings.Contains(stderrStr, "no such file") {
+		return ""
+	}
+	repoPath := ""
+	if execCtx != nil && execCtx.Engine != nil {
+		repoPath = execCtx.Engine.Options.RepoPath
+	}
+
+	// Try to extract a script path from the command (first token of the command).
+	scriptPath := extractLeadingPath(cmdStr)
+	if scriptPath == "" {
+		return "file not found — if this script is not committed to git, run 'git add <file> && git commit' in the source repo"
+	}
+
+	worktreeDir := ""
+	if execCtx != nil {
+		worktreeDir = execCtx.WorktreeDir
+	}
+
+	// Check if the file exists in the source repo but not in the worktree.
+	inWorktree := worktreeDir != "" && pathExists(filepath.Join(worktreeDir, scriptPath))
+	inRepo := repoPath != "" && pathExists(filepath.Join(repoPath, scriptPath))
+	if !inWorktree && inRepo {
+		return fmt.Sprintf("file %q exists in the source repo but not in the worktree — it may not be committed to git; run 'git add %s && git commit'", scriptPath, scriptPath)
+	}
+	if !inWorktree && !inRepo {
+		return fmt.Sprintf("file %q not found in worktree or source repo — check the path in tool_command", scriptPath)
+	}
+	return ""
+}
+
+// extractLeadingPath pulls the first token from a shell command, stripping
+// common prefixes like "bash", "sh", "./" etc. Returns "" if no plausible
+// file path is found.
+func extractLeadingPath(cmd string) string {
+	cmd = strings.TrimSpace(cmd)
+	// Strip leading "bash -c", "sh -c", etc.
+	for _, prefix := range []string{"bash -c ", "sh -c "} {
+		if strings.HasPrefix(cmd, prefix) {
+			cmd = strings.TrimSpace(cmd[len(prefix):])
+			// Remove surrounding quotes from the remaining command.
+			if len(cmd) >= 2 && (cmd[0] == '\'' || cmd[0] == '"') && cmd[len(cmd)-1] == cmd[0] {
+				cmd = cmd[1 : len(cmd)-1]
+			}
+			break
+		}
+	}
+	// Take the first whitespace-delimited token.
+	fields := strings.Fields(cmd)
+	if len(fields) == 0 {
+		return ""
+	}
+	candidate := fields[0]
+	// Skip if it looks like a bare command (no path separator and no extension).
+	if !strings.Contains(candidate, "/") && !strings.Contains(candidate, ".") {
+		return ""
+	}
+	return candidate
 }
 
 func resolveToolShellPath() string {

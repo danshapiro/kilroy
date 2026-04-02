@@ -36,6 +36,9 @@ digraph G {
 	if err == nil {
 		t.Fatalf("expected error, got nil")
 	}
+	if !strings.Contains(err.Error(), "hint:") {
+		t.Errorf("error should contain a hint for the user, got: %s", err.Error())
+	}
 }
 
 func TestRunWithConfig_ReportsCXDBUIURL(t *testing.T) {

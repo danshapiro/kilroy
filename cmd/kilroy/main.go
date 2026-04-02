@@ -465,15 +465,22 @@ func isSupportedForceModelProvider(provider string) bool {
 }
 
 // loadOrBuildConfig loads a config from file, or builds a zero-config default
-// when configPath is empty. For zero-config, providers are auto-detected from
-// the environment. Graph-level provider validation happens later in bootstrap.
+// when configPath is empty. In both cases, providers are auto-detected from
+// the environment to fill gaps. Config-file values always take precedence.
 func loadOrBuildConfig(configPath string) (*engine.RunConfigFile, error) {
+	var cfg *engine.RunConfigFile
 	if configPath != "" {
-		return engine.LoadRunConfigFile(configPath)
-	}
-	cfg, err := engine.DefaultRunConfig()
-	if err != nil {
-		return nil, err
+		loaded, err := engine.LoadRunConfigFile(configPath)
+		if err != nil {
+			return nil, err
+		}
+		cfg = loaded
+	} else {
+		built, err := engine.DefaultRunConfig()
+		if err != nil {
+			return nil, err
+		}
+		cfg = built
 	}
 	detected := engine.DetectProviders()
 	engine.ApplyDetectedProviders(cfg, detected)

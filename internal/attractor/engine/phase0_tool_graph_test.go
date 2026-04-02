@@ -6,6 +6,7 @@ package engine
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -312,6 +313,151 @@ func TestToolGraph_ZeroConfig(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "hello_zero_config") {
 		t.Fatalf("step_a stdout: got %q, want to contain %q", string(data), "hello_zero_config")
+	}
+}
+
+func TestToolGraph_RunIDInjected(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+	markerFile := filepath.Join(t.TempDir(), "run_id_check.txt")
+
+	dot := []byte(fmt.Sprintf(`digraph run_id {
+  graph [goal="Test KILROY_RUN_ID injection into tool nodes"]
+  start [shape=Mdiamond]
+  check [shape=parallelogram, tool_command="echo $KILROY_RUN_ID > %s"]
+  done [shape=Msquare]
+  start -> check -> done
+}`, markerFile))
+	cfg := minimalToolGraphConfig(repo, pinned)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	runID := "env-inject-test"
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       runID,
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("expected success, got %q", res.FinalStatus)
+	}
+
+	data, err := os.ReadFile(markerFile)
+	if err != nil {
+		t.Fatalf("read marker file: %v", err)
+	}
+	got := strings.TrimSpace(string(data))
+	if got == "" {
+		t.Fatal("KILROY_RUN_ID was empty in tool node environment")
+	}
+	if got != runID {
+		t.Fatalf("KILROY_RUN_ID: got %q, want %q", got, runID)
+	}
+}
+
+func TestToolGraph_DirtyRepoSucceedsWithDefaultConfig(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+
+	// Make the repo dirty with an uncommitted file.
+	if err := os.WriteFile(filepath.Join(repo, "dirty.txt"), []byte("uncommitted"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	dot := []byte(`digraph dirty_repo {
+  graph [goal="Test dirty repo with default require_clean"]
+  start [shape=Mdiamond]
+  step [shape=parallelogram, tool_command="echo dirty_repo_ok"]
+  done [shape=Msquare]
+  start -> step -> done
+}`)
+	// Config does NOT set require_clean — the default (false) should allow the run.
+	cfg := minimalToolGraphConfig(repo, pinned)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       "dirty-repo-test",
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig with dirty repo: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("expected success with dirty repo, got %q", res.FinalStatus)
+	}
+}
+
+func TestToolGraph_PartialConfigAutoDetectsProviders(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test-partial-config")
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+
+	dot := []byte(`digraph partial {
+  graph [goal="Test partial config with auto-detected providers"]
+  start [shape=Mdiamond]
+  step [shape=parallelogram, tool_command="echo partial_config_ok"]
+  done [shape=Msquare]
+  start -> step -> done
+}`)
+	// Config with repo.path and pinned catalog but NO providers section.
+	// Auto-detection should fill in anthropic from ANTHROPIC_API_KEY.
+	cfg := &RunConfigFile{}
+	cfg.Version = 1
+	cfg.Repo.Path = repo
+	cfg.ModelDB.OpenRouterModelInfoPath = pinned
+	cfg.ModelDB.OpenRouterModelInfoUpdatePolicy = "pinned"
+	cfg.LLM.CLIProfile = "test_shim"
+	applyConfigDefaults(cfg)
+	// Simulate what loadOrBuildConfig does: auto-detect and apply.
+	detected := DetectProviders()
+	ApplyDetectedProviders(cfg, detected)
+
+	var foundAnthropic bool
+	for _, dp := range detected {
+		if dp.Key == "anthropic" {
+			foundAnthropic = true
+		}
+	}
+	if !foundAnthropic {
+		t.Fatal("expected anthropic to be auto-detected from ANTHROPIC_API_KEY")
+	}
+	if _, ok := cfg.LLM.Providers["anthropic"]; !ok {
+		t.Fatal("expected anthropic provider to be applied to config")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       "partial-config-test",
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("expected success, got %q", res.FinalStatus)
+	}
+
+	stdout := filepath.Join(logsRoot, "step", "stdout.log")
+	data, err := os.ReadFile(stdout)
+	if err != nil {
+		t.Fatalf("read step stdout: %v", err)
+	}
+	if !strings.Contains(string(data), "partial_config_ok") {
+		t.Fatalf("step stdout: got %q, want to contain %q", string(data), "partial_config_ok")
 	}
 }
 

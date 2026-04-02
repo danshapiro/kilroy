@@ -222,10 +222,11 @@ func applyConfigDefaults(cfg *RunConfigFile) {
 	if !cfg.Git.CommitPerNode {
 		cfg.Git.CommitPerNode = true
 	}
-	// metaspec default: require_clean defaults to true when not specified.
+	// require_clean defaults to false: kilroy creates its own worktree, so
+	// the parent repo's cleanliness is irrelevant for correctness.
 	if cfg.Git.RequireClean == nil {
-		t := true
-		cfg.Git.RequireClean = &t
+		f := false
+		cfg.Git.RequireClean = &f
 	}
 	cfg.Git.CheckpointExcludeGlobs = trimNonEmpty(cfg.Git.CheckpointExcludeGlobs)
 	applyArtifactPolicyDefaults(cfg)
@@ -354,7 +355,7 @@ func validateConfig(cfg *RunConfigFile) error {
 				return fmt.Errorf("llm.providers.%s backend=cli requires builtin provider with cli contract", prov)
 			}
 		default:
-			return fmt.Errorf("invalid backend for provider %q: %q (want api|cli)", prov, pc.Backend)
+			return fmt.Errorf("invalid backend for provider %q: %q (want api|cli)\n  hint: add backend: cli (or api) under llm.providers.%s in your run config", prov, pc.Backend, prov)
 		}
 		if strings.EqualFold(cfg.LLM.CLIProfile, "real") && strings.TrimSpace(pc.Executable) != "" {
 			return fmt.Errorf("llm.providers.%s.executable is only allowed when llm.cli_profile=test_shim", prov)
@@ -434,10 +435,10 @@ func trimNonEmpty(parts []string) []string {
 }
 
 // resolveRequireClean returns the effective require_clean value from the config,
-// defaulting to true when the config is nil or the field is unset.
+// defaulting to false when the config is nil or the field is unset.
 func resolveRequireClean(cfg *RunConfigFile) bool {
 	if cfg == nil || cfg.Git.RequireClean == nil {
-		return true
+		return false
 	}
 	return *cfg.Git.RequireClean
 }
