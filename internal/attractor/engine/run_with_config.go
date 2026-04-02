@@ -185,7 +185,7 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 	for p := range usedProviders {
 		rt, ok := runtimes[p]
 		if !ok || (rt.Backend != BackendAPI && rt.Backend != BackendCLI) {
-			return nil, fmt.Errorf("missing llm.providers.%s.backend (Kilroy forbids implicit backend defaults)", p)
+			return nil, fmt.Errorf("missing llm.providers.%s.backend (Kilroy forbids implicit backend defaults)\n  hint: add llm.providers.%s.backend: cli (or api) to your run config, or remove --config to use auto-detection", p, p)
 		}
 	}
 	runUsesCLIProviders := false

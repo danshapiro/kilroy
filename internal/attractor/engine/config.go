@@ -355,7 +355,7 @@ func validateConfig(cfg *RunConfigFile) error {
 				return fmt.Errorf("llm.providers.%s backend=cli requires builtin provider with cli contract", prov)
 			}
 		default:
-			return fmt.Errorf("invalid backend for provider %q: %q (want api|cli)", prov, pc.Backend)
+			return fmt.Errorf("invalid backend for provider %q: %q (want api|cli)\n  hint: add backend: cli (or api) under llm.providers.%s in your run config", prov, pc.Backend, prov)
 		}
 		if strings.EqualFold(cfg.LLM.CLIProfile, "real") && strings.TrimSpace(pc.Executable) != "" {
 			return fmt.Errorf("llm.providers.%s.executable is only allowed when llm.cli_profile=test_shim", prov)

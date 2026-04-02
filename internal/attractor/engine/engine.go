@@ -339,7 +339,11 @@ func PrepareWithOptions(dotSource []byte, opts PrepareOptions) (*model.Graph, []
 	var errs []string
 	for _, d := range diags {
 		if d.Severity == validate.SeverityError {
-			errs = append(errs, d.Rule+": "+d.Message)
+			msg := d.Rule + ": " + d.Message
+			if d.Fix != "" {
+				msg += "\n  hint: " + d.Fix
+			}
+			errs = append(errs, msg)
 		}
 	}
 	if len(errs) > 0 {
