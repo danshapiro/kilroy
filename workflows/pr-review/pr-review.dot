@@ -16,7 +16,7 @@ digraph pr_review {
     setup [
         shape=parallelogram,
         label="Setup",
-        tool_command="sh workflows/pr-review/scripts/setup-pr.sh"
+        tool_command="sh /Users/matt/sw/personal/kilroy/workflows/pr-review/scripts/setup-pr.sh"
     ]
 
     // Agentic investigation: deep review with full tool access
@@ -32,20 +32,19 @@ START by reading these files:
 - .ai/pr-data/pr-meta.json (structured metadata: files changed, author, branches)
 - .ai/pr-data/pr-diff.patch (the full diff)
 - .ai/pr-data/merge-result.txt (whether the merge was clean or had conflicts)
-- .ai/pr-data/build-result.txt (build pass/fail)
-- .ai/pr-data/build-stderr.txt (build errors if any)
-- .ai/pr-data/test-result.txt (test pass/fail)
-- .ai/pr-data/test-output.txt (full test output)
-- .ai/pr-data/gofmt-result.txt (format check pass/fail)
 
-THEN investigate the actual codebase. You have the full repo checked out. Use it:
+THEN investigate the actual codebase. You have the full repo checked out at the PR branch
+merged with the latest base branch. Use it:
 - Read the source files that were changed. Read the surrounding code for context.
-- If tests failed, determine whether failures are pre-existing on the base branch or
+- Determine the project's build system and test framework (package.json, go.mod, Makefile, etc).
+- Build the project. Run the test suite. If the full suite is too slow, run tests targeted
+  at the packages/modules touched by the PR.
+- If tests fail, determine whether failures are pre-existing on the base branch or
   introduced by this PR. Check git blame, read the failing test code, understand why.
 - If the PR claims to fix something, verify the fix actually works.
 - If the PR adds functionality, check if it has tests and if they cover the key cases.
 - Look for: bugs, security issues, missing error handling, naming problems, scope creep.
-- Run additional targeted commands if needed (specific test files, linters, etc).
+- Run additional targeted commands if needed (linters, type checking, etc).
 
 Write your findings to .ai/pr-data/investigation.md as a structured evidence document:
 
