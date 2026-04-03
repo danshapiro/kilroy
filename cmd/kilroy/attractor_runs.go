@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/danshapiro/kilroy/internal/attractor/engine"
+	"github.com/danshapiro/kilroy/internal/attractor/rundb"
 )
 
 func attractorRuns(args []string) {
@@ -53,6 +54,7 @@ type runRecord struct {
 	LogsRoot    string
 	Labels      map[string]string
 	FinalStatus string
+	Duration    string
 }
 
 func loadRunRecords(baseDir string) ([]runRecord, error) {
@@ -143,27 +145,65 @@ func attractorRunsList(args []string) {
 		}
 	}
 
+	// Try RunDB first, fall back to filesystem scan.
+	if records := listRunsFromDB(); len(records) > 0 {
+		printRunRecords(records, asJSON, "run database")
+		return
+	}
+
 	baseDir := engine.DefaultRunsBaseDir()
 	records, err := loadRunRecords(baseDir)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	printRunRecords(records, asJSON, baseDir)
+}
 
+func listRunsFromDB() []runRecord {
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err != nil {
+		return nil
+	}
+	defer db.Close()
+
+	runs, err := db.ListRuns(rundb.ListFilter{})
+	if err != nil {
+		return nil
+	}
+	records := make([]runRecord, 0, len(runs))
+	for _, r := range runs {
+		var dur string
+		if r.DurationMS != nil {
+			dur = fmt.Sprintf("%dms", *r.DurationMS)
+		}
+		records = append(records, runRecord{
+			RunID:       r.RunID,
+			GraphName:   r.GraphName,
+			Goal:        r.Goal,
+			StartedAt:   r.StartedAt,
+			LogsRoot:    r.LogsRoot,
+			Labels:      r.Labels,
+			FinalStatus: r.Status,
+			Duration:    dur,
+		})
+	}
+	return records
+}
+
+func printRunRecords(records []runRecord, asJSON bool, source string) {
 	if asJSON {
 		enc := json.NewEncoder(os.Stdout)
 		enc.SetIndent("", "  ")
 		_ = enc.Encode(records)
 		return
 	}
-
 	if len(records) == 0 {
-		fmt.Printf("no runs found in %s\n", baseDir)
+		fmt.Printf("no runs found in %s\n", source)
 		return
 	}
-
-	fmt.Printf("%-26s  %-20s  %-12s  %-20s  %s\n", "RUN ID", "GRAPH", "STATUS", "STARTED", "LABELS")
-	fmt.Println(strings.Repeat("-", 100))
+	fmt.Printf("%-26s  %-20s  %-12s  %-20s  %-10s  %s\n", "RUN ID", "GRAPH", "STATUS", "STARTED", "DURATION", "LABELS")
+	fmt.Println(strings.Repeat("-", 110))
 	for _, r := range records {
 		labels := formatLabels(r.Labels)
 		started := r.StartedAt.Local().Format("2006-01-02 15:04")
@@ -171,9 +211,13 @@ func attractorRunsList(args []string) {
 		if len(graph) > 20 {
 			graph = graph[:17] + "..."
 		}
-		fmt.Printf("%-26s  %-20s  %-12s  %-20s  %s\n", r.RunID, graph, r.FinalStatus, started, labels)
+		dur := r.Duration
+		if dur == "" {
+			dur = "-"
+		}
+		fmt.Printf("%-26s  %-20s  %-12s  %-20s  %-10s  %s\n", r.RunID, graph, r.FinalStatus, started, dur, labels)
 	}
-	fmt.Printf("\n%d run(s) in %s\n", len(records), baseDir)
+	fmt.Printf("\n%d run(s)\n", len(records))
 }
 
 func formatLabels(labels map[string]string) string {
@@ -260,6 +304,12 @@ func attractorRunsPrune(args []string) {
 		labelVal = parts[1]
 	}
 
+	// Try RunDB-based prune first.
+	if pruneFromDB(beforeTime, graphPattern, labelKey, labelVal, orphansOnly, dryRun) {
+		return
+	}
+
+	// Fall back to filesystem-based prune.
 	baseDir := engine.DefaultRunsBaseDir()
 	records, err := loadRunRecords(baseDir)
 	if err != nil {
@@ -314,4 +364,59 @@ func attractorRunsPrune(args []string) {
 	} else {
 		fmt.Printf("\n%d run(s) deleted.\n", len(targets))
 	}
+}
+
+func pruneFromDB(beforeTime time.Time, graphPattern, labelKey, labelVal string, orphansOnly, dryRun bool) bool {
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err != nil {
+		return false
+	}
+	defer db.Close()
+
+	filter := rundb.PruneFilter{
+		Orphans:   orphansOnly,
+		GraphName: graphPattern,
+	}
+	if !beforeTime.IsZero() {
+		filter.Before = &beforeTime
+	}
+	if labelKey != "" {
+		filter.Labels = map[string]string{labelKey: labelVal}
+	}
+
+	if dryRun {
+		// For dry run, list matching runs instead of deleting.
+		listFilter := rundb.ListFilter{GraphName: graphPattern}
+		if labelKey != "" {
+			listFilter.Labels = map[string]string{labelKey: labelVal}
+		}
+		runs, err := db.ListRuns(listFilter)
+		if err != nil {
+			return false
+		}
+		var count int
+		for _, r := range runs {
+			if !beforeTime.IsZero() && !r.StartedAt.Before(beforeTime) {
+				continue
+			}
+			count++
+			started := r.StartedAt.Local().Format("2006-01-02 15:04")
+			fmt.Printf("Would delete  %s  graph=%-20s  status=%-12s  started=%s\n",
+				r.RunID, r.GraphName, r.Status, started)
+		}
+		if count == 0 {
+			fmt.Println("no matching runs found")
+		} else {
+			fmt.Printf("\n%d run(s) matched. Re-run with --yes to delete.\n", count)
+		}
+		return true
+	}
+
+	n, err := db.PruneRuns(filter)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "prune error: %v\n", err)
+		return true
+	}
+	fmt.Printf("%d run(s) pruned from database.\n", n)
+	return true
 }

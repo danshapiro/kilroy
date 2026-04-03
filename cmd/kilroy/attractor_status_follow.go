@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/danshapiro/kilroy/internal/attractor/procutil"
+	"github.com/danshapiro/kilroy/internal/attractor/rundb"
 	"github.com/danshapiro/kilroy/internal/attractor/runstate"
 )
 
@@ -306,7 +307,26 @@ func printFinalSummary(finalPath string, w io.Writer) {
 
 // latestRunLogsRoot finds the most recently modified run directory under the
 // default XDG state path.
+func latestRunFromDB() string {
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err != nil {
+		return ""
+	}
+	defer db.Close()
+	run, err := db.LatestRun()
+	if err != nil || run == nil {
+		return ""
+	}
+	return strings.TrimSpace(run.LogsRoot)
+}
+
 func latestRunLogsRoot() (string, error) {
+	// Try RunDB first for instant lookup.
+	if logsRoot := latestRunFromDB(); logsRoot != "" {
+		return logsRoot, nil
+	}
+
+	// Fall back to filesystem scan.
 	stateHome := strings.TrimSpace(os.Getenv("XDG_STATE_HOME"))
 	if stateHome == "" {
 		home, err := os.UserHomeDir()
