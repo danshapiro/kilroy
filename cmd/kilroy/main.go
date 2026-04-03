@@ -17,6 +17,7 @@ import (
 	"github.com/danshapiro/kilroy/internal/attractor/agents"
 	"github.com/danshapiro/kilroy/internal/attractor/engine"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
+	"github.com/danshapiro/kilroy/internal/attractor/rundb"
 	"github.com/danshapiro/kilroy/internal/attractor/validate"
 	"github.com/danshapiro/kilroy/internal/attractor/workflows"
 	"github.com/danshapiro/kilroy/internal/dotenv"
@@ -122,6 +123,16 @@ func newLayeredRegistry() *engine.HandlerRegistry {
 	reg.Register("wait.human", &workflows.HumanGateHandler{})
 	reg.Register("stack.manager_loop", &workflows.ManagerLoopHandler{})
 	return reg
+}
+
+// openRunDB opens the global run database. Returns nil on error (best-effort).
+func openRunDB() *rundb.DB {
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: could not open run database: %v\n", err)
+		return nil
+	}
+	return db
 }
 
 func usage() {
@@ -393,6 +404,10 @@ func attractorRun(args []string) {
 	// Default: no deadline. CLI runs (especially with provider CLIs) can take hours.
 	ctx, cleanupSignalCtx := signalCancelContext()
 
+	rdb := openRunDB()
+	if rdb != nil {
+		defer rdb.Close()
+	}
 	res, err := engine.RunWithConfig(ctx, dotSource, cfg, engine.RunOptions{
 		RunID:         runID,
 		LogsRoot:      logsRoot,
@@ -400,6 +415,7 @@ func attractorRun(args []string) {
 		DisableCXDB:   noCXDB,
 		ForceModels:   forceModels,
 		Registry:      newLayeredRegistry(),
+		RunDB:         rdb,
 		OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 			if info == nil {
 				return

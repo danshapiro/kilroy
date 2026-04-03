@@ -227,6 +227,9 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 	opts.ProgressSink = overrides.ProgressSink
 	opts.Interviewer = overrides.Interviewer
 	opts.OnEngineReady = overrides.OnEngineReady
+	opts.RunDB = overrides.RunDB
+	opts.Registry = overrides.Registry
+	opts.Labels = overrides.Labels
 
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err

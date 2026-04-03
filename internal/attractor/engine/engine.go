@@ -94,6 +94,10 @@ type RunOptions struct {
 	// cmd/kilroy/ to compose layers by registering handlers from agents/ and
 	// workflows/ packages before starting the engine.
 	Registry *HandlerRegistry
+
+	// Optional run database for operational state. When set, the engine
+	// records lifecycle events (run start, node executions, edge decisions).
+	RunDB RunDBWriter
 }
 
 func (o *RunOptions) applyDefaults() error {
@@ -163,6 +167,9 @@ type Engine struct {
 	AgentBackend AgentBackend
 
 	Interviewer Interviewer
+
+	// Optional: SQLite run database for operational state.
+	RunDB RunDBWriter
 
 	// Optional: normalized event sink (CXDB).
 	CXDB *CXDBSink
@@ -471,6 +478,7 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	if err := e.cxdbRunStarted(runCtx, baseSHA); err != nil {
 		return nil, err
 	}
+	e.rundbRecordRunStart()
 
 	// Mirror graph attributes into context.
 	for k, v := range e.Graph.Attrs {
@@ -589,6 +597,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 				continue
 			}
 			e.cxdbStageStarted(ctx, node)
+			nodeDBID := e.rundbRecordNodeStart(node.ID, 1, resolvedHandlerTypeName(e, node.ID))
 			// Execute exit handler as the final checkpointed node.
 			out, err := e.executeNode(ctx, node)
 			if err != nil {
@@ -597,6 +606,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			nodeOutcomes[node.ID] = out
 			completed = append(completed, node.ID)
 			e.cxdbStageFinished(ctx, node, out)
+			e.rundbRecordNodeComplete(nodeDBID, out)
 			if err := runContextError(ctx); err != nil {
 				return nil, err
 			}
@@ -619,6 +629,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 				CXDBHeadTurnID:    completionTurnID,
 			}
 			e.persistTerminalOutcome(ctx, final)
+			e.rundbRecordRunComplete(runtime.FinalSuccess, "", sha)
 			return &Result{
 				RunID:          e.Options.RunID,
 				LogsRoot:       e.LogsRoot,
@@ -631,11 +642,13 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		}
 
 		e.cxdbStageStarted(ctx, node)
+		nodeDBID := e.rundbRecordNodeStart(node.ID, nodeRetries[node.ID]+1, resolvedHandlerTypeName(e, node.ID))
 		out, err := e.executeWithRetry(ctx, node, nodeRetries)
 		if err != nil {
 			return nil, err
 		}
 		e.cxdbStageFinished(ctx, node, out)
+		e.rundbRecordNodeComplete(nodeDBID, out)
 		if err := runContextError(ctx); err != nil {
 			return nil, err
 		}
@@ -798,6 +811,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 					CXDBHeadTurnID:    failedTurnID,
 				}
 				e.persistTerminalOutcome(ctx, final)
+				e.rundbRecordRunComplete(runtime.FinalFail, out.FailureReason, sha)
 				return nil, fmt.Errorf("stage failed with no outgoing fail edge: %s", out.FailureReason)
 			}
 			completionTurnID, err := e.cxdbRunCompleted(ctx, sha)
@@ -813,6 +827,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 				CXDBHeadTurnID:    completionTurnID,
 			}
 			e.persistTerminalOutcome(ctx, final)
+			e.rundbRecordRunComplete(runtime.FinalSuccess, "", sha)
 			return &Result{
 				RunID:          e.Options.RunID,
 				LogsRoot:       e.LogsRoot,
@@ -824,6 +839,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			}, nil
 		}
 		next := nextHop.Edge
+		e.rundbRecordEdgeDecision(node.ID, next.To, next.Label(), nextHop.SelectionMeta.Method)
 		e.appendProgress(map[string]any{
 			"event":                "edge_selected",
 			"from_node":            node.ID,

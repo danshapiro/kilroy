@@ -23,6 +23,41 @@ type RunRecord struct {
 	Labels       map[string]string
 }
 
+// RecordRunStart satisfies engine.RunDBWriter. Delegates to InsertRun.
+func (d *DB) RecordRunStart(runID, graphName, goal, status, logsRoot, worktreeDir, runBranch, repoPath, dotSource string, inputs map[string]any, labels map[string]string) error {
+	return d.InsertRun(RunRecord{
+		RunID: runID, GraphName: graphName, Goal: goal, Status: status,
+		LogsRoot: logsRoot, WorktreeDir: worktreeDir, RunBranch: runBranch,
+		RepoPath: repoPath, DotSource: dotSource, Inputs: inputs, Labels: labels,
+		StartedAt: time.Now(),
+	})
+}
+
+// RecordRunComplete satisfies engine.RunDBWriter. Delegates to CompleteRun.
+func (d *DB) RecordRunComplete(runID, status, failureReason, finalSHA string, warnings []string) error {
+	return d.CompleteRun(runID, status, failureReason, finalSHA, warnings)
+}
+
+// RecordNodeStart satisfies engine.RunDBWriter. Delegates to InsertNodeStart.
+func (d *DB) RecordNodeStart(runID, nodeID string, attempt int, handlerType string) (int64, error) {
+	return d.InsertNodeStart(runID, nodeID, attempt, handlerType)
+}
+
+// RecordNodeComplete satisfies engine.RunDBWriter. Delegates to CompleteNode.
+func (d *DB) RecordNodeComplete(id int64, status, failureReason, failureClass, preferredLabel, notes string, contextUpdates map[string]any) error {
+	return d.CompleteNode(id, status, failureReason, failureClass, preferredLabel, notes, contextUpdates)
+}
+
+// RecordEdgeDecision satisfies engine.RunDBWriter. Delegates to InsertEdgeDecision.
+func (d *DB) RecordEdgeDecision(runID, fromNode, toNode, edgeLabel, reason string) error {
+	return d.InsertEdgeDecision(runID, fromNode, toNode, edgeLabel, reason)
+}
+
+// RecordProviderSelection satisfies engine.RunDBWriter. Delegates to InsertProviderSelection.
+func (d *DB) RecordProviderSelection(runID, nodeID string, attempt int, provider, model, backend string) error {
+	return d.InsertProviderSelection(runID, nodeID, attempt, provider, model, backend)
+}
+
 // InsertRun records a new run at start time.
 func (d *DB) InsertRun(r RunRecord) error {
 	inputsJSON, _ := json.Marshal(r.Inputs)
