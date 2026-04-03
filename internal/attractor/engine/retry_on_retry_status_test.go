@@ -56,13 +56,13 @@ digraph G {
 		t.Fatalf("applyDefaults: %v", err)
 	}
 	eng := &Engine{
-		Graph:           g,
-		Options:         opts,
-		LogsRoot:        opts.LogsRoot,
-		WorktreeDir:     opts.WorktreeDir,
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
+		Graph:        g,
+		Options:      opts,
+		LogsRoot:     opts.LogsRoot,
+		WorktreeDir:  opts.WorktreeDir,
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
 		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.Registry.Register("retry_then_success", &retryThenSuccessHandler{})

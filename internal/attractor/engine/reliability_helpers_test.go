@@ -459,16 +459,16 @@ func newReliabilityFixtureEngine(t *testing.T, repo, logsRoot, runID string, dot
 		RunBranchPrefix: "attractor/run",
 	}
 	eng := &Engine{
-		Graph:           g,
-		Options:         opts,
-		DotSource:       dotSource,
-		LogsRoot:        logsRoot,
-		baseLogsRoot:    logsRoot,
-		WorktreeDir:     repo,
-		RunBranch:       opts.RunBranchPrefix + "/" + runID,
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
+		Graph:        g,
+		Options:      opts,
+		DotSource:    dotSource,
+		LogsRoot:     logsRoot,
+		baseLogsRoot: logsRoot,
+		WorktreeDir:  repo,
+		RunBranch:    opts.RunBranchPrefix + "/" + runID,
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
 		AgentBackend: &SimulatedAgentBackend{},
 	}
 	for k, v := range g.Attrs {

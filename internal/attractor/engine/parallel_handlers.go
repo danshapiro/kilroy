@@ -422,7 +422,7 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 		LogsRoot:                   branchRoot,
 		Context:                    exec.Context.Clone(),
 		Registry:                   exec.Engine.Registry,
-		AgentBackend:            exec.Engine.AgentBackend,
+		AgentBackend:               exec.Engine.AgentBackend,
 		Interviewer:                exec.Engine.Interviewer,
 		ModelCatalogSHA:            exec.Engine.ModelCatalogSHA,
 		ModelCatalogSource:         exec.Engine.ModelCatalogSource,

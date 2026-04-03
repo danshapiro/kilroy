@@ -115,13 +115,13 @@ digraph G {
 		WorktreeDir: filepath.Join(logsRoot, "worktree"),
 	}
 	eng := &Engine{
-		Graph:           g,
-		Options:         opts,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     opts.WorktreeDir,
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
+		Graph:        g,
+		Options:      opts,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  opts.WorktreeDir,
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
 		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.Registry.Register("escalation_test", handler)

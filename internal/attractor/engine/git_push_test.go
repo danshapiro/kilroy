@@ -119,16 +119,16 @@ digraph G {
 	cfg.Git.PushRemote = "test-remote"
 
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-push-restart", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-push-restart", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
 		AgentBackend: backend,
-		RunConfig:       cfg,
+		RunConfig:    cfg,
 	}
 	eng.RunBranch = "attractor/run/test-push-restart"
 

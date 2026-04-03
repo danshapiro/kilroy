@@ -376,14 +376,14 @@ digraph G {
 	}
 
 	eng := &Engine{
-		Graph:           g,
-		Options:         opts,
-		DotSource:       append([]byte{}, dotSrc...),
-		LogsRoot:        opts.LogsRoot,
-		WorktreeDir:     opts.WorktreeDir,
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &QueueInterviewer{Answers: []Answer{{Value: "F"}}},
+		Graph:        g,
+		Options:      opts,
+		DotSource:    append([]byte{}, dotSrc...),
+		LogsRoot:     opts.LogsRoot,
+		WorktreeDir:  opts.WorktreeDir,
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &QueueInterviewer{Answers: []Answer{{Value: "F"}}},
 		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.RunBranch = fmt.Sprintf("%s/%s", opts.RunBranchPrefix, opts.RunID)
@@ -515,14 +515,14 @@ digraph G {
 		t.Fatalf("applyDefaults: %v", err)
 	}
 	eng := &Engine{
-		Graph:           g,
-		Options:         opts,
-		DotSource:       []byte(""),
-		LogsRoot:        opts.LogsRoot,
-		WorktreeDir:     opts.WorktreeDir,
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
+		Graph:        g,
+		Options:      opts,
+		DotSource:    []byte(""),
+		LogsRoot:     opts.LogsRoot,
+		WorktreeDir:  opts.WorktreeDir,
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
 		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.Registry.Register("setctx", &setContextHandler{})
@@ -745,14 +745,14 @@ digraph G {
 		t.Fatalf("applyDefaults: %v", err)
 	}
 	eng := &Engine{
-		Graph:           g,
-		Options:         opts,
-		DotSource:       []byte(""),
-		LogsRoot:        opts.LogsRoot,
-		WorktreeDir:     opts.WorktreeDir,
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
+		Graph:        g,
+		Options:      opts,
+		DotSource:    []byte(""),
+		LogsRoot:     opts.LogsRoot,
+		WorktreeDir:  opts.WorktreeDir,
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
 		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.Registry.Register("parity_custom", &parityCustomHandler{})
