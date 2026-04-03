@@ -1790,6 +1790,9 @@ func (e *Engine) persistTerminalOutcome(ctx context.Context, final runtime.Final
 		_, _ = e.CXDB.PutArtifactFile(ctx, "", "final.json", primaryPath)
 	}
 
+	// Collect declared output artifacts from worktree to outputs/ directory.
+	e.CollectAndRecordOutputs()
+
 	archiveRoot := strings.TrimSpace(e.LogsRoot)
 	if archiveRoot != "" {
 		runTar := filepath.Join(archiveRoot, "run.tgz")
