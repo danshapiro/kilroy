@@ -85,6 +85,12 @@ func BuildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
 	if worktree := strings.TrimSpace(execCtx.WorktreeDir); worktree != "" {
 		out[worktreeDirEnvKey] = worktree
 	}
+	// Add structured input env vars (KILROY_INPUT_*).
+	if execCtx.Engine != nil {
+		for k, v := range InputEnvVars(execCtx.Engine.Options.Inputs) {
+			out[k] = v
+		}
+	}
 	if execCtx.Engine != nil && execCtx.Engine.inputMaterializationEnabled() {
 		manifestPath := strings.TrimSpace(execCtx.Engine.currentInputManifestPath)
 		if manifestPath == "" && strings.TrimSpace(execCtx.LogsRoot) != "" && strings.TrimSpace(nodeID) != "" {

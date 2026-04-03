@@ -13,23 +13,23 @@ import (
 
 // RunSummary is a read-only view of a run for listing and status display.
 type RunSummary struct {
-	RunID        string
-	GraphName    string
-	Goal         string
-	Status       string
-	LogsRoot     string
-	WorktreeDir  string
-	RunBranch    string
-	RepoPath     string
-	StartedAt    time.Time
-	CompletedAt  *time.Time
-	DurationMS   *int64
-	FinalSHA     string
+	RunID         string
+	GraphName     string
+	Goal          string
+	Status        string
+	LogsRoot      string
+	WorktreeDir   string
+	RunBranch     string
+	RepoPath      string
+	StartedAt     time.Time
+	CompletedAt   *time.Time
+	DurationMS    *int64
+	FinalSHA      string
 	FailureReason string
-	Labels       map[string]string
-	Inputs       map[string]any
-	Warnings     []string
-	NodeCount    int
+	Labels        map[string]string
+	Inputs        map[string]any
+	Warnings      []string
+	NodeCount     int
 }
 
 // LatestRun returns the most recently started run.

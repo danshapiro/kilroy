@@ -230,6 +230,7 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 	opts.RunDB = overrides.RunDB
 	opts.Registry = overrides.Registry
 	opts.Labels = overrides.Labels
+	opts.Inputs = overrides.Inputs
 
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err

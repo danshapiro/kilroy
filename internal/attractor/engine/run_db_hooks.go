@@ -23,7 +23,7 @@ func (e *Engine) rundbRecordRunStart() {
 	if err := e.RunDB.RecordRunStart(
 		e.Options.RunID, graphName, goal, "running",
 		e.LogsRoot, e.WorktreeDir, e.RunBranch, e.Options.RepoPath,
-		string(e.DotSource), nil, e.Options.Labels,
+		string(e.DotSource), e.Options.Inputs, e.Options.Labels,
 	); err != nil {
 		e.Warn("rundb: record run start: " + err.Error())
 	}

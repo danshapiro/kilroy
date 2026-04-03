@@ -135,6 +135,11 @@ func openRunDB() *rundb.DB {
 	return db
 }
 
+// graphDeclaredInputs checks if the raw DOT source declares required inputs.
+func graphDeclaredInputs(dotSource []byte) bool {
+	return strings.Contains(string(dotSource), "inputs=")
+}
+
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  kilroy --version")
@@ -198,6 +203,7 @@ func attractorRun(args []string) {
 	var noCXDB bool
 	var skipCLIHeadlessWarning bool
 	var forceModelSpecs []string
+	var inputPath string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -250,6 +256,13 @@ func attractorRun(args []string) {
 				os.Exit(1)
 			}
 			logsRoot = args[i]
+		case "--input":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--input requires a path or JSON string")
+				os.Exit(1)
+			}
+			inputPath = args[i]
 		default:
 			fmt.Fprintf(os.Stderr, "unknown arg: %s\n", args[i])
 			os.Exit(1)
@@ -272,6 +285,21 @@ func attractorRun(args []string) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+
+	// Load structured inputs.
+	var inputs map[string]any
+	if inputPath != "" {
+		if strings.HasPrefix(strings.TrimSpace(inputPath), "{") {
+			// JSON string passed directly.
+			inputs, err = engine.LoadInputString(inputPath)
+		} else {
+			inputs, err = engine.LoadInputFile(inputPath)
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error loading inputs: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if detach {
@@ -408,6 +436,17 @@ func attractorRun(args []string) {
 	if rdb != nil {
 		defer rdb.Close()
 	}
+	// Validate required inputs before starting the run.
+	if len(inputs) > 0 || graphDeclaredInputs(dotSource) {
+		g, _, parseErr := engine.Prepare(dotSource)
+		if parseErr == nil && g != nil {
+			if validErr := engine.ValidateRequiredInputs(g, inputs); validErr != nil {
+				fmt.Fprintln(os.Stderr, validErr)
+				os.Exit(1)
+			}
+		}
+	}
+
 	res, err := engine.RunWithConfig(ctx, dotSource, cfg, engine.RunOptions{
 		RunID:         runID,
 		LogsRoot:      logsRoot,
@@ -416,6 +455,7 @@ func attractorRun(args []string) {
 		ForceModels:   forceModels,
 		Registry:      newLayeredRegistry(),
 		RunDB:         rdb,
+		Inputs:        inputs,
 		OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 			if info == nil {
 				return

@@ -9,18 +9,18 @@ import (
 
 // RunRecord represents a run row for insertion or update.
 type RunRecord struct {
-	RunID        string
-	GraphName    string
-	Goal         string
-	Status       string
-	LogsRoot     string
-	WorktreeDir  string
-	RunBranch    string
-	RepoPath     string
-	StartedAt    time.Time
-	DotSource    string
-	Inputs       map[string]any
-	Labels       map[string]string
+	RunID       string
+	GraphName   string
+	Goal        string
+	Status      string
+	LogsRoot    string
+	WorktreeDir string
+	RunBranch   string
+	RepoPath    string
+	StartedAt   time.Time
+	DotSource   string
+	Inputs      map[string]any
+	Labels      map[string]string
 }
 
 // RecordRunStart satisfies engine.RunDBWriter. Delegates to InsertRun.
@@ -85,19 +85,19 @@ func (d *DB) CompleteRun(runID, status, failureReason, finalSHA string, warnings
 
 // NodeExecution represents a node execution record.
 type NodeExecution struct {
-	RunID        string
-	NodeID       string
-	Attempt      int
-	HandlerType  string
-	Status       string
-	StartedAt    time.Time
-	CompletedAt  *time.Time
-	DurationMS   *int64
-	FailureReason   string
-	FailureClass    string
-	PreferredLabel  string
-	ContextUpdates  map[string]any
-	Notes        string
+	RunID          string
+	NodeID         string
+	Attempt        int
+	HandlerType    string
+	Status         string
+	StartedAt      time.Time
+	CompletedAt    *time.Time
+	DurationMS     *int64
+	FailureReason  string
+	FailureClass   string
+	PreferredLabel string
+	ContextUpdates map[string]any
+	Notes          string
 }
 
 // InsertNodeStart records the start of a node execution.

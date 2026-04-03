@@ -98,6 +98,10 @@ type RunOptions struct {
 	// Optional run database for operational state. When set, the engine
 	// records lifecycle events (run start, node executions, edge decisions).
 	RunDB RunDBWriter
+
+	// Structured inputs loaded from --input file. Available in prompts as
+	// $input.key and in tool_command env as KILROY_INPUT_KEY.
+	Inputs map[string]any
 }
 
 func (o *RunOptions) applyDefaults() error {
@@ -486,6 +490,12 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	}
 	e.Context.Set("graph.goal", e.Graph.Attrs["goal"])
 	e.Context.Set("base_sha", baseSHA)
+
+	// Inject structured inputs into context and expand $input.* in prompts.
+	if len(e.Options.Inputs) > 0 {
+		InjectInputsIntoContext(e.Context, e.Options.Inputs)
+		ExpandInputVariables(e.Graph, e.Options.Inputs)
+	}
 
 	// Expand $base_sha in prompts now that the base SHA is known.
 	// ($goal was already expanded at parse/prepare time.)
