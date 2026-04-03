@@ -145,6 +145,7 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 	// Prepare graph (parse + transforms + validate).
 	g, _, err := PrepareWithOptions(dotSource, PrepareOptions{
 		RepoPath:   cfg.Repo.Path,
+		GraphDir:   overrides.GraphDir,
 		KnownTypes: reg.KnownTypes(),
 		Catalog:    earlyCatalog,
 	})
@@ -231,6 +232,13 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 	opts.Registry = overrides.Registry
 	opts.Labels = overrides.Labels
 	opts.Inputs = overrides.Inputs
+	opts.GraphDir = overrides.GraphDir
+	if overrides.Workspace != "" {
+		opts.Workspace = overrides.Workspace
+		if opts.RepoPath == "" {
+			opts.RepoPath = overrides.Workspace
+		}
+	}
 
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err

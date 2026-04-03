@@ -102,11 +102,25 @@ type RunOptions struct {
 	// Structured inputs loaded from --input file. Available in prompts as
 	// $input.key and in tool_command env as KILROY_INPUT_KEY.
 	Inputs map[string]any
+
+	// Workspace is the directory where the engine executes tool_commands.
+	// When set, overrides RepoPath as the execution directory.
+	// If omitted, defaults to cwd. Prompt files still resolve relative
+	// to the graph file location (GraphDir), not the workspace.
+	Workspace string
+
+	// GraphDir is the directory containing the graph file. Used to resolve
+	// prompt_file attributes. Derived from --graph path.
+	GraphDir string
 }
 
 func (o *RunOptions) applyDefaults() error {
 	if o.RunBranchPrefix == "" {
 		o.RunBranchPrefix = "attractor/run"
+	}
+	// Workspace defaults to RepoPath (existing behavior) or cwd.
+	if o.Workspace != "" && o.RepoPath == "" {
+		o.RepoPath = o.Workspace
 	}
 	// require_clean defaults to false (zero value of bool): kilroy creates
 	// its own worktree, so the parent repo's cleanliness is irrelevant.
@@ -292,9 +306,12 @@ type Result struct {
 
 type PrepareOptions struct {
 	Transforms []Transform
-	// RepoPath is the repository root directory. When set, prompt_file attributes
-	// on nodes are resolved relative to this path before other transforms run.
+	// RepoPath is the repository root directory. When set and GraphDir is empty,
+	// prompt_file attributes on nodes are resolved relative to this path.
 	RepoPath string
+	// GraphDir overrides RepoPath for prompt_file resolution. When set,
+	// prompt_file attributes resolve relative to the graph file's directory.
+	GraphDir string
 	// KnownTypes is an optional list of handler type strings. When non-empty,
 	// the TypeKnownRule lint rule is added to validation so that nodes with
 	// explicit type= attributes not in this set produce a warning.
@@ -326,8 +343,13 @@ func PrepareWithOptions(dotSource []byte, opts PrepareOptions) (*model.Graph, []
 
 	// Built-in transforms: prompt_file resolution, stylesheet, $goal expansion.
 	// prompt_file runs first so loaded content gets stylesheet defaults and $goal expansion.
-	if opts.RepoPath != "" {
-		if err := expandPromptFiles(g, opts.RepoPath); err != nil {
+	// Prefer GraphDir (graph file location) over RepoPath for prompt_file resolution.
+	promptFileBase := opts.GraphDir
+	if promptFileBase == "" {
+		promptFileBase = opts.RepoPath
+	}
+	if promptFileBase != "" {
+		if err := expandPromptFiles(g, promptFileBase); err != nil {
 			return g, nil, fmt.Errorf("prompt_file expansion: %w", err)
 		}
 	}

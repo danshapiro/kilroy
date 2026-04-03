@@ -204,6 +204,7 @@ func attractorRun(args []string) {
 	var skipCLIHeadlessWarning bool
 	var forceModelSpecs []string
 	var inputPath string
+	var workspace string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -263,6 +264,13 @@ func attractorRun(args []string) {
 				os.Exit(1)
 			}
 			inputPath = args[i]
+		case "--workspace":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--workspace requires a directory path")
+				os.Exit(1)
+			}
+			workspace = args[i]
 		default:
 			fmt.Fprintf(os.Stderr, "unknown arg: %s\n", args[i])
 			os.Exit(1)
@@ -285,6 +293,12 @@ func attractorRun(args []string) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+
+	// Derive graph directory for prompt_file resolution.
+	graphDir := filepath.Dir(graphPath)
+	if absPath, err := filepath.Abs(graphPath); err == nil {
+		graphDir = filepath.Dir(absPath)
 	}
 
 	// Load structured inputs.
@@ -456,6 +470,8 @@ func attractorRun(args []string) {
 		Registry:      newLayeredRegistry(),
 		RunDB:         rdb,
 		Inputs:        inputs,
+		Workspace:     workspace,
+		GraphDir:      graphDir,
 		OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 			if info == nil {
 				return
