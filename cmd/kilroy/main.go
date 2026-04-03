@@ -205,6 +205,7 @@ func attractorRun(args []string) {
 	var forceModelSpecs []string
 	var inputPath string
 	var workspace string
+	var labelSpecs []string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -271,6 +272,13 @@ func attractorRun(args []string) {
 				os.Exit(1)
 			}
 			workspace = args[i]
+		case "--label":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--label requires KEY=VALUE")
+				os.Exit(1)
+			}
+			labelSpecs = append(labelSpecs, args[i])
 		default:
 			fmt.Fprintf(os.Stderr, "unknown arg: %s\n", args[i])
 			os.Exit(1)
@@ -293,6 +301,17 @@ func attractorRun(args []string) {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
+	}
+
+	// Parse labels.
+	labels := map[string]string{}
+	for _, spec := range labelSpecs {
+		parts := strings.SplitN(spec, "=", 2)
+		if len(parts) != 2 {
+			fmt.Fprintf(os.Stderr, "--label %q: expected KEY=VALUE format\n", spec)
+			os.Exit(1)
+		}
+		labels[parts[0]] = parts[1]
 	}
 
 	// Derive graph directory for prompt_file resolution.
@@ -472,6 +491,7 @@ func attractorRun(args []string) {
 		Inputs:        inputs,
 		Workspace:     workspace,
 		GraphDir:      graphDir,
+		Labels:        labels,
 		OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 			if info == nil {
 				return

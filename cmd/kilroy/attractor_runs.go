@@ -220,6 +220,49 @@ func printRunRecords(records []runRecord, asJSON bool, source string) {
 	fmt.Printf("\n%d run(s)\n", len(records))
 }
 
+// parseDurationWithDays extends time.ParseDuration with day support.
+// Accepts: "7d", "24h", "30m", "1d12h", etc.
+func parseDurationWithDays(s string) (time.Duration, error) {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0, fmt.Errorf("empty duration")
+	}
+	// Handle "d" suffix by converting to hours.
+	if strings.Contains(s, "d") {
+		var total time.Duration
+		for s != "" {
+			// Find next number.
+			i := 0
+			for i < len(s) && s[i] >= '0' && s[i] <= '9' {
+				i++
+			}
+			if i == 0 || i >= len(s) {
+				break
+			}
+			n := 0
+			for _, c := range s[:i] {
+				n = n*10 + int(c-'0')
+			}
+			unit := s[i]
+			s = s[i+1:]
+			switch unit {
+			case 'd':
+				total += time.Duration(n) * 24 * time.Hour
+			case 'h':
+				total += time.Duration(n) * time.Hour
+			case 'm':
+				total += time.Duration(n) * time.Minute
+			default:
+				return 0, fmt.Errorf("unknown unit %q in duration", string(unit))
+			}
+		}
+		if total > 0 {
+			return total, nil
+		}
+	}
+	return time.ParseDuration(s)
+}
+
 func formatLabels(labels map[string]string) string {
 	if len(labels) == 0 {
 		return ""
@@ -235,6 +278,7 @@ func formatLabels(labels map[string]string) string {
 
 func attractorRunsPrune(args []string) {
 	var beforeStr string
+	var olderThanStr string
 	var graphPattern string
 	var labelFilter string
 	var orphansOnly bool
@@ -251,6 +295,13 @@ func attractorRunsPrune(args []string) {
 				os.Exit(1)
 			}
 			beforeStr = args[i]
+		case "--older-than":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--older-than requires a duration (e.g. 7d, 24h)")
+				os.Exit(1)
+			}
+			olderThanStr = args[i]
 		case "--graph":
 			i++
 			if i >= len(args) {
@@ -276,11 +327,22 @@ func attractorRunsPrune(args []string) {
 		}
 	}
 
+	// Parse --older-than duration (e.g. 7d, 24h, 30m).
+	if olderThanStr != "" {
+		dur, err := parseDurationWithDays(olderThanStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "--older-than %q: %v\n", olderThanStr, err)
+			os.Exit(1)
+		}
+		t := time.Now().Add(-dur)
+		beforeStr = t.Format(time.RFC3339)
+	}
+
 	// Parse --before date (YYYY-MM-DD or "YYYY-MM-DD HH:MM").
 	var beforeTime time.Time
 	if beforeStr != "" {
 		var err error
-		for _, layout := range []string{"2006-01-02 15:04", "2006-01-02T15:04", "2006-01-02"} {
+		for _, layout := range []string{time.RFC3339, "2006-01-02 15:04", "2006-01-02T15:04", "2006-01-02"} {
 			beforeTime, err = time.ParseInLocation(layout, beforeStr, time.Local)
 			if err == nil {
 				break
