@@ -18,10 +18,10 @@ func TestExtractLeadingPath(t *testing.T) {
 		{"scripts/check.sh --flag", "scripts/check.sh"},
 		{"bash -c 'scripts/check.sh'", "scripts/check.sh"},
 		{"sh -c \"./run.sh arg1 arg2\"", "./run.sh"},
-		{"echo hello", ""},          // bare command, no path
-		{"ls", ""},                   // bare command
-		{"node app.js", ""},          // first token is bare command
-		{"", ""},                     // empty
+		{"echo hello", ""},  // bare command, no path
+		{"ls", ""},          // bare command
+		{"node app.js", ""}, // first token is bare command
+		{"", ""},            // empty
 		{"  ./test.sh  ", "./test.sh"},
 	}
 	for _, tt := range tests {

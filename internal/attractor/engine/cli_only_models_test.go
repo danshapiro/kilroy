@@ -8,9 +8,9 @@ func TestIsCLIOnlyModel(t *testing.T) {
 		want  bool
 	}{
 		{"gpt-5.4-spark", false},
-		{"GPT-5.4-SPARK", false},       // case-insensitive
+		{"GPT-5.4-SPARK", false},        // case-insensitive
 		{"openai/gpt-5.4-spark", false}, // with provider prefix
-		{"gpt-5.4", false},             // regular codex
+		{"gpt-5.4", false},              // regular codex
 		{"gpt-5.4", false},
 		{"claude-opus-4-6", false},
 		{"", false},
