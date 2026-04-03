@@ -810,15 +810,15 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		}
 		next := nextHop.Edge
 		e.appendProgress(map[string]any{
-			"event":               "edge_selected",
-			"from_node":           node.ID,
-			"to_node":             next.To,
-			"label":               next.Label(),
-			"condition":           next.Condition(),
-			"hop_source":          string(nextHop.Source),
-			"selection_method":    nextHop.SelectionMeta.Method,
+			"event":                "edge_selected",
+			"from_node":            node.ID,
+			"to_node":              next.To,
+			"label":                next.Label(),
+			"condition":            next.Condition(),
+			"hop_source":           string(nextHop.Source),
+			"selection_method":     nextHop.SelectionMeta.Method,
 			"candidates_evaluated": nextHop.SelectionMeta.CandidatesEvaluated,
-			"conditions_matched":  nextHop.SelectionMeta.ConditionsMatched,
+			"conditions_matched":   nextHop.SelectionMeta.ConditionsMatched,
 		})
 
 		// loop_restart (attractor-spec §3.2 Step 7): terminate current run, re-launch
@@ -2067,7 +2067,7 @@ func hasMatchingOutgoingCondition(g *model.Graph, nodeID string, out runtime.Out
 
 // edgeSelectionMeta captures how edge selection resolved for decision logging.
 type edgeSelectionMeta struct {
-	Method             string // condition_match, preferred_label, suggested_next_ids, weight, only_edge, fallback
+	Method              string // condition_match, preferred_label, suggested_next_ids, weight, only_edge, fallback
 	CandidatesEvaluated int
 	ConditionsMatched   int
 }
