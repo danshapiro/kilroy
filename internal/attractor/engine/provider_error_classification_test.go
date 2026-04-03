@@ -329,19 +329,19 @@ func TestClassifyAPIError(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			gotClass, gotSig := classifyAPIError(tc.err)
+			gotClass, gotSig := ClassifyAPIError(tc.err)
 			if gotClass != tc.wantClass {
-				t.Fatalf("classifyAPIError(%v): class=%q want %q", tc.err, gotClass, tc.wantClass)
+				t.Fatalf("ClassifyAPIError(%v): class=%q want %q", tc.err, gotClass, tc.wantClass)
 			}
 			if gotSig == "" {
-				t.Fatalf("classifyAPIError(%v): signature is empty", tc.err)
+				t.Fatalf("ClassifyAPIError(%v): signature is empty", tc.err)
 			}
 		})
 	}
 }
 
 func TestClassifyAPIError_AbortErrorMapsToCanceledClass(t *testing.T) {
-	cls, _ := classifyAPIError(llm.NewAbortError("operator canceled"))
+	cls, _ := ClassifyAPIError(llm.NewAbortError("operator canceled"))
 	if cls != failureClassCanceled {
 		t.Fatalf("class=%q want %q", cls, failureClassCanceled)
 	}

@@ -67,22 +67,35 @@ type HandlerRegistry struct {
 	defaultHandler Handler
 }
 
-func NewDefaultRegistry() *HandlerRegistry {
+// NewCoreRegistry returns a registry with only Layer 0 (graph runner) handlers.
+// Use this when composing layers explicitly via cmd/kilroy/ startup.
+func NewCoreRegistry() *HandlerRegistry {
 	reg := &HandlerRegistry{
 		handlers: map[string]Handler{},
 	}
-	// Built-in handlers.
 	reg.Register("start", &StartHandler{})
 	reg.Register("exit", &ExitHandler{})
 	reg.Register("conditional", &ConditionalHandler{})
-	reg.Register("wait.human", &WaitHumanHandler{})
 	reg.Register("parallel", &ParallelHandler{})
 	reg.Register("parallel.fan_in", &FanInHandler{})
 	reg.Register("tool", &ToolHandler{})
+	return reg
+}
+
+// NewDefaultRegistry returns a registry with all built-in handlers registered.
+// Retained for backward compatibility with tests and single-package usage.
+func NewDefaultRegistry() *HandlerRegistry {
+	reg := NewCoreRegistry()
+	reg.Register("wait.human", &WaitHumanHandler{})
 	reg.Register("stack.manager_loop", &ManagerLoopHandler{})
 	reg.defaultHandler = &CodergenHandler{}
 	reg.Register("codergen", reg.defaultHandler)
 	return reg
+}
+
+// SetDefault sets the handler used when no registered handler matches a node.
+func (r *HandlerRegistry) SetDefault(h Handler) {
+	r.defaultHandler = h
 }
 
 func (r *HandlerRegistry) Register(typeString string, h Handler) {
@@ -224,18 +237,18 @@ func (h *CodergenHandler) UsesFidelity() bool { return true }
 // LLM provider to be configured.
 func (h *CodergenHandler) RequiresProvider() bool { return true }
 
-type statusSource string
+type StatusSource string
 
 const (
-	statusSourceNone      statusSource = ""
-	statusSourceCanonical statusSource = "canonical"
-	statusSourceWorktree  statusSource = "worktree"
-	statusSourceDotAI     statusSource = "dot_ai"
+	StatusSourceNone      StatusSource = ""
+	StatusSourceCanonical StatusSource = "canonical"
+	StatusSourceWorktree  StatusSource = "worktree"
+	StatusSourceDotAI     StatusSource = "dot_ai"
 )
 
-type fallbackStatusPath struct {
-	path   string
-	source statusSource
+type FallbackStatusPath struct {
+	Path   string
+	Source StatusSource
 }
 
 type fallbackStatusFailureMode string
@@ -253,24 +266,24 @@ const (
 	fallbackStatusDecodeBaseDelay   = 25 * time.Millisecond
 )
 
-func copyFirstValidFallbackStatus(stageStatusPath string, fallbackPaths []fallbackStatusPath) (statusSource, string, error) {
+func CopyFirstValidFallbackStatus(stageStatusPath string, fallbackPaths []FallbackStatusPath) (StatusSource, string, error) {
 	if _, err := os.Stat(stageStatusPath); err == nil {
-		return statusSourceCanonical, "", nil
+		return StatusSourceCanonical, "", nil
 	}
 	issues := make([]string, 0, len(fallbackPaths))
 	for _, fallback := range fallbackPaths {
-		b, mode, err := readAndDecodeFallbackStatusWithRetry(fallback.path)
+		b, mode, err := readAndDecodeFallbackStatusWithRetry(fallback.Path)
 		if err != nil {
 			issues = append(issues, formatFallbackStatusIssue(fallback, mode, err))
 			continue
 		}
 		if err := runtime.WriteFileAtomic(stageStatusPath, b); err != nil {
-			return statusSourceNone, strings.Join(issues, "; "), err
+			return StatusSourceNone, strings.Join(issues, "; "), err
 		}
-		_ = os.Remove(fallback.path)
-		return fallback.source, "", nil
+		_ = os.Remove(fallback.Path)
+		return fallback.Source, "", nil
 	}
-	return statusSourceNone, strings.Join(issues, "; "), nil
+	return StatusSourceNone, strings.Join(issues, "; "), nil
 }
 
 func readAndDecodeFallbackStatusWithRetry(path string) ([]byte, fallbackStatusFailureMode, error) {
@@ -347,22 +360,22 @@ func backoffDelay(attempt int) time.Duration {
 	return time.Duration(attempt) * fallbackStatusDecodeBaseDelay
 }
 
-func formatFallbackStatusIssue(fallback fallbackStatusPath, mode fallbackStatusFailureMode, err error) string {
+func formatFallbackStatusIssue(fallback FallbackStatusPath, mode fallbackStatusFailureMode, err error) string {
 	switch mode {
 	case fallbackFailureModeMissing:
-		return fmt.Sprintf("fallback[%s] missing status artifact: %s", fallback.source, fallback.path)
+		return fmt.Sprintf("fallback[%s] missing status artifact: %s", fallback.Source, fallback.Path)
 	case fallbackFailureModeUnreadable:
-		return fmt.Sprintf("fallback[%s] unreadable status artifact: %s (%v)", fallback.source, fallback.path, err)
+		return fmt.Sprintf("fallback[%s] unreadable status artifact: %s (%v)", fallback.Source, fallback.Path, err)
 	case fallbackFailureModeCorrupt:
-		return fmt.Sprintf("fallback[%s] corrupt status artifact: %s (%v)", fallback.source, fallback.path, err)
+		return fmt.Sprintf("fallback[%s] corrupt status artifact: %s (%v)", fallback.Source, fallback.Path, err)
 	case fallbackFailureModeInvalidPayload:
-		return fmt.Sprintf("fallback[%s] invalid status payload: %s (%v)", fallback.source, fallback.path, err)
+		return fmt.Sprintf("fallback[%s] invalid status payload: %s (%v)", fallback.Source, fallback.Path, err)
 	default:
-		return fmt.Sprintf("fallback[%s] status ingestion error: %s (%v)", fallback.source, fallback.path, err)
+		return fmt.Sprintf("fallback[%s] status ingestion error: %s (%v)", fallback.Source, fallback.Path, err)
 	}
 }
 
-func buildManualBoxFanInPromptPreamble(exec *Execution, node *model.Node) string {
+func BuildManualBoxFanInPromptPreamble(exec *Execution, node *model.Node) string {
 	if exec == nil || exec.Context == nil || exec.Graph == nil || node == nil {
 		return ""
 	}
@@ -415,14 +428,14 @@ func buildManualBoxFanInPromptPreamble(exec *Execution, node *model.Node) string
 func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
 	stageDir := filepath.Join(exec.LogsRoot, node.ID)
 	stageStatusPath := filepath.Join(stageDir, "status.json")
-	contract := stageStatusContract{}
+	contract := StageStatusContract{}
 	if exec != nil {
-		contract = buildStageStatusContract(exec.WorktreeDir)
+		contract = BuildStageStatusContract(exec.WorktreeDir)
 	}
 	worktreeStatusPaths := contract.Fallbacks
 	// Clear stale files from prior stages so we don't accidentally attribute them.
 	for _, statusPath := range worktreeStatusPaths {
-		_ = os.Remove(statusPath.path)
+		_ = os.Remove(statusPath.Path)
 	}
 
 	basePrompt := strings.TrimSpace(node.Prompt())
@@ -453,7 +466,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 		if exec != nil && exec.Context != nil {
 			prevNode = exec.Context.GetString("previous_node", "")
 		}
-		preamble := buildFidelityPreamble(exec.Context, runID, goal, fidelity, prevNode, decodeCompletedNodes(exec.Context))
+		preamble := BuildFidelityPreamble(exec.Context, runID, goal, fidelity, prevNode, DecodeCompletedNodes(exec.Context))
 		promptText = strings.TrimSpace(preamble) + "\n\n" + basePrompt
 	}
 	if preamble := strings.TrimSpace(contract.PromptPreamble); preamble != "" {
@@ -463,9 +476,9 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			promptText = preamble + "\n\n" + strings.TrimSpace(promptText)
 		}
 	}
-	if env := buildStageRuntimeEnv(exec, node.ID); len(env) > 0 {
+	if env := BuildStageRuntimeEnv(exec, node.ID); len(env) > 0 {
 		if manifestPath := strings.TrimSpace(env[inputsManifestEnvKey]); manifestPath != "" {
-			preamble := strings.TrimSpace(mustRenderInputMaterializationPromptPreamble(manifestPath))
+			preamble := strings.TrimSpace(MustRenderInputMaterializationPromptPreamble(manifestPath))
 			if preamble != "" {
 				if strings.TrimSpace(promptText) == "" {
 					promptText = preamble
@@ -482,7 +495,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			if logsPath == "" {
 				logsPath = dossierPath
 			}
-			preamble := strings.TrimSpace(mustRenderFailureDossierPromptPreamble(dossierPath, logsPath))
+			preamble := strings.TrimSpace(MustRenderFailureDossierPromptPreamble(dossierPath, logsPath))
 			if preamble != "" {
 				if strings.TrimSpace(promptText) == "" {
 					promptText = preamble
@@ -492,7 +505,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			}
 		}
 	}
-	if preamble := strings.TrimSpace(buildManualBoxFanInPromptPreamble(exec, node)); preamble != "" {
+	if preamble := strings.TrimSpace(BuildManualBoxFanInPromptPreamble(exec, node)); preamble != "" {
 		if strings.TrimSpace(promptText) == "" {
 			promptText = preamble
 		} else {
@@ -552,7 +565,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 	}
 	resp, out, err := backend.Run(ctx, exec, node, promptText)
 	if err != nil {
-		fc, sig := classifyAPIError(err)
+		fc, sig := ClassifyAPIError(err)
 		// Spec §4.5: set semantically correct status based on failure classification.
 		// Deterministic errors (auth, bad request, etc.) are FAIL — retrying won't help.
 		// Transient errors (rate limits, timeouts, server errors) are RETRY — worth retrying.
@@ -573,11 +586,11 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 
 	// If the backend/agent wrote a worktree status.json, surface it to the engine by
 	// copying it into the authoritative stage directory location.
-	source := statusSourceNone
+	source := StatusSourceNone
 	ingestionDiagnostic := ""
 	if len(worktreeStatusPaths) > 0 {
 		var err error
-		source, ingestionDiagnostic, err = copyFirstValidFallbackStatus(stageStatusPath, worktreeStatusPaths)
+		source, ingestionDiagnostic, err = CopyFirstValidFallbackStatus(stageStatusPath, worktreeStatusPaths)
 		if err != nil {
 			reason := err.Error()
 			if strings.TrimSpace(ingestionDiagnostic) != "" {
@@ -591,7 +604,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			"event":   "status_ingestion_decision",
 			"node_id": node.ID,
 			"source":  string(source),
-			"copied":  source == statusSourceWorktree || source == statusSourceDotAI,
+			"copied":  source == StatusSourceWorktree || source == StatusSourceDotAI,
 		}
 		if strings.TrimSpace(ingestionDiagnostic) != "" {
 			progress["diagnostic"] = strings.TrimSpace(ingestionDiagnostic)
@@ -608,7 +621,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			out.ContextUpdates["last_stage"] = node.ID
 		}
 		if _, ok := out.ContextUpdates["last_response"]; !ok {
-			out.ContextUpdates["last_response"] = truncate(resp, 200)
+			out.ContextUpdates["last_response"] = Truncate(resp, 200)
 		}
 		return *out, nil
 	}
@@ -623,7 +636,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			Notes:  "codergen completed (status.json written)",
 			ContextUpdates: map[string]any{
 				"last_stage":    node.ID,
-				"last_response": truncate(resp, 200),
+				"last_response": Truncate(resp, 200),
 			},
 		}, nil
 	}
@@ -634,7 +647,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			Notes:  "auto-status: handler completed without writing status",
 			ContextUpdates: map[string]any{
 				"last_stage":    node.ID,
-				"last_response": truncate(resp, 200),
+				"last_response": Truncate(resp, 200),
 			},
 		}, nil
 	}
@@ -648,7 +661,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 		Notes:         "codergen completed without an outcome or status.json",
 		ContextUpdates: map[string]any{
 			"last_stage":    node.ID,
-			"last_response": truncate(resp, 200),
+			"last_response": Truncate(resp, 200),
 		},
 	}, nil
 }
@@ -789,7 +802,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: "no tool_command specified"}, nil
 	}
 	if toolCommandAbsPathRE.MatchString(cmdStr) {
-		warnEngine(execCtx, fmt.Sprintf("tool_command for node %q contains 'cd /…' which overrides worktree CWD %q", node.ID, execCtx.WorktreeDir))
+		WarnEngine(execCtx, fmt.Sprintf("tool_command for node %q contains 'cd /…' which overrides worktree CWD %q", node.ID, execCtx.WorktreeDir))
 	}
 	timeout := parseDuration(node.Attr("timeout", ""), 0)
 	if timeout <= 0 {
@@ -801,7 +814,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	if isBrowserVerifyNode {
 		baselineRun, err := snapshotBrowserArtifactsFunc(execCtx.WorktreeDir)
 		if err != nil {
-			warnEngine(execCtx, fmt.Sprintf("snapshot browser artifacts: %v", err))
+			WarnEngine(execCtx, fmt.Sprintf("snapshot browser artifacts: %v", err))
 		} else {
 			baseline = baselineRun
 		}
@@ -835,7 +848,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		"timeout_ms":  timeout.Milliseconds(),
 		"env_mode":    "base",
 	}); err != nil {
-		warnEngine(execCtx, fmt.Sprintf("write tool_invocation.json: %v", err))
+		WarnEngine(execCtx, fmt.Sprintf("write tool_invocation.json: %v", err))
 	}
 
 	cctx, cancel := context.WithTimeout(ctx, timeout)
@@ -844,7 +857,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	cmd.Dir = execCtx.WorktreeDir
 	cmd.Env = mergeEnvWithOverrides(
 		buildBaseNodeEnv(artifactPolicyFromExecution(execCtx)),
-		buildStageRuntimeEnv(execCtx, node.ID),
+		BuildStageRuntimeEnv(execCtx, node.ID),
 	)
 	// Avoid hanging on interactive reads; tool_command doesn't provide a way to supply stdin.
 	cmd.Stdin = strings.NewReader("")
@@ -876,7 +889,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 			"exit_code":   exitCode,
 			"timed_out":   true,
 		}); err != nil {
-			warnEngine(execCtx, fmt.Sprintf("write tool_timing.json: %v", err))
+			WarnEngine(execCtx, fmt.Sprintf("write tool_timing.json: %v", err))
 		}
 		_ = writeDiffPatch(stageDir, execCtx.WorktreeDir)
 		emitBrowserArtifactCollection(execCtx, node, stageDir, isBrowserVerifyNode, baseline, startedAt)
@@ -891,7 +904,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		"exit_code":   exitCode,
 		"timed_out":   false,
 	}); err != nil {
-		warnEngine(execCtx, fmt.Sprintf("write tool_timing.json: %v", err))
+		WarnEngine(execCtx, fmt.Sprintf("write tool_timing.json: %v", err))
 	}
 
 	// Capture diff for debug-by-default. This is stable because we checkpoint after each node.
@@ -899,11 +912,11 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 
 	stdoutBytes, rerr := os.ReadFile(stdoutPath)
 	if rerr != nil {
-		warnEngine(execCtx, fmt.Sprintf("read stdout.log: %v", rerr))
+		WarnEngine(execCtx, fmt.Sprintf("read stdout.log: %v", rerr))
 	}
 	stderrBytes, rerr := os.ReadFile(stderrPath)
 	if rerr != nil {
-		warnEngine(execCtx, fmt.Sprintf("read stderr.log: %v", rerr))
+		WarnEngine(execCtx, fmt.Sprintf("read stderr.log: %v", rerr))
 	}
 	emitBrowserArtifactCollection(execCtx, node, stageDir, isBrowserVerifyNode, baseline, startedAt)
 
@@ -931,7 +944,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 				"node_id":   node.ID,
 				"tool_name": "shell",
 				"call_id":   callID,
-				"output":    truncate(combinedStr, 8_000),
+				"output":    Truncate(combinedStr, 8_000),
 				"is_error":  true,
 			}); err != nil {
 				execCtx.Engine.Warn(fmt.Sprintf("cxdb append ToolResult failed (node=%s call_id=%s): %v", node.ID, callID, err))
@@ -941,7 +954,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 			Status:        runtime.StatusFail,
 			FailureReason: failureReason,
 			ContextUpdates: map[string]any{
-				"tool.output":      truncate(combinedStr, 8_000),
+				"tool.output":      Truncate(combinedStr, 8_000),
 				"tool.exit_status": rawExitStatus,
 			},
 		}, nil
@@ -952,7 +965,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 			"node_id":   node.ID,
 			"tool_name": "shell",
 			"call_id":   callID,
-			"output":    truncate(combinedStr, 8_000),
+			"output":    Truncate(combinedStr, 8_000),
 			"is_error":  false,
 		}); err != nil {
 			execCtx.Engine.Warn(fmt.Sprintf("cxdb append ToolResult failed (node=%s call_id=%s): %v", node.ID, callID, err))
@@ -961,7 +974,7 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 	return runtime.Outcome{
 		Status: runtime.StatusSuccess,
 		ContextUpdates: map[string]any{
-			"tool.output": truncate(combinedStr, 8_000),
+			"tool.output": Truncate(combinedStr, 8_000),
 		},
 		Notes: "tool completed",
 	}, nil
@@ -973,7 +986,7 @@ func emitBrowserArtifactCollection(execCtx *Execution, node *model.Node, stageDi
 	}
 	summary, err := collectBrowserArtifactsFunc(stageDir, execCtx.WorktreeDir, baseline, startedAt)
 	if err != nil {
-		warnEngine(execCtx, fmt.Sprintf("collect browser artifacts: %v", err))
+		WarnEngine(execCtx, fmt.Sprintf("collect browser artifacts: %v", err))
 	}
 
 	if execCtx == nil || execCtx.Engine == nil {
@@ -1153,7 +1166,7 @@ func pathExists(path string) bool {
 	return err == nil && !info.IsDir()
 }
 
-func truncate(s string, n int) string {
+func Truncate(s string, n int) string {
 	if n <= 0 || len(s) <= n {
 		return s
 	}

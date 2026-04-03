@@ -11,28 +11,28 @@ const (
 	stageStatusFallbackPathEnvKey = "KILROY_STAGE_STATUS_FALLBACK_PATH"
 )
 
-type stageStatusContract struct {
+type StageStatusContract struct {
 	PrimaryPath    string
 	FallbackPath   string
 	PromptPreamble string
 	EnvVars        map[string]string
-	Fallbacks      []fallbackStatusPath
+	Fallbacks      []FallbackStatusPath
 }
 
-func buildStageStatusContract(worktreeDir string) stageStatusContract {
+func BuildStageStatusContract(worktreeDir string) StageStatusContract {
 	wt := strings.TrimSpace(worktreeDir)
 	if wt == "" {
-		return stageStatusContract{}
+		return StageStatusContract{}
 	}
 	wtAbs, err := filepath.Abs(wt)
 	if err != nil {
-		return stageStatusContract{}
+		return StageStatusContract{}
 	}
 	primary := filepath.Join(wtAbs, "status.json")
 	fallback := filepath.Join(runScopedWorktreeRoot(wtAbs, inferRunIDForStatusFallback(wtAbs)), "status.json")
 	promptPreamble := mustRenderStageStatusContractPromptPreamble(primary, fallback)
 
-	return stageStatusContract{
+	return StageStatusContract{
 		PrimaryPath:    primary,
 		FallbackPath:   fallback,
 		PromptPreamble: promptPreamble,
@@ -40,14 +40,14 @@ func buildStageStatusContract(worktreeDir string) stageStatusContract {
 			stageStatusPathEnvKey:         primary,
 			stageStatusFallbackPathEnvKey: fallback,
 		},
-		Fallbacks: []fallbackStatusPath{
+		Fallbacks: []FallbackStatusPath{
 			{
-				path:   primary,
-				source: statusSourceWorktree,
+				Path:   primary,
+				Source: StatusSourceWorktree,
 			},
 			{
-				path:   fallback,
-				source: statusSourceDotAI,
+				Path:   fallback,
+				Source: StatusSourceDotAI,
 			},
 		},
 	}

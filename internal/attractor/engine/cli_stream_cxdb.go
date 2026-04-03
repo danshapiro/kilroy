@@ -43,7 +43,7 @@ func emitCXDBCLIStreamEvent(ctx context.Context, eng *Engine, nodeID string, ev 
 		if _, _, err := eng.CXDB.Append(ctx, "com.kilroy.attractor.AssistantMessage", 1, map[string]any{
 			"run_id":         runID,
 			"node_id":        nodeID,
-			"text":           truncate(text, 8_000),
+			"text":           Truncate(text, 8_000),
 			"model":          ev.Message.Model,
 			"input_tokens":   inputTokens,
 			"output_tokens":  outputTokens,
@@ -63,7 +63,7 @@ func emitCXDBCLIStreamEvent(ctx context.Context, eng *Engine, nodeID string, ev 
 				"node_id":        nodeID,
 				"tool_name":      call.Name,
 				"call_id":        call.ID,
-				"arguments_json": truncate(call.InputJSON, 8_000),
+				"arguments_json": Truncate(call.InputJSON, 8_000),
 			}); err != nil {
 				eng.Warn(fmt.Sprintf("cxdb append ToolCall failed (node=%s tool=%s call_id=%s): %v", nodeID, call.Name, call.ID, err))
 			}
@@ -84,7 +84,7 @@ func emitCXDBCLIStreamEvent(ctx context.Context, eng *Engine, nodeID string, ev 
 				"node_id":   nodeID,
 				"tool_name": toolName,
 				"call_id":   result.ToolUseID,
-				"output":    truncate(result.Content, 8_000),
+				"output":    Truncate(result.Content, 8_000),
 				"is_error":  result.IsError,
 			}); err != nil {
 				eng.Warn(fmt.Sprintf("cxdb append ToolResult failed (node=%s call_id=%s): %v", nodeID, result.ToolUseID, err))

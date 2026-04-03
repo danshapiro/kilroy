@@ -186,11 +186,11 @@ func runRustSandboxPreflightForManifest(ctx context.Context, manifestPath, workt
 	output := strings.TrimSpace(string(outBytes))
 	if err != nil {
 		if class, sig, reason, ok := classifyRustSandboxPreflightInfraFailure(err, output); ok {
-			checkMeta["error"] = truncate(output, 500)
+			checkMeta["error"] = Truncate(output, 500)
 			return checkMeta, rustSandboxPreflightRetryOutcome(reason, class, sig)
 		}
 		checkMeta["status"] = "skipped_non_infra_failure"
-		checkMeta["error"] = truncate(output, 500)
+		checkMeta["error"] = Truncate(output, 500)
 		return checkMeta, nil
 	}
 

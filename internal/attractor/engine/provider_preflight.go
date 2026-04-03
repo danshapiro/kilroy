@@ -378,7 +378,7 @@ func runProviderAPIPreflight(ctx context.Context, g *model.Graph, runtimes map[s
 				"model":            target.Model,
 				"mode":             target.Mode,
 				"transport":        effectiveTransport,
-				"response_preview": truncate(strings.TrimSpace(probe.Text), 64),
+				"response_preview": Truncate(strings.TrimSpace(probe.Text), 64),
 			}
 			if probe.MaxTokens > 0 {
 				details["max_tokens"] = probe.MaxTokens

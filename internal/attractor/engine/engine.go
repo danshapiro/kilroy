@@ -217,6 +217,15 @@ type Engine struct {
 	lastResolvedThreadKey string      // thread key when fidelity=full (best-effort)
 }
 
+// LastResolvedFidelity returns the most recently resolved LLM fidelity mode.
+// Exported for use by agent handler implementations in external packages.
+func (e *Engine) LastResolvedFidelity() string {
+	if e == nil {
+		return ""
+	}
+	return e.lastResolvedFidelity
+}
+
 // nextParallelPassCount increments and returns the dispatch count for nodeID.
 // The first call for a given nodeID returns 1, the second returns 2, etc.
 func (e *Engine) nextParallelPassCount(nodeID string) int {
