@@ -14,9 +14,11 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/danshapiro/kilroy/internal/attractor/agents"
 	"github.com/danshapiro/kilroy/internal/attractor/engine"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/attractor/validate"
+	"github.com/danshapiro/kilroy/internal/attractor/workflows"
 	"github.com/danshapiro/kilroy/internal/dotenv"
 	"github.com/danshapiro/kilroy/internal/providerspec"
 	"github.com/danshapiro/kilroy/internal/version"
@@ -105,6 +107,21 @@ func loadEnvFile(args []string) []string {
 		out = append(out, args[i])
 	}
 	return out
+}
+
+// newLayeredRegistry composes the full handler registry from L0 (engine core),
+// L1 (agent capabilities), and L2 (workflow patterns). This is where the
+// layered architecture is wired together at startup.
+func newLayeredRegistry() *engine.HandlerRegistry {
+	reg := engine.NewCoreRegistry()
+	// Layer 1: Agent capabilities.
+	agentHandler := &agents.AgentHandler{}
+	reg.Register("codergen", agentHandler)
+	reg.SetDefault(agentHandler)
+	// Layer 2: Workflow patterns.
+	reg.Register("wait.human", &workflows.HumanGateHandler{})
+	reg.Register("stack.manager_loop", &workflows.ManagerLoopHandler{})
+	return reg
 }
 
 func usage() {
@@ -340,6 +357,7 @@ func attractorRun(args []string) {
 			AllowTestShim: allowTestShim,
 			DisableCXDB:   noCXDB,
 			ForceModels:   forceModels,
+			Registry:      newLayeredRegistry(),
 			OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 				if info == nil {
 					return
@@ -381,6 +399,7 @@ func attractorRun(args []string) {
 		AllowTestShim: allowTestShim,
 		DisableCXDB:   noCXDB,
 		ForceModels:   forceModels,
+		Registry:      newLayeredRegistry(),
 		OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 			if info == nil {
 				return

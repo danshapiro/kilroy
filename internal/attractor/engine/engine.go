@@ -88,6 +88,12 @@ type RunOptions struct {
 	// Arbitrary key/value metadata written to manifest.json under "labels".
 	// Use to fingerprint runs for later querying or pruning (e.g. source=test).
 	Labels map[string]string
+
+	// Optional pre-configured handler registry. When set, RunWithConfig uses
+	// this registry instead of creating one via NewDefaultRegistry. This allows
+	// cmd/kilroy/ to compose layers by registering handlers from agents/ and
+	// workflows/ packages before starting the engine.
+	Registry *HandlerRegistry
 }
 
 func (o *RunOptions) applyDefaults() error {

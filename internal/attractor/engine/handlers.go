@@ -684,7 +684,7 @@ func (h *WaitHumanHandler) Execute(ctx context.Context, exec *Execution, node *m
 		if label == "" {
 			label = e.To
 		}
-		key := acceleratorKey(label)
+		key := AcceleratorKey(label)
 		if key == "" || used[key] {
 			// Provide a stable fallback key when accelerator extraction is ambiguous.
 			key = fmt.Sprintf("%d", i+1)

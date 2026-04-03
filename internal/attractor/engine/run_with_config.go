@@ -117,9 +117,12 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 	}
 	applyConfigDefaults(cfg)
 
-	// Create handler registry early so we can wire KnownTypes into validation
-	// and use it for provider requirement checks below.
-	reg := NewDefaultRegistry()
+	// Use the registry from options if provided (layered composition from cmd/kilroy/),
+	// otherwise fall back to the full default registry.
+	reg := overrides.Registry
+	if reg == nil {
+		reg = NewDefaultRegistry()
+	}
 
 	// Load catalog early (best-effort) so that model ID lint rules fire during
 	// PrepareWithOptions. The full ResolveModelCatalog snapshot still runs later
@@ -410,7 +413,10 @@ func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRunt
 	if g == nil || catalog == nil {
 		return nil, nil
 	}
-	reg := NewDefaultRegistry()
+	reg := opts.Registry
+	if reg == nil {
+		reg = NewDefaultRegistry()
+	}
 	var checks []providerPreflightCheck
 	warnedUncovered := map[string]bool{}
 	for _, n := range g.Nodes {
