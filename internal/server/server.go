@@ -42,6 +42,19 @@ func New(cfg Config) *Server {
 
 	// Go 1.22+ method+pattern routing.
 	mux.HandleFunc("GET /health", s.handleHealth)
+
+	// /runs endpoints (canonical names per platform-reframe plan).
+	mux.HandleFunc("POST /runs", s.handleSubmitPipeline)
+	mux.HandleFunc("GET /runs", s.handleListRuns)
+	mux.HandleFunc("GET /runs/{id}", s.handleGetPipeline)
+	mux.HandleFunc("GET /runs/{id}/events", s.handlePipelineEvents)
+	mux.HandleFunc("POST /runs/{id}/cancel", s.handleCancelPipeline)
+	mux.HandleFunc("GET /runs/{id}/context", s.handleGetContext)
+	mux.HandleFunc("GET /runs/{id}/outputs", s.handleGetRunOutputs)
+	mux.HandleFunc("GET /runs/{id}/questions", s.handleGetQuestions)
+	mux.HandleFunc("POST /runs/{id}/questions/{qid}/answer", s.handleAnswerQuestion)
+
+	// /pipelines aliases for backward compatibility.
 	mux.HandleFunc("POST /pipelines", s.handleSubmitPipeline)
 	mux.HandleFunc("GET /pipelines/{id}", s.handleGetPipeline)
 	mux.HandleFunc("GET /pipelines/{id}/events", s.handlePipelineEvents)
