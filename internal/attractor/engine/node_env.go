@@ -62,7 +62,7 @@ func stripEnvKey(env []string, key string) []string {
 }
 
 // BuildStageRuntimeEnv returns stable per-stage environment variables that
-// help codergen/tool nodes find their run-local state (logs, worktree, etc.).
+// help agent/tool nodes find their run-local state (logs, worktree, etc.).
 func BuildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
 	out := map[string]string{}
 	if execCtx == nil {

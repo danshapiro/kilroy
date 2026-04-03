@@ -137,8 +137,8 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		return nil, fmt.Errorf("resume: stat run config %s: %w", cfgPath, err)
 	}
 
-	// If we have a run config, resume with the real codergen router and CXDB sink.
-	var backend CodergenBackend = &SimulatedCodergenBackend{}
+	// If we have a run config, resume with the real agent router and CXDB sink.
+	var backend AgentBackend = &SimulatedAgentBackend{}
 	var sink *CXDBSink
 	var catalog *modeldb.Catalog
 	var startup *CXDBStartupInfo
@@ -158,7 +158,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 			return nil, err
 		}
 		catalog = cat
-		backend, err = newResumeCodergenBackend(cfg, catalog)
+		backend, err = newResumeAgentBackend(cfg, catalog)
 		if err != nil {
 			return nil, err
 		}
@@ -240,7 +240,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	eng = newBaseEngine(g, dotSource, opts)
 	eng.RunConfig = cfg
 	eng.ArtifactPolicy = resolvedArtifactPolicy
-	eng.CodergenBackend = backend
+	eng.AgentBackend = backend
 	eng.CXDB = sink
 	eng.ModelCatalogSHA = func() string {
 		if catalog == nil {
@@ -482,14 +482,14 @@ func firstExistingPath(paths ...string) string {
 	return ""
 }
 
-func newResumeCodergenBackend(cfg *RunConfigFile, catalog *modeldb.Catalog) (CodergenBackend, error) {
+func newResumeAgentBackend(cfg *RunConfigFile, catalog *modeldb.Catalog) (AgentBackend, error) {
 	// Resume consumes snapshotted graph+config from a previously validated run,
 	// so we only need runtime materialization here (not full preflight validation).
 	runtimes, err := resolveProviderRuntimes(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return NewCodergenRouterWithRuntimes(cfg, catalog, runtimes), nil
+	return NewAgentRouterWithRuntimes(cfg, catalog, runtimes), nil
 }
 
 func loadManifest(path string) (*manifest, error) {

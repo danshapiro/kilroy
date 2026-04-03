@@ -89,7 +89,7 @@ func NewDefaultRegistry() *HandlerRegistry {
 	reg.Register("wait.human", &WaitHumanHandler{})
 	reg.Register("stack.manager_loop", &ManagerLoopHandler{})
 	reg.defaultHandler = &CodergenHandler{}
-	reg.Register("codergen", reg.defaultHandler)
+	reg.Register("agent", reg.defaultHandler)
 	return reg
 }
 
@@ -141,7 +141,7 @@ func shapeToType(shape string) string {
 	case "Msquare", "doublecircle":
 		return "exit"
 	case "box":
-		return "codergen"
+		return "agent"
 	case "hexagon":
 		return "wait.human"
 	case "diamond":
@@ -155,7 +155,7 @@ func shapeToType(shape string) string {
 	case "house":
 		return "stack.manager_loop"
 	default:
-		return "codergen"
+		return "agent"
 	}
 }
 
@@ -213,17 +213,17 @@ func (h *ConditionalHandler) Execute(ctx context.Context, exec *Execution, node 
 	}, nil
 }
 
-type CodergenBackend interface {
+type AgentBackend interface {
 	Run(ctx context.Context, exec *Execution, node *model.Node, prompt string) (string, *runtime.Outcome, error)
 }
 
-type SimulatedCodergenBackend struct{}
+type SimulatedAgentBackend struct{}
 
-func (b *SimulatedCodergenBackend) Run(ctx context.Context, exec *Execution, node *model.Node, prompt string) (string, *runtime.Outcome, error) {
+func (b *SimulatedAgentBackend) Run(ctx context.Context, exec *Execution, node *model.Node, prompt string) (string, *runtime.Outcome, error) {
 	_ = ctx
 	_ = exec
 	_ = prompt
-	out := runtime.Outcome{Status: runtime.StatusSuccess, Notes: "simulated codergen completed"}
+	out := runtime.Outcome{Status: runtime.StatusSuccess, Notes: "simulated agent completed"}
 	return "[Simulated] Response for stage: " + node.ID, &out, nil
 }
 
@@ -559,9 +559,9 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 		exec.Engine.cxdbPrompt(ctx, node.ID, promptText)
 	}
 
-	backend := exec.Engine.CodergenBackend
+	backend := exec.Engine.AgentBackend
 	if backend == nil {
-		backend = &SimulatedCodergenBackend{}
+		backend = &SimulatedAgentBackend{}
 	}
 	resp, out, err := backend.Run(ctx, exec, node, promptText)
 	if err != nil {
@@ -633,7 +633,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 		// Spec §5.1: always set last_stage/last_response on handler completion.
 		return runtime.Outcome{
 			Status: runtime.StatusSuccess,
-			Notes:  "codergen completed (status.json written)",
+			Notes:  "agent completed (status.json written)",
 			ContextUpdates: map[string]any{
 				"last_stage":    node.ID,
 				"last_response": Truncate(resp, 200),
@@ -658,7 +658,7 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 	return runtime.Outcome{
 		Status:        runtime.StatusFail,
 		FailureReason: reason,
-		Notes:         "codergen completed without an outcome or status.json",
+		Notes:         "agent completed without an outcome or status.json",
 		ContextUpdates: map[string]any{
 			"last_stage":    node.ID,
 			"last_response": Truncate(resp, 200),

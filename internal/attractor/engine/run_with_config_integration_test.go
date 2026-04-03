@@ -762,7 +762,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, codergen_mode=one_shot, auto_status=true, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, agent_mode=one_shot, auto_status=true, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -821,7 +821,7 @@ digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=openai, llm_model=gpt-unknown-dot-a, codergen_mode=one_shot, auto_status=true, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-unknown-dot-a, agent_mode=one_shot, auto_status=true, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -883,7 +883,7 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
 
-  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, codergen_mode=one_shot, prompt="say hi"]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.2, agent_mode=one_shot, prompt="say hi"]
   fix [shape=parallelogram, tool_command="echo fixed > fixed.txt"]
 
   start -> a
@@ -902,7 +902,7 @@ digraph G {
 	}
 
 	// API backend does not produce a status.json signal by itself; without auto_status=true,
-	// codergen must fail to preserve the contract.
+	// agent must fail to preserve the contract.
 	b, err := os.ReadFile(filepath.Join(res.LogsRoot, "a", "status.json"))
 	if err != nil {
 		t.Fatalf("read a/status.json: %v", err)

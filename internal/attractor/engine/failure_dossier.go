@@ -80,7 +80,7 @@ func (e *Engine) updateFailureDossierContext(node *model.Node, out runtime.Outco
 
 	dossier := e.buildFailureDossier(node, out, failureClass, retries)
 	// Latest failure wins: this file is intentionally overwritten on each
-	// fail/retry outcome so the next codergen stage reads current evidence.
+	// fail/retry outcome so the next agent stage reads current evidence.
 	logsPath := filepath.Join(e.LogsRoot, failureDossierFileName)
 	if err := writeJSON(logsPath, dossier); err != nil {
 		e.Warn(fmt.Sprintf("failure dossier write (%s): %v", logsPath, err))

@@ -1078,7 +1078,7 @@ func runProviderCLIPromptProbeAttempt(ctx context.Context, provider string, mode
 	defer cancel()
 
 	probeLogsRoot := filepath.Join(opts.LogsRoot, "preflight", "prompt-probe", safePathToken(provider), safePathToken(modelID))
-	router := NewCodergenRouterWithRuntimes(cfg, nil, nil)
+	router := NewAgentRouterWithRuntimes(cfg, nil, nil)
 	execCtx := &Execution{
 		LogsRoot:    probeLogsRoot,
 		WorktreeDir: worktreeForInvocation,
@@ -1332,12 +1332,12 @@ func usedAPIPromptProbeTargetsForProvider(g *model.Graph, runtimes map[string]Pr
 			continue
 		}
 
-		mode := strings.ToLower(strings.TrimSpace(n.Attr("codergen_mode", "")))
+		mode := strings.ToLower(strings.TrimSpace(n.Attr("agent_mode", "")))
 		if mode == "" {
 			mode = "agent_loop"
 		}
 		if mode != "one_shot" && mode != "agent_loop" {
-			return nil, fmt.Errorf("invalid codergen_mode: %q (want one_shot|agent_loop)", mode)
+			return nil, fmt.Errorf("invalid agent_mode: %q (want one_shot|agent_loop)", mode)
 		}
 		reasoning := strings.TrimSpace(n.Attr("reasoning_effort", ""))
 		req, err := preflightAPIPromptProbeRequest(provider, modelID, mode, reasoning, runtimes)
@@ -1444,7 +1444,7 @@ func preflightAPIPromptProbeRequest(provider string, modelID string, mode string
 		req.Tools = toolDefs
 		return req, nil
 	default:
-		return llm.Request{}, fmt.Errorf("invalid codergen_mode: %q (want one_shot|agent_loop)", mode)
+		return llm.Request{}, fmt.Errorf("invalid agent_mode: %q (want one_shot|agent_loop)", mode)
 	}
 }
 

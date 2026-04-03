@@ -184,7 +184,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.Registry.Register("retry_with_content", handler)
 	eng.RunBranch = "attractor/run/" + opts.RunID

@@ -64,7 +64,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	eng.RunConfig = boot.Config
 	eng.ArtifactPolicy = boot.ResolvedArtifactPolicy
 	eng.Context = NewContextWithGraphAttrs(boot.Graph)
-	eng.CodergenBackend = NewCodergenRouterWithRuntimes(boot.Config, boot.Catalog, boot.Runtimes)
+	eng.AgentBackend = NewAgentRouterWithRuntimes(boot.Config, boot.Catalog, boot.Runtimes)
 	eng.CXDB = sink
 	eng.ModelCatalogSHA = boot.Catalog.SHA256
 	eng.ModelCatalogSource = boot.ModelCatalogSource

@@ -116,7 +116,7 @@ func newLayeredRegistry() *engine.HandlerRegistry {
 	reg := engine.NewCoreRegistry()
 	// Layer 1: Agent capabilities.
 	agentHandler := &agents.AgentHandler{}
-	reg.Register("codergen", agentHandler)
+	reg.Register("agent", agentHandler)
 	reg.SetDefault(agentHandler)
 	// Layer 2: Workflow patterns.
 	reg.Register("wait.human", &workflows.HumanGateHandler{})

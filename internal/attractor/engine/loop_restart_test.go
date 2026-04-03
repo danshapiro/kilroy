@@ -73,7 +73,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-restart"
 
@@ -178,7 +178,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-retry-reset"
 
@@ -270,7 +270,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-limit"
 
@@ -330,7 +330,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-final-on-limit"
 
@@ -419,7 +419,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-deterministic-block"
 
@@ -497,7 +497,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-circuit-breaker"
 
@@ -615,7 +615,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-stuck-cycle"
 
@@ -817,7 +817,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-persist"
 
@@ -908,7 +908,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-persist-progress"
 

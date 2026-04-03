@@ -469,7 +469,7 @@ func newReliabilityFixtureEngine(t *testing.T, repo, logsRoot, runID string, dot
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	for k, v := range g.Attrs {
 		eng.Context.Set("graph."+k, v)

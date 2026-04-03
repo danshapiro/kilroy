@@ -74,7 +74,7 @@ func ValidateWithOptions(g *model.Graph, opts ValidateOptions, extraRules ...Lin
 	diags = append(diags, lintGoalGateExitStatusContract(g)...)
 	diags = append(diags, lintGoalGatePromptStatusHint(g)...)
 	diags = append(diags, lintFidelityValid(g)...)
-	diags = append(diags, lintPromptOnCodergenNodes(g)...)
+	diags = append(diags, lintPromptOnAgentNodes(g)...)
 	diags = append(diags, lintStatusContractInPrompt(g)...)
 	diags = append(diags, lintPromptOnConditionalNodes(g)...)
 	diags = append(diags, lintPromptFileConflict(g)...)
@@ -761,13 +761,13 @@ func lintFidelityValid(g *model.Graph) []Diagnostic {
 	return diags
 }
 
-func lintPromptOnCodergenNodes(g *model.Graph) []Diagnostic {
+func lintPromptOnAgentNodes(g *model.Graph) []Diagnostic {
 	var diags []Diagnostic
 	for id, n := range g.Nodes {
 		if n == nil {
 			continue
 		}
-		// Best-effort: default handler is codergen for shape box.
+		// Best-effort: default handler is agent for shape box.
 		if n.Shape() != "box" {
 			continue
 		}
@@ -775,7 +775,7 @@ func lintPromptOnCodergenNodes(g *model.Graph) []Diagnostic {
 			diags = append(diags, Diagnostic{
 				Rule:     "prompt_on_llm_nodes",
 				Severity: SeverityWarning,
-				Message:  "codergen node has empty prompt (label will be used)",
+				Message:  "agent node has empty prompt (label will be used)",
 				NodeID:   id,
 			})
 		}
@@ -785,7 +785,7 @@ func lintPromptOnCodergenNodes(g *model.Graph) []Diagnostic {
 
 // lintStatusContractInPrompt checks that shape=box nodes reference
 // $KILROY_STAGE_STATUS_PATH in their prompt text.
-// NOTE: This rule only checks shape=box nodes. Future codergen shapes
+// NOTE: This rule only checks shape=box nodes. Future agent shapes
 // that write status.json should be added here.
 func lintStatusContractInPrompt(g *model.Graph) []Diagnostic {
 	var diags []Diagnostic
@@ -808,7 +808,7 @@ func lintStatusContractInPrompt(g *model.Graph) []Diagnostic {
 		diags = append(diags, Diagnostic{
 			Rule:     "status_contract_in_prompt",
 			Severity: SeverityWarning,
-			Message:  "codergen node prompt does not reference KILROY_STAGE_STATUS_PATH or KILROY_STAGE_STATUS_FALLBACK_PATH; node cannot write status.json and custom outcome routing will be lost",
+			Message:  "agent node prompt does not reference KILROY_STAGE_STATUS_PATH or KILROY_STAGE_STATUS_FALLBACK_PATH; node cannot write status.json and custom outcome routing will be lost",
 			NodeID:   id,
 			Fix:      "add instructions to write $KILROY_STAGE_STATUS_PATH with the appropriate outcome",
 		})
@@ -828,7 +828,7 @@ func lintPromptOnConditionalNodes(g *model.Graph) []Diagnostic {
 		// Diamond nodes use the ConditionalHandler, which is a pure
 		// pass-through that never executes prompts.  A prompt attribute
 		// on a diamond is almost certainly a mistake — the author likely
-		// intended shape=box (codergen) so the prompt actually runs.
+		// intended shape=box (agent) so the prompt actually runs.
 		if strings.TrimSpace(n.Prompt()) != "" {
 			diags = append(diags, Diagnostic{
 				Rule:     "prompt_on_conditional_node",
@@ -855,7 +855,7 @@ func lintLLMProviderPresent(g *model.Graph) []Diagnostic {
 			diags = append(diags, Diagnostic{
 				Rule:     "llm_provider_required",
 				Severity: SeverityError,
-				Message:  "codergen node missing llm_provider (Kilroy forbids provider auto-detection)",
+				Message:  "agent node missing llm_provider (Kilroy forbids provider auto-detection)",
 				NodeID:   id,
 				Fix:      "add llm_provider in a model_stylesheet (e.g. * [llm_provider=anthropic])",
 			})
@@ -1655,7 +1655,7 @@ func lintCustomOutcomeCoverage(g *model.Graph) []Diagnostic {
 	return diags
 }
 
-// lintStatusFallbackInPrompt warns when a codergen (shape=box) node's prompt
+// lintStatusFallbackInPrompt warns when a agent (shape=box) node's prompt
 // references the primary status path ($KILROY_STAGE_STATUS_PATH) but omits the
 // fallback path ($KILROY_STAGE_STATUS_FALLBACK_PATH). Without a fallback, a
 // failed primary write leaves the engine with no recovery signal.
@@ -1680,7 +1680,7 @@ func lintStatusFallbackInPrompt(g *model.Graph) []Diagnostic {
 			diags = append(diags, Diagnostic{
 				Rule:     "status_fallback_in_prompt",
 				Severity: SeverityWarning,
-				Message:  "codergen node prompt references $KILROY_STAGE_STATUS_PATH but omits $KILROY_STAGE_STATUS_FALLBACK_PATH; if the primary write fails the engine has no recovery signal",
+				Message:  "agent node prompt references $KILROY_STAGE_STATUS_PATH but omits $KILROY_STAGE_STATUS_FALLBACK_PATH; if the primary write fails the engine has no recovery signal",
 				NodeID:   id,
 				Fix:      "add $KILROY_STAGE_STATUS_FALLBACK_PATH alongside $KILROY_STAGE_STATUS_PATH in the node prompt",
 			})

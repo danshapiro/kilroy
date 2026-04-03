@@ -60,7 +60,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.Registry.Register("setctx", &setContextHandler{})
 	eng.RunBranch = "attractor/run/" + opts.RunID

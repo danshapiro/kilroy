@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func TestRunWithConfig_HeartbeatEmitsDuringCodergen(t *testing.T) {
+func TestRunWithConfig_HeartbeatEmitsDuringAgent(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
 
@@ -103,19 +103,19 @@ digraph G {
 	t.Logf("found %d heartbeat events", heartbeats)
 }
 
-func TestCodergenHeartbeatInterval_StallTimeoutScaling(t *testing.T) {
+func TestAgentHeartbeatInterval_StallTimeoutScaling(t *testing.T) {
 	t.Setenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL", "")
-	if interval := codergenHeartbeatIntervalWithStallTimeout(900 * time.Millisecond); interval != 300*time.Millisecond {
+	if interval := agentHeartbeatIntervalWithStallTimeout(900 * time.Millisecond); interval != 300*time.Millisecond {
 		t.Fatalf("unexpected interval scaling: got %v want 300ms", interval)
 	}
-	if interval := codergenHeartbeatIntervalWithStallTimeout(100 * time.Millisecond); interval != codergenHeartbeatMinInterval {
-		t.Fatalf("expected min clamp: got %v want %v", interval, codergenHeartbeatMinInterval)
+	if interval := agentHeartbeatIntervalWithStallTimeout(100 * time.Millisecond); interval != agentHeartbeatMinInterval {
+		t.Fatalf("expected min clamp: got %v want %v", interval, agentHeartbeatMinInterval)
 	}
-	if interval := codergenHeartbeatIntervalWithStallTimeout(30 * time.Minute); interval != codergenHeartbeatDefaultInterval {
-		t.Fatalf("expected upper clamp: got %v want %v", interval, codergenHeartbeatDefaultInterval)
+	if interval := agentHeartbeatIntervalWithStallTimeout(30 * time.Minute); interval != agentHeartbeatDefaultInterval {
+		t.Fatalf("expected upper clamp: got %v want %v", interval, agentHeartbeatDefaultInterval)
 	}
 	t.Setenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL", "37ms")
-	if interval := codergenHeartbeatIntervalWithStallTimeout(900 * time.Millisecond); interval != 37*time.Millisecond {
+	if interval := agentHeartbeatIntervalWithStallTimeout(900 * time.Millisecond); interval != 37*time.Millisecond {
 		t.Fatalf("expected env override: got %v want 37ms", interval)
 	}
 }
@@ -441,7 +441,7 @@ digraph G {
 }
 
 // TestRunWithConfig_CLIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine verifies
-// that the stall watchdog still fires when the CLI codergen process is truly
+// that the stall watchdog still fires when the CLI agent process is truly
 // stalled (no stdout/stderr output) even though the heartbeat goroutine is running.
 // The conditional heartbeat should NOT emit progress when file sizes are static.
 func TestRunWithConfig_CLIBackend_StallWatchdogFiresDespiteHeartbeatGoroutine(t *testing.T) {

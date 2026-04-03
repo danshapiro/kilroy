@@ -384,7 +384,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &QueueInterviewer{Answers: []Answer{{Value: "F"}}},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.RunBranch = fmt.Sprintf("%s/%s", opts.RunBranchPrefix, opts.RunID)
 
@@ -523,7 +523,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.Registry.Register("setctx", &setContextHandler{})
 	eng.RunBranch = "attractor/run/" + opts.RunID
@@ -753,7 +753,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.Registry.Register("parity_custom", &parityCustomHandler{})
 	eng.RunBranch = "attractor/run/" + opts.RunID
@@ -833,7 +833,7 @@ digraph G {
 func TestIntegrationSmokeTest_Section11_13(t *testing.T) {
 	repo := parityInitRepo(t)
 
-	// The DOT graph from spec §11.13 (adapted for SimulatedCodergenBackend).
+	// The DOT graph from spec §11.13 (adapted for SimulatedAgentBackend).
 	dotSrc := []byte(`
 digraph test_pipeline {
     graph [goal="Create a hello world Python script"]

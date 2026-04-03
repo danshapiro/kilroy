@@ -129,7 +129,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.Registry.Register("retry_gate_test", handler)
 	node := g.Nodes["r"]
@@ -239,7 +239,7 @@ digraph G {
 				Context:         runtime.NewContext(),
 				Registry:        NewDefaultRegistry(),
 				Interviewer:     &AutoApproveInterviewer{},
-				CodergenBackend: &apiErrorBackend{err: tc.err},
+				AgentBackend: &apiErrorBackend{err: tc.err},
 			}
 			node := g.Nodes["a"]
 			if node == nil {

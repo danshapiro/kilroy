@@ -26,7 +26,7 @@ import (
 	"github.com/danshapiro/kilroy/internal/modelmeta"
 )
 
-type CodergenRouter struct {
+type AgentRouter struct {
 	cfg     *RunConfigFile
 	catalog *modeldb.Catalog
 
@@ -38,12 +38,12 @@ type CodergenRouter struct {
 	apiErr    error
 }
 
-func NewCodergenRouter(cfg *RunConfigFile, catalog *modeldb.Catalog) *CodergenRouter {
-	return NewCodergenRouterWithRuntimes(cfg, catalog, nil)
+func NewAgentRouter(cfg *RunConfigFile, catalog *modeldb.Catalog) *AgentRouter {
+	return NewAgentRouterWithRuntimes(cfg, catalog, nil)
 }
 
-func NewCodergenRouterWithRuntimes(cfg *RunConfigFile, catalog *modeldb.Catalog, runtimes map[string]ProviderRuntime) *CodergenRouter {
-	return &CodergenRouter{
+func NewAgentRouterWithRuntimes(cfg *RunConfigFile, catalog *modeldb.Catalog, runtimes map[string]ProviderRuntime) *AgentRouter {
+	return &AgentRouter{
 		cfg:              cfg,
 		catalog:          catalog,
 		providerRuntimes: cloneProviderRuntimeMap(runtimes),
@@ -66,7 +66,7 @@ func cloneProviderRuntimeMap(in map[string]ProviderRuntime) map[string]ProviderR
 	return out
 }
 
-func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.Node, prompt string) (string, *runtime.Outcome, error) {
+func (r *AgentRouter) Run(ctx context.Context, exec *Execution, node *model.Node, prompt string) (string, *runtime.Outcome, error) {
 	_ = r.catalog // used later for context window + pricing metadata
 
 	prov := normalizeProviderKey(node.Attr("llm_provider", ""))
@@ -127,7 +127,7 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 	}
 }
 
-func (r *CodergenRouter) backendForProvider(provider string) BackendKind {
+func (r *AgentRouter) backendForProvider(provider string) BackendKind {
 	key := normalizeProviderKey(provider)
 	if key == "" {
 		return ""
@@ -147,7 +147,7 @@ func (r *CodergenRouter) backendForProvider(provider string) BackendKind {
 	return ""
 }
 
-func (r *CodergenRouter) ensureAPIClient() (*llm.Client, error) {
+func (r *AgentRouter) ensureAPIClient() (*llm.Client, error) {
 	r.apiOnce.Do(func() {
 		if len(r.providerRuntimes) > 0 && r.apiClientFactory != nil {
 			client, err := r.apiClientFactory(r.providerRuntimes)
@@ -165,13 +165,17 @@ func (r *CodergenRouter) ensureAPIClient() (*llm.Client, error) {
 	return r.apiClient, r.apiErr
 }
 
-func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *model.Node, provider string, modelID string, prompt string) (string, *runtime.Outcome, error) {
+func (r *AgentRouter) runAPI(ctx context.Context, execCtx *Execution, node *model.Node, provider string, modelID string, prompt string) (string, *runtime.Outcome, error) {
 	client, err := r.ensureAPIClient()
 	if err != nil {
 		return "", nil, err
 	}
 	contract := BuildStageStatusContract(execCtx.WorktreeDir)
-	mode := strings.ToLower(strings.TrimSpace(node.Attr("codergen_mode", "")))
+	mode := strings.ToLower(strings.TrimSpace(node.Attr("agent_mode", "")))
+	if mode == "" {
+		// Fall back to agent_mode for backward compatibility.
+		mode = strings.ToLower(strings.TrimSpace(node.Attr("agent_mode", "")))
+	}
 	if mode == "" {
 		mode = "agent_loop" // metaspec default for API backend
 	}
@@ -449,7 +453,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			apiStart := time.Now()
 			go func() {
 				defer close(heartbeatDone)
-				interval := codergenHeartbeatIntervalForExecution(execCtx)
+				interval := agentHeartbeatIntervalForExecution(execCtx)
 				if interval <= 0 {
 					return
 				}
@@ -516,7 +520,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		})
 		return text, nil, nil
 	default:
-		return "", nil, fmt.Errorf("invalid codergen_mode: %q (want one_shot|agent_loop)", mode)
+		return "", nil, fmt.Errorf("invalid agent_mode: %q (want one_shot|agent_loop)", mode)
 	}
 }
 
@@ -555,7 +559,7 @@ type providerModel struct {
 	Model    string
 }
 
-func (r *CodergenRouter) withFailoverText(
+func (r *AgentRouter) withFailoverText(
 	ctx context.Context,
 	execCtx *Execution,
 	node *model.Node,
@@ -1078,7 +1082,7 @@ func profileForProvider(provider string, modelID string) (agent.ProviderProfile,
 	}
 }
 
-func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *model.Node, provider string, modelID string, prompt string) (string, *runtime.Outcome, error) {
+func (r *AgentRouter) runCLI(ctx context.Context, execCtx *Execution, node *model.Node, provider string, modelID string, prompt string) (string, *runtime.Outcome, error) {
 	stageDir := filepath.Join(execCtx.LogsRoot, node.ID)
 	contract := BuildStageStatusContract(execCtx.WorktreeDir)
 	stageEnv := map[string]string{}
@@ -1315,12 +1319,12 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		}
 
 		// Emit periodic heartbeat events so operators monitoring detached runs
-		// have visibility into long-running codergen nodes.
+		// have visibility into long-running agent nodes.
 		heartbeatStop := make(chan struct{})
 		heartbeatDone := make(chan struct{})
 		go func() {
 			defer close(heartbeatDone)
-			interval := codergenHeartbeatIntervalForExecution(execCtx)
+			interval := agentHeartbeatIntervalForExecution(execCtx)
 			if interval <= 0 {
 				return
 			}
@@ -1805,7 +1809,7 @@ func envHasKey(env []string, key string) bool {
 func conflictingProviderEnvKeys(providerKey string) []string {
 	// CLAUDECODE prevents the Claude CLI from launching (nested session
 	// protection). Strip it for all providers so preflight probes and
-	// codergen runs succeed when Kilroy is invoked from inside Claude Code.
+	// agent runs succeed when Kilroy is invoked from inside Claude Code.
 	common := []string{"CLAUDECODE"}
 	switch normalizeProviderKey(providerKey) {
 	case "anthropic":
@@ -1841,31 +1845,31 @@ func scrubConflictingProviderEnvKeys(base []string, providerKey string) []string
 }
 
 const (
-	codergenHeartbeatDefaultInterval = 60 * time.Second
-	codergenHeartbeatMinInterval     = 50 * time.Millisecond
+	agentHeartbeatDefaultInterval = 60 * time.Second
+	agentHeartbeatMinInterval     = 50 * time.Millisecond
 )
 
-func codergenHeartbeatIntervalForExecution(exec *Execution) time.Duration {
+func agentHeartbeatIntervalForExecution(exec *Execution) time.Duration {
 	stallTimeout := time.Duration(0)
 	if exec != nil && exec.Engine != nil {
 		stallTimeout = exec.Engine.Options.StallTimeout
 	}
-	return codergenHeartbeatIntervalWithStallTimeout(stallTimeout)
+	return agentHeartbeatIntervalWithStallTimeout(stallTimeout)
 }
 
-func codergenHeartbeatIntervalWithStallTimeout(stallTimeout time.Duration) time.Duration {
-	if override := parseCodergenHeartbeatEnv(); override > 0 {
+func agentHeartbeatIntervalWithStallTimeout(stallTimeout time.Duration) time.Duration {
+	if override := parseAgentHeartbeatEnv(); override > 0 {
 		return override
 	}
 	if stallTimeout <= 0 {
-		return codergenHeartbeatDefaultInterval
+		return agentHeartbeatDefaultInterval
 	}
 	interval := stallTimeout / 3
-	if interval < codergenHeartbeatMinInterval {
-		interval = codergenHeartbeatMinInterval
+	if interval < agentHeartbeatMinInterval {
+		interval = agentHeartbeatMinInterval
 	}
-	if interval > codergenHeartbeatDefaultInterval {
-		interval = codergenHeartbeatDefaultInterval
+	if interval > agentHeartbeatDefaultInterval {
+		interval = agentHeartbeatDefaultInterval
 	}
 	return interval
 }
@@ -1880,7 +1884,7 @@ func recordStageActivity(exec *Execution, at time.Time) {
 	exec.Engine.setLastProgressTime(at)
 }
 
-func parseCodergenHeartbeatEnv() time.Duration {
+func parseAgentHeartbeatEnv() time.Duration {
 	v := strings.TrimSpace(os.Getenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL"))
 	if v == "" {
 		return 0

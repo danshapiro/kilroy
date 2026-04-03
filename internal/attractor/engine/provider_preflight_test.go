@@ -1029,7 +1029,7 @@ func TestRunWithConfig_PreflightPromptProbe_APIOneShotShape_DoesNotUseTools(t *t
 digraph G {
   graph [goal="test"]
   start [shape=Mdiamond]
-  a [shape=box, llm_provider="openai", llm_model="gpt-5.4", codergen_mode="one_shot", prompt="x"]
+  a [shape=box, llm_provider="openai", llm_model="gpt-5.4", agent_mode="one_shot", prompt="x"]
   exit [shape=Msquare]
   start -> a -> exit
 }
@@ -1593,7 +1593,7 @@ func TestProviderPreflight_PromptProbe_IncludesFailoverTargets(t *testing.T) {
 	n.Attrs["shape"] = "box"
 	n.Attrs["llm_provider"] = "kimi"
 	n.Attrs["llm_model"] = "kimi-k2.5"
-	n.Attrs["codergen_mode"] = "agent_loop"
+	n.Attrs["agent_mode"] = "agent_loop"
 	n.Attrs["reasoning_effort"] = "high"
 	if err := g.AddNode(n); err != nil {
 		t.Fatalf("AddNode: %v", err)
@@ -1651,7 +1651,7 @@ func TestProviderPreflight_PromptProbe_FailoverModelSelectionMatchesRuntime(t *t
 	n.Attrs["shape"] = "box"
 	n.Attrs["llm_provider"] = "openai"
 	n.Attrs["llm_model"] = "gpt-5.4"
-	n.Attrs["codergen_mode"] = "one_shot"
+	n.Attrs["agent_mode"] = "one_shot"
 	if err := g.AddNode(n); err != nil {
 		t.Fatalf("AddNode: %v", err)
 	}

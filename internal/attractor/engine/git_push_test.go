@@ -127,7 +127,7 @@ digraph G {
 		Context:         runtime.NewContext(),
 		Registry:        NewDefaultRegistry(),
 		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		AgentBackend: backend,
 		RunConfig:       cfg,
 	}
 	eng.RunBranch = "attractor/run/test-push-restart"

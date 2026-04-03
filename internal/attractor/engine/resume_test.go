@@ -224,7 +224,7 @@ digraph G {
 	}
 }
 
-func TestNewResumeCodergenBackend_LoadsProviderRuntimes(t *testing.T) {
+func TestNewResumeAgentBackend_LoadsProviderRuntimes(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
 		"kimi": {
@@ -249,13 +249,13 @@ func TestNewResumeCodergenBackend_LoadsProviderRuntimes(t *testing.T) {
 		},
 	}
 
-	backend, err := newResumeCodergenBackend(cfg, nil)
+	backend, err := newResumeAgentBackend(cfg, nil)
 	if err != nil {
-		t.Fatalf("newResumeCodergenBackend: %v", err)
+		t.Fatalf("newResumeAgentBackend: %v", err)
 	}
-	router, ok := backend.(*CodergenRouter)
+	router, ok := backend.(*AgentRouter)
 	if !ok {
-		t.Fatalf("backend type: got %T want *CodergenRouter", backend)
+		t.Fatalf("backend type: got %T want *AgentRouter", backend)
 	}
 	if _, ok := router.providerRuntimes["kimi"]; !ok {
 		t.Fatalf("missing provider runtime for kimi")

@@ -67,7 +67,7 @@ type RunOptions struct {
 	StallTimeout       time.Duration
 	StallCheckInterval time.Duration
 
-	// Optional cap for LLM retries in codergen routing.
+	// Optional cap for LLM retries in agent routing.
 	// Pointer preserves explicit zero versus unset semantics from config.
 	MaxLLMRetries *int
 
@@ -159,8 +159,8 @@ type Engine struct {
 
 	Registry *HandlerRegistry
 
-	// Backend for codergen nodes (until provider routing is wired in).
-	CodergenBackend CodergenBackend
+	// Backend for agent nodes (until provider routing is wired in).
+	AgentBackend AgentBackend
 
 	Interviewer Interviewer
 
@@ -383,7 +383,7 @@ func Run(ctx context.Context, dotSource []byte, opts RunOptions) (*Result, error
 
 	eng := newBaseEngine(g, dotSource, opts)
 	eng.Registry = reg
-	eng.CodergenBackend = &SimulatedCodergenBackend{}
+	eng.AgentBackend = &SimulatedAgentBackend{}
 
 	return eng.run(ctx)
 }

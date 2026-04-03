@@ -24,7 +24,7 @@ func TestAttractorValidateBatch_AllClean(t *testing.T) {
 }
 
 // TestAttractorValidateBatch_StatusContractInPromptWarns verifies that a
-// codergen node with a prompt that does not reference KILROY_STAGE_STATUS_PATH
+// agent node with a prompt that does not reference KILROY_STAGE_STATUS_PATH
 // triggers the status_contract_in_prompt warning (exit code 2).
 func TestAttractorValidateBatch_StatusContractInPromptWarns(t *testing.T) {
 	bin := buildKilroyBinary(t)

@@ -11,7 +11,7 @@ import (
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
-func TestInputManifestContract_CodergenEnvAndPreambleInjected(t *testing.T) {
+func TestInputManifestContract_AgentEnvAndPreambleInjected(t *testing.T) {
 	repo := initTestRepo(t)
 	logsRoot := t.TempDir()
 	mustWriteInputFile(t, filepath.Join(repo, ".ai", "definition_of_done.md"), "line by line")
