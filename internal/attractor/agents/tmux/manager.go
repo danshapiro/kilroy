@@ -90,6 +90,15 @@ func (m *Manager) GetEnvironment(session, key string) (string, error) {
 	return out, nil
 }
 
+// SendKeys sends raw key sequences (Enter, Down, Escape, etc.) to a session.
+// Unlike SendInput, this does NOT use literal mode — key names are interpreted.
+func (m *Manager) SendKeys(session string, keys ...string) error {
+	args := []string{"send-keys", "-t", session}
+	args = append(args, keys...)
+	_, err := m.run(args...)
+	return err
+}
+
 // acquireInputLock serializes input delivery to a session.
 func (m *Manager) acquireInputLock(session string) {
 	ch, _ := m.locks.LoadOrStore(session, make(chan struct{}, 1))
