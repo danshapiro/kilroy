@@ -375,6 +375,8 @@ digraph G {
 		t.Fatalf("applyDefaults: %v", err)
 	}
 
+	reg := NewDefaultRegistry()
+	reg.Register("wait.human", &WaitHumanHandler{})
 	eng := &Engine{
 		Graph:        g,
 		Options:      opts,
@@ -382,7 +384,7 @@ digraph G {
 		LogsRoot:     opts.LogsRoot,
 		WorktreeDir:  opts.WorktreeDir,
 		Context:      runtime.NewContext(),
-		Registry:     NewDefaultRegistry(),
+		Registry:     reg,
 		Interviewer:  &QueueInterviewer{Answers: []Answer{{Value: "F"}}},
 		AgentBackend: &SimulatedAgentBackend{},
 	}

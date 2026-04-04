@@ -85,7 +85,8 @@ func NewCoreRegistry() *HandlerRegistry {
 // Retained for backward compatibility with tests and single-package usage.
 func NewDefaultRegistry() *HandlerRegistry {
 	reg := NewCoreRegistry()
-	reg.Register("wait.human", &WaitHumanHandler{})
+	// wait.human is registered by cmd/kilroy/ from workflows/ (Layer 2).
+	// Not included in core registry — human-in-the-loop is opt-in.
 	reg.Register("stack.manager_loop", &ManagerLoopHandler{})
 	reg.defaultHandler = &CodergenHandler{}
 	reg.Register("agent", reg.defaultHandler)
