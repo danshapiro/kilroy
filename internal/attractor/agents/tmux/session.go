@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -108,4 +109,18 @@ func (m *Manager) PanePID(name string) (int, error) {
 		return 0, err
 	}
 	return strconv.Atoi(pidStr)
+}
+
+// PaneExitStatus returns the exit code of a dead pane's process.
+// Returns -1 if the pane is still alive or the status can't be read.
+func (m *Manager) PaneExitStatus(name string) int {
+	s, err := m.displayMessage(name, "#{pane_dead_status}")
+	if err != nil {
+		return -1
+	}
+	code, err := strconv.Atoi(strings.TrimSpace(s))
+	if err != nil {
+		return -1
+	}
+	return code
 }

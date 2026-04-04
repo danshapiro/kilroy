@@ -141,8 +141,9 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 		}, timeout)
 	}
 
-	// Capture output.
+	// Capture output and exit status before destroying the session.
 	output, _ := h.Tmux.CaptureOutput(sessionName, 0)
+	exitCode := h.Tmux.PaneExitStatus(sessionName)
 	if strings.TrimSpace(output) != "" {
 		_ = os.WriteFile(filepath.Join(stageDir, "response.md"), []byte(output), 0o644)
 	}
@@ -157,6 +158,7 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 			"node_id":    node.ID,
 			"tool":       toolName,
 			"session":    sessionName,
+			"exit_code":  exitCode,
 			"output_len": len(output),
 			"wait_error": fmt.Sprint(waitErr),
 		})
@@ -169,6 +171,20 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 			Meta:          map[string]any{"failure_class": "transient_infra"},
 			ContextUpdates: map[string]any{
 				"failure_class": "transient_infra",
+				"last_stage":    node.ID,
+				"last_response": engine.Truncate(output, 200),
+			},
+		}, nil
+	}
+
+	// Check exit code for failure detection.
+	if exitCode > 0 {
+		return runtime.Outcome{
+			Status:        runtime.StatusFail,
+			FailureReason: fmt.Sprintf("agent exited with code %d", exitCode),
+			Meta:          map[string]any{"failure_class": "deterministic", "exit_code": exitCode},
+			ContextUpdates: map[string]any{
+				"failure_class": "deterministic",
 				"last_stage":    node.ID,
 				"last_response": engine.Truncate(output, 200),
 			},

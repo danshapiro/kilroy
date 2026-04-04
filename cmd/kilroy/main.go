@@ -113,12 +113,18 @@ func loadEnvFile(args []string) []string {
 // newLayeredRegistry composes the full handler registry from L0 (engine core),
 // L1 (agent capabilities), and L2 (workflow patterns). This is where the
 // layered architecture is wired together at startup.
-func newLayeredRegistry() *engine.HandlerRegistry {
+func newLayeredRegistry(useTmux bool) *engine.HandlerRegistry {
 	reg := engine.NewCoreRegistry()
 	// Layer 1: Agent capabilities.
-	agentHandler := &agents.AgentHandler{}
-	reg.Register("agent", agentHandler)
-	reg.SetDefault(agentHandler)
+	if useTmux {
+		agentHandler := agents.NewTmuxAgentHandler()
+		reg.Register("agent", agentHandler)
+		reg.SetDefault(agentHandler)
+	} else {
+		agentHandler := &agents.AgentHandler{}
+		reg.Register("agent", agentHandler)
+		reg.SetDefault(agentHandler)
+	}
 	// Layer 2: Workflow patterns.
 	reg.Register("wait.human", &workflows.HumanGateHandler{})
 	reg.Register("stack.manager_loop", &workflows.ManagerLoopHandler{})
@@ -206,6 +212,7 @@ func attractorRun(args []string) {
 	var inputPath string
 	var workspace string
 	var labelSpecs []string
+	var useTmux bool
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -279,6 +286,8 @@ func attractorRun(args []string) {
 				os.Exit(1)
 			}
 			labelSpecs = append(labelSpecs, args[i])
+		case "--tmux":
+			useTmux = true
 		default:
 			fmt.Fprintf(os.Stderr, "unknown arg: %s\n", args[i])
 			os.Exit(1)
@@ -429,7 +438,7 @@ func attractorRun(args []string) {
 			AllowTestShim: allowTestShim,
 			DisableCXDB:   noCXDB,
 			ForceModels:   forceModels,
-			Registry:      newLayeredRegistry(),
+			Registry:      newLayeredRegistry(useTmux),
 			OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 				if info == nil {
 					return
@@ -486,7 +495,7 @@ func attractorRun(args []string) {
 		AllowTestShim: allowTestShim,
 		DisableCXDB:   noCXDB,
 		ForceModels:   forceModels,
-		Registry:      newLayeredRegistry(),
+		Registry:      newLayeredRegistry(useTmux),
 		RunDB:         rdb,
 		Inputs:        inputs,
 		Workspace:     workspace,
