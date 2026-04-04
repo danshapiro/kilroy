@@ -24,10 +24,13 @@ func Codex() Template {
 			}
 			return env
 		},
-		PromptPrefix:    ">",
-		BusyIndicators:  []string{},
+		PromptPrefix:    "›",
+		BusyIndicators:  []string{"Working", "esc to interrupt"},
 		ProcessNames:    []string{"codex", "node"},
-		ExitsOnComplete: true,
-		StartupTimeout:  15 * time.Second,
+		ExitsOnComplete: false,
+		StartupTimeout:  30 * time.Second,
+		StartupDialogs: []StartupDialog{
+			{DetectPatterns: []string{"trust the contents"}, Keys: []string{"Enter"}},
+		},
 	}
 }

@@ -12,7 +12,7 @@ func OpenCode() Template {
 		Name:   "opencode",
 		Binary: "opencode",
 		BuildArgs: func(prompt, workDir string) []string {
-			return []string{prompt}
+			return []string{"run", prompt}
 		},
 		BuildEnv: func() map[string]string {
 			env := map[string]string{}
@@ -24,7 +24,7 @@ func OpenCode() Template {
 		PromptPrefix:    ">",
 		BusyIndicators:  []string{},
 		ProcessNames:    []string{"opencode"},
-		ExitsOnComplete: false,
+		ExitsOnComplete: true,
 		StartupTimeout:  15 * time.Second,
 	}
 }
