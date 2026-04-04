@@ -18,7 +18,6 @@ import (
 	"github.com/oklog/ulid/v2"
 
 	"github.com/danshapiro/kilroy/internal/attractor/browsergate"
-	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
@@ -519,18 +518,15 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 		}
 		// Copy git-ignored files from each branch worktree into the run
 		// worktree so the merging agent has access to .env / secrets /
-		// build artifacts produced by branch workers. Results are already
-		// sorted by BranchKey so the copy order is deterministic; if two
-		// branches produced the same ignored file, the alphabetically-last
-		// branch wins.
-		if exec != nil && exec.Engine != nil {
+		// build artifacts produced by branch workers.
+		if exec != nil && exec.Engine != nil && exec.Engine.GitOps != nil {
 			if raw, ok := exec.Context.Get("parallel.results"); ok && raw != nil {
 				if brResults, err := decodeParallelResults(raw); err == nil {
 					for _, br := range brResults {
 						if strings.TrimSpace(br.WorktreeDir) == "" {
 							continue
 						}
-						if cerr := gitutil.CopyIgnoredFiles(br.WorktreeDir, exec.WorktreeDir, ".ai/runs/"); cerr != nil {
+						if cerr := exec.Engine.GitOps.CopyIgnoredFiles(br.WorktreeDir, exec.WorktreeDir, ".ai/runs/"); cerr != nil {
 							exec.Engine.appendProgress(map[string]any{
 								"event":      "manual_box_fan_in_ignored_files_warning",
 								"node_id":    node.ID,

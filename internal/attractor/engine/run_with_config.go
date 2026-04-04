@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/cxdb"
@@ -233,6 +232,7 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 	opts.Labels = overrides.Labels
 	opts.Inputs = overrides.Inputs
 	opts.GraphDir = overrides.GraphDir
+	opts.GitOps = overrides.GitOps
 	if overrides.Workspace != "" {
 		opts.Workspace = overrides.Workspace
 		if opts.RepoPath == "" {
@@ -257,26 +257,19 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 
 	// Repo validation: cheap local checks that must pass before any expensive
 	// preflight work (provider probes, model catalog fetch, CXDB startup).
-	if opts.RepoPath == "" {
-		return nil, fmt.Errorf("repo.path is required")
-	}
-	if !gitutil.IsRepo(opts.RepoPath) {
-		return nil, fmt.Errorf("not a git repo: %s", opts.RepoPath)
-	}
-	if opts.RequireClean {
-		clean, err := gitutil.IsClean(opts.RepoPath)
-		if err != nil {
+	if opts.GitOps != nil {
+		if opts.RepoPath == "" {
+			return nil, fmt.Errorf("repo.path is required")
+		}
+		if err := opts.GitOps.ValidateRepo(opts.RepoPath, opts.RequireClean); err != nil {
 			return nil, err
 		}
-		if !clean {
-			return nil, fmt.Errorf("repo has uncommitted changes (require_clean=true)")
+		// Verify the repo has at least one commit (HeadSHA fails on empty repos).
+		// eng.run() needs this later for branch creation; catching it here avoids
+		// wasting minutes on provider probes and CXDB startup first.
+		if _, err := opts.GitOps.HeadSHA(opts.RepoPath); err != nil {
+			return nil, fmt.Errorf("repo has no commits or HEAD is unresolvable: %w", err)
 		}
-	}
-	// Verify the repo has at least one commit (HeadSHA fails on empty repos).
-	// eng.run() needs this later for branch creation; catching it here avoids
-	// wasting minutes on provider probes and CXDB startup first.
-	if _, err := gitutil.HeadSHA(opts.RepoPath); err != nil {
-		return nil, fmt.Errorf("repo has no commits or HEAD is unresolvable: %w", err)
 	}
 	// Ensure the logs directory is writable before expensive preflight work.
 	// Several preflight steps write into LogsRoot, but an outright unwritable

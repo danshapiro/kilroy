@@ -344,8 +344,12 @@ func attractorRun(args []string) {
 		}
 	}
 
+	// Git integration: always enable for backward compatibility.
+	// No-git mode available when explicitly invoked without a git repo.
+	gitOps := engine.GitOps(&workflows.GitHook{})
+
 	if detach {
-		cfg, err := loadOrBuildConfig(configPath)
+		cfg, err := loadOrBuildConfig(configPath, gitOps)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -419,7 +423,7 @@ func attractorRun(args []string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	cfg, err := loadOrBuildConfig(configPath)
+	cfg, err := loadOrBuildConfig(configPath, gitOps)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -439,6 +443,7 @@ func attractorRun(args []string) {
 			DisableCXDB:   noCXDB,
 			ForceModels:   forceModels,
 			Registry:      newLayeredRegistry(useTmux),
+			GitOps:        gitOps,
 			OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 				if info == nil {
 					return
@@ -501,6 +506,7 @@ func attractorRun(args []string) {
 		Workspace:     workspace,
 		GraphDir:      graphDir,
 		Labels:        labels,
+		GitOps:        gitOps,
 		OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 			if info == nil {
 				return
@@ -587,7 +593,7 @@ func isSupportedForceModelProvider(provider string) bool {
 // loadOrBuildConfig loads a config from file, or builds a zero-config default
 // when configPath is empty. In both cases, providers are auto-detected from
 // the environment to fill gaps. Config-file values always take precedence.
-func loadOrBuildConfig(configPath string) (*engine.RunConfigFile, error) {
+func loadOrBuildConfig(configPath string, gitOps engine.GitOps) (*engine.RunConfigFile, error) {
 	var cfg *engine.RunConfigFile
 	if configPath != "" {
 		loaded, err := engine.LoadRunConfigFile(configPath)
@@ -596,7 +602,7 @@ func loadOrBuildConfig(configPath string) (*engine.RunConfigFile, error) {
 		}
 		cfg = loaded
 	} else {
-		built, err := engine.DefaultRunConfig()
+		built, err := engine.DefaultRunConfig(gitOps)
 		if err != nil {
 			return nil, err
 		}

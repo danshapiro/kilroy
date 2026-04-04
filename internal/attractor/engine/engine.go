@@ -16,7 +16,6 @@ import (
 
 	"github.com/danshapiro/kilroy/internal/attractor/cond"
 	"github.com/danshapiro/kilroy/internal/attractor/dot"
-	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
@@ -443,27 +442,21 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 		}
 	}()
 
-	if e.Options.RepoPath == "" {
-		return nil, fmt.Errorf("repo.path is required")
-	}
-	if !gitutil.IsRepo(e.Options.RepoPath) {
-		return nil, fmt.Errorf("not a git repo: %s", e.Options.RepoPath)
-	}
-	if e.Options.RequireClean {
-		clean, err := gitutil.IsClean(e.Options.RepoPath)
+	if e.GitOps != nil {
+		// Git mode: validate repo, create branch and worktree.
+		if e.Options.RepoPath == "" {
+			return nil, fmt.Errorf("repo.path is required")
+		}
+		if err := e.GitOps.ValidateRepo(e.Options.RepoPath, e.Options.RequireClean); err != nil {
+			return nil, err
+		}
+		baseSHA, err := e.GitOps.HeadSHA(e.Options.RepoPath)
 		if err != nil {
 			return nil, err
 		}
-		if !clean {
-			return nil, fmt.Errorf("repo has uncommitted changes (require_clean=true)")
-		}
+		e.baseSHA = baseSHA
 	}
 
-	baseSHA, err := gitutil.HeadSHA(e.Options.RepoPath)
-	if err != nil {
-		return nil, err
-	}
-	e.baseSHA = baseSHA
 	if err := os.MkdirAll(e.LogsRoot, 0o755); err != nil {
 		return nil, err
 	}
@@ -478,29 +471,28 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 		_ = writeJSON(filepath.Join(e.LogsRoot, "run_config.json"), e.RunConfig)
 	}
 
-	// Create run branch at BASE_SHA and materialize a worktree for execution.
-	if err := gitutil.CreateBranchAt(e.Options.RepoPath, e.RunBranch, baseSHA); err != nil {
-		return nil, err
-	}
-	// If worktree exists (e.g., re-run), remove and recreate.
-	_ = gitutil.RemoveWorktree(e.Options.RepoPath, e.WorktreeDir)
-	if err := gitutil.AddWorktree(e.Options.RepoPath, e.WorktreeDir, e.RunBranch); err != nil {
-		return nil, err
-	}
-	// Copy gitignored files (e.g. .env, secrets, local configs) from the
-	// source repo into the run worktree. These are not committed to git so
-	// they don't survive worktree creation; agents that rely on them (e.g. for
-	// API keys or environment config) need them present without us committing
-	// sensitive material.
-	if err := gitutil.CopyIgnoredFiles(e.Options.RepoPath, e.WorktreeDir); err != nil {
-		e.Warn(fmt.Sprintf("copy ignored files to run worktree: %v", err))
+	if e.GitOps != nil {
+		// Create run branch at BASE_SHA and materialize a worktree for execution.
+		if err := e.GitOps.SetupRunWorkspace(e.Options.RepoPath, e.WorktreeDir, e.RunBranch, e.baseSHA); err != nil {
+			return nil, err
+		}
+		// Copy gitignored files (e.g. .env, secrets, local configs) from the
+		// source repo into the run worktree.
+		if err := e.GitOps.CopyIgnoredFiles(e.Options.RepoPath, e.WorktreeDir); err != nil {
+			e.Warn(fmt.Sprintf("copy ignored files to run worktree: %v", err))
+		}
+	} else {
+		// No-git mode: ensure workspace directory exists.
+		if err := os.MkdirAll(e.WorktreeDir, 0o755); err != nil {
+			return nil, err
+		}
 	}
 	if err := e.materializeRunStartupInputs(ctx); err != nil {
 		return nil, err
 	}
 
 	// Run metadata.
-	if err := e.writeManifest(baseSHA); err != nil {
+	if err := e.writeManifest(e.baseSHA); err != nil {
 		return nil, err
 	}
 	// Persist the DOT input for replay/resume.
@@ -509,7 +501,7 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 			return nil, err
 		}
 	}
-	if err := e.cxdbRunStarted(runCtx, baseSHA); err != nil {
+	if err := e.cxdbRunStarted(runCtx, e.baseSHA); err != nil {
 		return nil, err
 	}
 	e.rundbRecordRunStart()
@@ -519,7 +511,7 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 		e.Context.Set("graph."+k, v)
 	}
 	e.Context.Set("graph.goal", e.Graph.Attrs["goal"])
-	e.Context.Set("base_sha", baseSHA)
+	e.Context.Set("base_sha", e.baseSHA)
 
 	// Inject structured inputs into context and expand $input.* in prompts.
 	if len(e.Options.Inputs) > 0 {
@@ -529,7 +521,7 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 
 	// Expand $base_sha in prompts now that the base SHA is known.
 	// ($goal was already expanded at parse/prepare time.)
-	expandBaseSHA(e.Graph, baseSHA)
+	expandBaseSHA(e.Graph, e.baseSHA)
 
 	// Run pre-pipeline setup commands (e.g., npm install) in the worktree.
 	if err := e.executeSetupCommands(ctx); err != nil {
@@ -1615,19 +1607,15 @@ func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []stri
 			sha = strings.TrimSpace(fmt.Sprint(v))
 		}
 	}
-	if sha == "" {
+	if sha == "" && e.GitOps != nil {
 		var err error
-		sha, err = gitutil.CommitAllowEmptyWithExcludes(e.WorktreeDir, msg, e.checkpointExcludeGlobs())
+		sha, err = e.GitOps.Checkpoint(e.WorktreeDir, msg, e.checkpointExcludeGlobs())
 		if err != nil {
 			return "", err
 		}
-	} else {
-		head, err := gitutil.HeadSHA(e.WorktreeDir)
-		if err != nil {
+	} else if sha != "" && e.GitOps != nil {
+		if err := e.GitOps.VerifyHeadSHA(e.WorktreeDir, sha); err != nil {
 			return "", err
-		}
-		if strings.TrimSpace(head) != sha {
-			return "", fmt.Errorf("handler-provided checkpoint sha does not match HEAD (head=%s meta=%s)", head, sha)
 		}
 	}
 	cp := runtime.NewCheckpoint()
@@ -1731,9 +1719,9 @@ func (e *Engine) persistFatalOutcome(ctx context.Context, runErr error) {
 		nodeID = strings.TrimSpace(e.Context.GetString("current_node", ""))
 	}
 	sha := strings.TrimSpace(e.lastCheckpointSHA)
-	if sha == "" {
+	if sha == "" && e.GitOps != nil {
 		if wt := strings.TrimSpace(e.WorktreeDir); wt != "" {
-			if got, err := gitutil.HeadSHA(wt); err == nil {
+			if got, err := e.GitOps.HeadSHA(wt); err == nil {
 				sha = strings.TrimSpace(got)
 			}
 		}
@@ -1841,7 +1829,10 @@ func (e *Engine) gitPushIfConfigured() {
 		"remote": remote,
 		"branch": branch,
 	})
-	if err := gitutil.PushBranch(repoDir, remote, branch); err != nil {
+	if e.GitOps == nil {
+		return
+	}
+	if err := e.GitOps.PushBranch(repoDir, remote, branch); err != nil {
 		e.Warn(fmt.Sprintf("git push %s %s: %v", remote, branch, err))
 		e.appendProgress(map[string]any{
 			"event":  "git_push_failed",

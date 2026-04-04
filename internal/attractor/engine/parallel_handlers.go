@@ -12,7 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
@@ -201,11 +200,15 @@ func dispatchParallelBranches(
 		sourceNode = &model.Node{ID: sourceNodeID, Attrs: map[string]string{}}
 	}
 
-	// Kilroy git model: create the checkpoint commit FIRST so branch work is a descendant.
+	// Create the checkpoint commit FIRST so branch work is a descendant.
 	msg := fmt.Sprintf("attractor(%s): %s (%s)", exec.Engine.Options.RunID, sourceNodeID, runtime.StatusSuccess)
-	baseSHA, err := gitutil.CommitAllowEmpty(exec.WorktreeDir, msg)
-	if err != nil {
-		return nil, "", err
+	var baseSHA string
+	if exec.Engine.GitOps != nil {
+		var err error
+		baseSHA, err = exec.Engine.GitOps.CheckpointSimple(exec.WorktreeDir, msg)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 
 	// Increment the per-node dispatch count so each pass through this fan-out
@@ -369,47 +372,50 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 		})
 	}
 
-	// Prepare branch git worktree rooted at the parallel node checkpoint commit.
+	// Prepare branch workspace rooted at the parallel node checkpoint commit.
 	emitBranchProgress("branch_setup_start", nil)
 	_ = os.MkdirAll(branchRoot, 0o755)
-	if gitMu != nil {
-		gitMu.Lock()
-	}
-	emitBranchProgress("branch_setup_locked", nil)
-	_ = gitutil.RemoveWorktree(exec.Engine.Options.RepoPath, worktreeDir)
-	if err := gitutil.CreateBranchAt(exec.Engine.Options.RepoPath, branchName, baseSHA); err != nil {
+	if exec.Engine.GitOps != nil {
+		if gitMu != nil {
+			gitMu.Lock()
+		}
+		emitBranchProgress("branch_setup_locked", nil)
+		if err := exec.Engine.GitOps.SetupBranchWorkspace(exec.Engine.Options.RepoPath, worktreeDir, branchName, baseSHA); err != nil {
+			if gitMu != nil {
+				gitMu.Unlock()
+			}
+			return parallelBranchResult{
+				BranchKey:   key,
+				BranchName:  branchName,
+				StartNodeID: edge.To,
+				StopNodeID:  joinID,
+				LogsRoot:    branchRoot,
+				WorktreeDir: worktreeDir,
+				Error:       err.Error(),
+				Outcome:     runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()},
+			}
+		}
 		if gitMu != nil {
 			gitMu.Unlock()
 		}
-		return parallelBranchResult{
-			BranchKey:   key,
-			BranchName:  branchName,
-			StartNodeID: edge.To,
-			StopNodeID:  joinID,
-			LogsRoot:    branchRoot,
-			WorktreeDir: worktreeDir,
-			Error:       err.Error(),
-			Outcome:     runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()},
+	} else {
+		// No-git mode: create an isolated temp directory for the branch.
+		if err := os.MkdirAll(worktreeDir, 0o755); err != nil {
+			return parallelBranchResult{
+				BranchKey:   key,
+				BranchName:  branchName,
+				StartNodeID: edge.To,
+				StopNodeID:  joinID,
+				LogsRoot:    branchRoot,
+				WorktreeDir: worktreeDir,
+				Error:       err.Error(),
+				Outcome:     runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()},
+			}
 		}
-	}
-	if err := gitutil.AddWorktree(exec.Engine.Options.RepoPath, worktreeDir, branchName); err != nil {
-		if gitMu != nil {
-			gitMu.Unlock()
+		// Copy parent workspace files into the branch directory.
+		if err := copyDirContents(exec.WorktreeDir, worktreeDir); err != nil {
+			emitBranchProgress("branch_copy_warning", map[string]any{"warning": err.Error()})
 		}
-		return parallelBranchResult{
-			BranchKey:   key,
-			BranchName:  branchName,
-			StartNodeID: edge.To,
-			StopNodeID:  joinID,
-			LogsRoot:    branchRoot,
-			WorktreeDir: worktreeDir,
-			Error:       err.Error(),
-			Outcome:     runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()},
-		}
-	}
-	_ = gitutil.ResetHard(worktreeDir, baseSHA)
-	if gitMu != nil {
-		gitMu.Unlock()
 	}
 	emitBranchProgress("branch_setup_ready", nil)
 
@@ -478,16 +484,13 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 			Outcome:     runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()},
 		}
 	}
-	// Input materialization copies files from the parent worktree into the branch
-	// worktree, which may overwrite the .git file with the parent's slot reference.
-	// Repair the .git file so git operations in this branch use the correct slot.
-	_ = gitutil.RepairWorktree(exec.Engine.Options.RepoPath, worktreeDir)
-	// Copy gitignored files (e.g. .env, secrets, local configs) from the parent
-	// worktree into the branch worktree. These are not committed to git and
-	// therefore not present after worktree creation; agents need them without us
-	// ever committing sensitive material.
-	if err := gitutil.CopyIgnoredFiles(exec.WorktreeDir, worktreeDir); err != nil {
-		emitBranchProgress("branch_ignored_files_warning", map[string]any{"warning": err.Error()})
+	if exec.Engine.GitOps != nil {
+		// Input materialization may overwrite the .git file — repair it.
+		_ = exec.Engine.GitOps.RepairWorktree(exec.Engine.Options.RepoPath, worktreeDir)
+		// Copy gitignored files (e.g. .env, secrets) from the parent worktree.
+		if err := exec.Engine.GitOps.CopyIgnoredFiles(exec.WorktreeDir, worktreeDir); err != nil {
+			emitBranchProgress("branch_ignored_files_warning", map[string]any{"warning": err.Error()})
+		}
 	}
 	if branchEng.CXDB != nil {
 		if _, err := os.Stat(inputRunManifestPath(branchRoot)); err == nil {
@@ -582,24 +585,30 @@ func (h *FanInHandler) Execute(ctx context.Context, exec *Execution, node *model
 		}, nil
 	}
 
-	// Fast-forward the main run branch to the winner head.
-	if strings.TrimSpace(winner.HeadSHA) != "" {
-		if err := gitutil.FastForwardFFOnly(exec.WorktreeDir, winner.HeadSHA); err != nil {
-			return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+	// Merge the winner branch into the main run workspace.
+	if exec.Engine.GitOps != nil {
+		if strings.TrimSpace(winner.HeadSHA) != "" {
+			if err := exec.Engine.GitOps.MergeBranch(exec.WorktreeDir, winner.HeadSHA); err != nil {
+				return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
+			}
 		}
-	}
-
-	// Propagate git-ignored files from the winner branch worktree into the
-	// main run worktree. FastForwardFFOnly only moves the git HEAD; it does
-	// not touch untracked/ignored files. Without this, any .env / secrets /
-	// build artifacts the winning branch worker wrote are silently dropped.
-	// .ai/runs/ is excluded here: it is managed by the lineage system below
-	// (mergeRunScopedFanInState) which merges it deterministically from all
-	// branches according to promote_run_scoped patterns.
-	if strings.TrimSpace(winner.WorktreeDir) != "" {
-		if err := gitutil.CopyIgnoredFiles(winner.WorktreeDir, exec.WorktreeDir, ".ai/runs/"); err != nil {
+		// Copy git-ignored files from the winner branch worktree.
+		// .ai/runs/ is excluded — managed by the lineage system below.
+		if strings.TrimSpace(winner.WorktreeDir) != "" {
+			if err := exec.Engine.GitOps.CopyIgnoredFiles(winner.WorktreeDir, exec.WorktreeDir, ".ai/runs/"); err != nil {
+				exec.Engine.appendProgress(map[string]any{
+					"event":      "fan_in_ignored_files_warning",
+					"node_id":    node.ID,
+					"winner_key": winner.BranchKey,
+					"warning":    err.Error(),
+				})
+			}
+		}
+	} else if strings.TrimSpace(winner.WorktreeDir) != "" {
+		// No-git mode: copy all files from winner workspace back to parent.
+		if err := copyDirContents(winner.WorktreeDir, exec.WorktreeDir); err != nil {
 			exec.Engine.appendProgress(map[string]any{
-				"event":      "fan_in_ignored_files_warning",
+				"event":      "fan_in_copy_warning",
 				"node_id":    node.ID,
 				"winner_key": winner.BranchKey,
 				"warning":    err.Error(),
