@@ -43,6 +43,10 @@ func (e *Engine) appendProgressImpl(ev map[string]any, updateStallTimer bool) {
 		ev = map[string]any{}
 	}
 	now := time.Now().UTC()
+	// Canonical envelope fields: id, ts, run_id.
+	if _, ok := ev["id"]; !ok {
+		ev["id"] = newEventID()
+	}
 	if _, ok := ev["ts"]; !ok {
 		ev["ts"] = now.Format(time.RFC3339Nano)
 	}
