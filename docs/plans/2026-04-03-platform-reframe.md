@@ -359,6 +359,24 @@ consults the failure class to decide whether to retry.
 Goal: Build the opinionated workflow capabilities that make kilroy useful for software
 operations. Each component is independently opt-in.
 
+**Implementation notes (from Phase 2 completion + Fabro analysis):**
+- Phase 2 delivered TmuxAgentHandler with claude working end-to-end. Codex and opencode
+  templates exist but were not smoke-tested with real API keys — Phase 3 work should
+  include verifying those templates work against real tools when possible.
+- Context fidelity (tmux session reuse for `full` mode) was not implemented in Phase 2 —
+  carry forward to 3.1 or a dedicated follow-up.
+- Provider detection is still the old mechanism, not wired through the tmux handler —
+  the handler uses `agent_tool` node attribute directly.
+- Fabro reference: Fabro's `fabro-checkpoint` uses git metadata branches (separate from
+  code branches) for checkpoint state. Their event envelope canonicalization
+  (`RunEventEnvelope` with dot-notation event names, UUIDv7 IDs, millsecond timestamps)
+  is a cleaner pattern than our progress.ndjson — consider adopting as part of 3.1 or 3.6.
+- Fabro has a retro system (automatic retrospectives with cost, duration, LLM narrative
+  after each run). Worth stealing as a lightweight addition to 3.4 or Phase 4.
+- Fabro has a `workflow.toml` alongside each DOT file for per-workflow config — cleaner
+  than our current approach of embedding everything in DOT attrs or global run config.
+  Consider for 3.3 (workflow packages).
+
 ### 3.1 Git Integration as Hook
 
 **What:** Move all git operations out of the engine core and into a lifecycle hook.
@@ -370,6 +388,13 @@ parallel_handlers.go, and resume.go. This is the biggest extraction — it touch
 most code and has the most subtle interactions (parallel branch isolation, resume SHA
 validation, checkpoint commit tracking).
 
+**Testing is critical here.** After extraction, you MUST:
+- Build the binary and run a real graph in a real git repo WITH the git hook
+- Run a real graph in a plain temp directory WITHOUT the git hook
+- Verify worktree creation, per-node commits, and cleanup actually work
+- Verify that `kilroy attractor status` shows correct results for both modes
+- Do NOT rely only on unit tests — run the actual `./kilroy` binary against real repos
+
 **Done when:**
 - Engine has zero direct gitutil imports
 - A GitHook implements the hook interface: creates worktrees on run.before, commits on
@@ -378,6 +403,7 @@ validation, checkpoint commit tracking).
 - Runs WITHOUT the GitHook succeed in any directory (no git required)
 - Parallel branch isolation works both ways: git hook uses worktrees, no-git uses temp dirs
 - Test graphs pass both with and without the git hook
+- At least 3 end-to-end scenarios run against the real binary (not just `go test`)
 
 ### 3.2 Human-in-the-Loop
 
@@ -386,7 +412,8 @@ doesn't know about humans — it just has a handler that blocks until an externa
 resolves it.
 
 **Context:** Already implemented (WaitHumanHandler, interviewer implementations). Needs
-to be moved to the workflows package and registered at startup.
+to be moved to the workflows package and registered at startup. Currently in engine/ with
+a type alias in workflows/ — Phase 3.2 does the real extraction.
 
 **Done when:**
 - WaitHumanHandler lives in workflows/, registered at startup
@@ -394,6 +421,7 @@ to be moved to the workflows package and registered at startup.
   move to workflows/
 - HTTP API extension: `POST /runs/{id}/questions/{qid}/answer` for web-based interaction
 - Existing tests pass from new location
+- Run a graph with a hexagon (human gate) node using AutoApproveInterviewer to verify
 
 ### 3.3 Workflow Packages
 
@@ -404,13 +432,20 @@ Portable, sharable, version-controlled.
 lived in a different repo than the execution target. Workflow packages solve this by
 bundling everything together.
 
+Consider adding a `workflow.toml` manifest alongside the DOT file (inspired by Fabro)
+that declares: package metadata, required inputs, expected outputs, default provider
+config, and any package-level settings. This is cleaner than overloading DOT graph
+attributes with non-graph concerns.
+
 **Done when:**
-- A workflow package is a directory containing: `graph.dot`, `scripts/`, `prompts/`
+- A workflow package is a directory containing at minimum: `graph.dot`, `scripts/`, `prompts/`
+- Optional `workflow.toml` for package metadata (inputs, outputs, description, defaults)
 - `kilroy attractor run --package /path/to/pr-review/` loads the package
 - Package scripts are available in the workspace at a known path (e.g., `.kilroy/package/scripts/`)
 - Tool_command nodes reference scripts relative to the package: `tool_command=".kilroy/package/scripts/setup.sh"`
 - Prompt files reference prompts relative to the package
 - A package can be pointed at any workspace
+- Build a real test package and run it against the actual binary in a real workspace
 
 ### 3.4 Supervisor Prototype
 
@@ -421,6 +456,10 @@ intervention-policy system — just monitoring and notification.
 supervisor watches runs by querying the run DB and classifies state: healthy, degraded
 (retrying), blocked (needs human), failed (terminal).
 
+Consider adding a lightweight run retro (inspired by Fabro) that runs after each
+completed run: total duration, per-node timing, cost estimate if available, and a
+one-line summary of what happened. Stored in the run DB and visible via status.
+
 **Done when:**
 - Supervisor monitors active runs by polling the run DB
 - Classifies run state: healthy, degraded, blocked, failed
@@ -428,6 +467,7 @@ supervisor watches runs by querying the run DB and classifies state: healthy, de
 - Surfaces blocked runs via: CLI output, HTTP API endpoint, structured event
 - `kilroy attractor status --run <id>` shows supervisor assessment
 - Per-node timing visible in status output
+- Run a multi-node graph, verify timing and status output are correct
 
 ### 3.5 CXDB as Hook
 
@@ -442,6 +482,26 @@ Extracting into a hook makes the nil-checking unnecessary.
 - CXDBHook implements the hook interface
 - Runs with CXDBHook behave identically to current behavior
 - Runs without CXDBHook have zero CXDB overhead
+
+### 3.6 Event Envelope Canonicalization
+
+**What:** Standardize all engine/handler events into a canonical envelope format with
+consistent structure, IDs, timestamps, and dot-notation event names.
+
+**Context:** Inspired by Fabro's `RunEventEnvelope` pattern. Currently our events go
+to progress.ndjson with ad-hoc structure. A canonical envelope (unique ID, UTC timestamp,
+run_id, event name like `stage.completed` or `agent.tool.started`, node context,
+properties bag) enables: cleaner SSE streaming, better run DB storage, easier debugging,
+and future UI consumption.
+
+**Done when:**
+- All events flow through a canonical `RunEvent` envelope type
+- Events have: unique ID, UTC timestamp, run_id, dot-notation event name, node_id,
+  structured properties
+- progress.ndjson uses the envelope format
+- SSE streaming emits envelope-formatted events
+- Run DB stores events in envelope format
+- Existing event consumers still work
 
 ## Phase 4: Prove It Works
 
