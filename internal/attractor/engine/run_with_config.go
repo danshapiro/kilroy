@@ -233,6 +233,7 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 	opts.Inputs = overrides.Inputs
 	opts.GraphDir = overrides.GraphDir
 	opts.GitOps = overrides.GitOps
+	opts.PackageDir = overrides.PackageDir
 	if overrides.Workspace != "" {
 		opts.Workspace = overrides.Workspace
 		if opts.RepoPath == "" {

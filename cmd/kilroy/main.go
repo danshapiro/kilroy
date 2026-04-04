@@ -225,6 +225,7 @@ func attractorRun(args []string) {
 	var workspace string
 	var labelSpecs []string
 	var useTmux bool
+	var packagePath string
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -300,13 +301,20 @@ func attractorRun(args []string) {
 			labelSpecs = append(labelSpecs, args[i])
 		case "--tmux":
 			useTmux = true
+		case "--package":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--package requires a directory path")
+				os.Exit(1)
+			}
+			packagePath = args[i]
 		default:
 			fmt.Fprintf(os.Stderr, "unknown arg: %s\n", args[i])
 			os.Exit(1)
 		}
 	}
 
-	if graphPath == "" {
+	if graphPath == "" && packagePath == "" {
 		usage()
 		os.Exit(1)
 	}
@@ -333,6 +341,32 @@ func attractorRun(args []string) {
 			os.Exit(1)
 		}
 		labels[parts[0]] = parts[1]
+	}
+
+	// Workflow package: load graph, scripts, prompts from a package directory.
+	var pkg *workflows.Package
+	if packagePath != "" {
+		var err error
+		pkg, err = workflows.LoadPackage(packagePath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "package load error: %v\n", err)
+			os.Exit(1)
+		}
+		if graphPath == "" {
+			graphPath = pkg.GraphPath
+		}
+		// Apply manifest defaults.
+		if pkg.Manifest != nil {
+			for k, v := range pkg.Manifest.Defaults.Labels {
+				if _, exists := labels[k]; !exists {
+					labels[k] = v
+				}
+			}
+		}
+	}
+	if graphPath == "" {
+		fmt.Fprintln(os.Stderr, "--graph or --package is required")
+		os.Exit(1)
 	}
 
 	// Derive graph directory for prompt_file resolution.
@@ -528,6 +562,7 @@ func attractorRun(args []string) {
 		GraphDir:      graphDir,
 		Labels:        labels,
 		GitOps:        gitOps,
+		PackageDir:    func() string { if pkg != nil { return pkg.Dir }; return "" }(),
 		OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 			if info == nil {
 				return

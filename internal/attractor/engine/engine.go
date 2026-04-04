@@ -116,6 +116,11 @@ type RunOptions struct {
 	// GraphDir is the directory containing the graph file. Used to resolve
 	// prompt_file attributes. Derived from --graph path.
 	GraphDir string
+
+	// PackageDir is the root of a workflow package directory. When set,
+	// the engine copies package scripts and prompts into the workspace
+	// at .kilroy/package/ after workspace creation.
+	PackageDir string
 }
 
 func (o *RunOptions) applyDefaults() error {
@@ -492,6 +497,12 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 		// No-git mode: ensure workspace directory exists.
 		if err := os.MkdirAll(e.WorktreeDir, 0o755); err != nil {
 			return nil, err
+		}
+	}
+	// Materialize workflow package scripts/prompts into workspace.
+	if e.Options.PackageDir != "" {
+		if err := materializePackage(e.Options.PackageDir, e.WorktreeDir); err != nil {
+			return nil, fmt.Errorf("materialize package: %w", err)
 		}
 	}
 	if err := e.materializeRunStartupInputs(ctx); err != nil {

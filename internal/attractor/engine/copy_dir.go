@@ -10,8 +10,11 @@ import (
 )
 
 // copyDirContents copies all files and directories from src into dst.
-// dst must already exist. Symlinks are skipped.
+// Creates dst if it does not exist. Symlinks are skipped.
 func copyDirContents(src, dst string) error {
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return err
+	}
 	return filepath.WalkDir(src, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
