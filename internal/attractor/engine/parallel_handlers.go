@@ -423,6 +423,7 @@ func (h *ParallelHandler) runBranch(ctx context.Context, exec *Execution, parall
 		Graph:                      exec.Graph,
 		Options:                    exec.Engine.Options,
 		DotSource:                  exec.Engine.DotSource,
+		GitOps:                     exec.Engine.GitOps,
 		RunBranch:                  branchName,
 		WorktreeDir:                worktreeDir,
 		LogsRoot:                   branchRoot,

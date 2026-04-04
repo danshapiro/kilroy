@@ -255,6 +255,13 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 		return nil, err
 	}
 
+	// Auto-detect git mode when GitOps is not explicitly set.
+	if opts.GitOps == nil && AutoDetectGitOps != nil && opts.RepoPath != "" {
+		if detected := AutoDetectGitOps(opts.RepoPath); detected != nil {
+			opts.GitOps = detected
+		}
+	}
+
 	// Repo validation: cheap local checks that must pass before any expensive
 	// preflight work (provider probes, model catalog fetch, CXDB startup).
 	if opts.GitOps != nil {

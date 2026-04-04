@@ -52,6 +52,18 @@ func signalCancelContext() (context.Context, func()) {
 	return ctx, cleanup
 }
 
+func init() {
+	// Register GitOps auto-detection so that RunWithConfig/Run automatically
+	// enable git mode when a valid git repo is provided.
+	engine.AutoDetectGitOps = func(repoPath string) engine.GitOps {
+		hook := &workflows.GitHook{}
+		if hook.ValidateRepo(repoPath, false) == nil {
+			return hook
+		}
+		return nil
+	}
+}
+
 func main() {
 	// Auto-load .env from CWD; silently ignore if absent.
 	if err := dotenv.Load(".env"); err != nil {

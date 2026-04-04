@@ -442,6 +442,13 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 		}
 	}()
 
+	// Auto-detect git mode when GitOps is not explicitly set.
+	if e.GitOps == nil && AutoDetectGitOps != nil && e.Options.RepoPath != "" {
+		if detected := AutoDetectGitOps(e.Options.RepoPath); detected != nil {
+			e.GitOps = detected
+		}
+	}
+
 	if e.GitOps != nil {
 		// Git mode: validate repo, create branch and worktree.
 		if e.Options.RepoPath == "" {

@@ -53,6 +53,7 @@ func TestGitPushIfConfigured_PushesToRemote(t *testing.T) {
 		Options:   RunOptions{RepoPath: repo},
 		RunBranch: "attractor/run/test-push",
 		RunConfig: &RunConfigFile{},
+		GitOps:    &testGitOps{},
 	}
 	eng.RunConfig.Git.PushRemote = "test-remote"
 

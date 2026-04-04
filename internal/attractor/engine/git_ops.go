@@ -2,6 +2,14 @@
 // When nil, the engine operates without version control.
 package engine
 
+// AutoDetectGitOps is a pluggable factory for automatic GitOps detection.
+// When set, eng.run() calls this with the repo path. If it returns a non-nil
+// GitOps, git mode is enabled automatically. This allows the engine package
+// to remain free of gitutil imports while preserving backward compatibility.
+//
+// Set by cmd/kilroy/ at startup (or by test helpers).
+var AutoDetectGitOps func(repoPath string) GitOps
+
 // GitOps encapsulates version control operations. The engine calls these
 // at lifecycle points (run setup, checkpoint, parallel branch management).
 // When Engine.GitOps is nil, the engine operates in "no-git" mode: it uses

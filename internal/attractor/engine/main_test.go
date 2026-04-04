@@ -8,6 +8,16 @@ import (
 )
 
 func TestMain(m *testing.M) {
+	// Register GitOps auto-detection for tests so that tests creating
+	// git repos get git worktree behavior without explicitly passing GitOps.
+	AutoDetectGitOps = func(repoPath string) GitOps {
+		hook := &testGitOps{}
+		if hook.ValidateRepo(repoPath, false) == nil {
+			return hook
+		}
+		return nil
+	}
+
 	stateRoot, err := os.MkdirTemp("", "kilroy-engine-test-state-*")
 	if err != nil {
 		_, _ = os.Stderr.WriteString("failed to create temp state root: " + err.Error() + "\n")
