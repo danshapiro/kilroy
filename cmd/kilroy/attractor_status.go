@@ -7,6 +7,7 @@ import (
 	"strconv"
 
 	"github.com/danshapiro/kilroy/internal/attractor/runstate"
+	"github.com/danshapiro/kilroy/internal/attractor/workflows"
 )
 
 func attractorStatus(args []string) {
@@ -27,10 +28,18 @@ func runAttractorStatus(args []string, stdout io.Writer, stderr io.Writer) int {
 	var latest bool
 	var useCXDB bool
 	var verbose bool
+	var runID string
 	intervalSec := 2
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
+		case "--run":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(stderr, "--run requires a run ID")
+				return 1
+			}
+			runID = args[i]
 		case "--logs-root":
 			i++
 			if i >= len(args) {
@@ -83,6 +92,23 @@ func runAttractorStatus(args []string, stdout io.Writer, stderr io.Writer) int {
 		}
 		logsRoot = root
 		fmt.Fprintf(stderr, "logs_root=%s\n", logsRoot)
+	}
+
+	// --run mode: supervisor assessment via RunDB.
+	if runID != "" {
+		rdb := openRunDB()
+		if rdb == nil {
+			fmt.Fprintln(stderr, "cannot open run database")
+			return 1
+		}
+		defer rdb.Close()
+		a, err := workflows.AssessRun(rdb, runID)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprint(stdout, workflows.FormatAssessment(a))
+		return 0
 	}
 
 	if logsRoot == "" {
