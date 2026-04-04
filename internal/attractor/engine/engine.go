@@ -99,6 +99,11 @@ type RunOptions struct {
 	// records lifecycle events (run start, node executions, edge decisions).
 	RunDB RunDBWriter
 
+	// Optional version control operations. When set, the engine uses git
+	// worktrees, per-node commits, and branch isolation. When nil, the
+	// engine operates in plain-directory mode (no git required).
+	GitOps GitOps
+
 	// Structured inputs loaded from --input file. Available in prompts as
 	// $input.key and in tool_command env as KILROY_INPUT_KEY.
 	Inputs map[string]any
@@ -180,6 +185,9 @@ type Engine struct {
 	Context *runtime.Context
 
 	Registry *HandlerRegistry
+
+	// Optional version control operations (forwarded from RunOptions).
+	GitOps GitOps
 
 	// Backend for agent nodes (until provider routing is wired in).
 	AgentBackend AgentBackend
