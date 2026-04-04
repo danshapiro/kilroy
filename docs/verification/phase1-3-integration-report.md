@@ -6,15 +6,16 @@ Binary: `go build -o ./kilroy ./cmd/kilroy/` (clean build, no errors)
 
 ## Summary
 
-Five end-to-end scenarios were executed against the real `./kilroy` binary to exercise
-Phase 1-3 implementations. Three bugs were found and two were fixed during testing.
+Six end-to-end scenarios were executed against the real `./kilroy` binary to exercise
+Phase 1-3 implementations. Three bugs were found and all were fixed during testing.
+All scenarios pass after fixes.
 
 | Scenario | Status | Duration | Key Finding |
 |----------|--------|----------|-------------|
 | 1: L0 graph + git | PASS | 1350ms | All features work: worktree, per-node commits, RunDB, output contract |
 | 2: L0 graph, no git | PASS | 1089ms | Runs cleanly without git; output contract works |
 | 3: Claude via tmux | PASS | 62.8s | Full end-to-end: agent creates file, verify runs it |
-| 4: Codex via tmux | PARTIAL | ~30s task | Template fixed; idle detection still needs work |
+| 4: Codex via tmux | PASS (after fix) | 367s | Template fixed; full end-to-end works |
 | 4b: OpenCode via tmux | PASS (after fix) | ~5min | Template fixed (`run` subcommand); end-to-end works |
 | 5: Workflow package | PASS | 499ms | Package materialization, inputs, outputs all work |
 
@@ -171,10 +172,13 @@ missing llm.providers.openai.backend (Kilroy forbids implicit backend defaults)
 - Startup dialog was auto-dismissed (trust prompt bypassed)
 - Codex received prompt and completed the task (created `greeting.py`)
 - Codex output: `print('Hello from Codex agent')` — correct
-- **Remaining issue**: Idle detection didn't trigger. The kilroy process was killed
-  before it could detect idle state. The codex prompt prefix `›` and absence of busy
-  indicators should have triggered idle detection, but the parent process didn't survive
-  long enough to verify. This needs a dedicated follow-up test.
+- **Result**: Full end-to-end success. Run ID `01KNC3XSMB6T75K7W82QFWF281`:
+- ✅ Startup dialog auto-dismissed (trust prompt bypassed)
+- ✅ Codex received prompt and completed the task
+- ✅ Codex created `greeting.py` with `print('Hello from Codex agent')`
+- ✅ Idle detection triggered correctly after codex returned to prompt
+- ✅ Verify node ran `python3 greeting.py` → output: "Hello from Codex agent"
+- ✅ Final status: success, duration 367s (codex startup is slow)
 
 ### Scenario 4b: OpenCode agent via tmux
 
@@ -235,7 +239,7 @@ missing llm.providers.openai.backend (Kilroy forbids implicit backend defaults)
 | `--label` flag | 1.7 | All scenarios | ✅ |
 | Tmux session management | 2.1 | S3, S4 | ✅ |
 | Claude template | 2.1 | S3 | ✅ |
-| Codex template | 2.1 | S4 | ⚠️ Fixed (trust prompt, idle detection) |
+| Codex template | 2.1 | S4 | ✅ Fixed and verified (trust prompt, idle detection) |
 | OpenCode template | 2.1 | S4b | ✅ Fixed and verified (`run` subcommand) |
 | Provider detection | 2.2 | S3, S4 | ✅ |
 | Git hook (worktree/commits) | 3.1 | S1 | ✅ |
@@ -252,9 +256,8 @@ missing llm.providers.openai.backend (Kilroy forbids implicit backend defaults)
 2. **Codex needs `--quiet` or headless flag** — The trust prompt and TUI mode are hostile
    to automation. Consider filing an issue upstream or documenting the workaround.
 
-3. **Codex idle detection needs investigation** — The fixed template correctly dismisses the
-   trust prompt, but idle detection didn't complete in the test window. Needs a dedicated
-   test with enough time for codex to start, work, and return to idle.
+3. **Codex is slow** — 367s for a trivial task. Most of this is startup time and
+   codex's skill-reading overhead. Consider caching or pre-warming for repeated runs.
 
 4. **Agent response cleaning** — Tmux capture includes trailing blank lines and "Pane is dead"
    text in the response. Consider stripping these from the captured output.
