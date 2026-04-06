@@ -1,0 +1,71 @@
+// PR review workflow: setup, build/test, code review, holistic review, report.
+// Inputs: pr_repo (owner/repo), pr_number. Output: review-report.md.
+
+digraph pr_review {
+    graph [
+        inputs="pr_repo,pr_number",
+        outputs="review-report.md",
+        model_stylesheet="
+            * { llm_model: claude-sonnet-4.6; llm_provider: anthropic; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    done  [shape=Msquare,  label="Done"]
+
+    // Tool: checkout PR branch, fetch metadata, merge base
+    setup [
+        shape=parallelogram,
+        label="Setup PR",
+        tool_command="sh .kilroy/package/scripts/setup-pr.sh"
+    ]
+
+    // Tool: detect build system, run build and tests (exit 0=pass, non-zero=fail)
+    build_test [
+        shape=parallelogram,
+        label="Build & Test",
+        tool_command="sh .kilroy/package/scripts/build-test.sh",
+        timeout="600s"
+    ]
+
+    // Tool: write a failure report when build/test failed
+    fail_report [
+        shape=parallelogram,
+        label="Write Failure Report",
+        tool_command="sh .kilroy/package/scripts/write-fail-report.sh"
+    ]
+
+    // Tool: collect the PR diff for review agents
+    collect_diff [
+        shape=parallelogram,
+        label="Collect Diff",
+        tool_command="sh .kilroy/package/scripts/collect-diff.sh"
+    ]
+
+    // Agent: review the diff for code quality, bugs, test coverage
+    code_review [
+        shape=box,
+        label="Code Review",
+        prompt_file="prompts/code-review.md",
+        agent_tool="claude"
+    ]
+
+    // Agent: holistic assessment and final report
+    holistic_review [
+        shape=box,
+        label="Holistic Review",
+        prompt_file="prompts/holistic-review.md",
+        agent_tool="claude"
+    ]
+
+    start         -> setup
+    setup         -> build_test       [condition="outcome=success"]
+    setup         -> done             // setup failed — can't proceed
+    build_test    -> collect_diff     [condition="outcome=success"]
+    build_test    -> fail_report      // build/test failed
+    fail_report   -> done
+    collect_diff  -> code_review      [condition="outcome=success"]
+    collect_diff  -> done             // diff collection failed
+    code_review   -> holistic_review
+    holistic_review -> done
+}

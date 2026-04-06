@@ -1,0 +1,21 @@
+# PR review workflow: checkout, build/test, LLM code review, holistic review, report.
+# Requires: gh CLI, git. Agent nodes use claude via --tmux.
+
+name = "pr-review"
+description = "Review a GitHub pull request: build, test, code review, holistic assessment."
+version = "1.0.0"
+
+[[inputs]]
+name = "pr_repo"
+description = "GitHub repository in owner/repo format"
+required = true
+
+[[inputs]]
+name = "pr_number"
+description = "Pull request number"
+required = true
+
+[defaults]
+labels = { workflow = "pr-review" }
+
+outputs = ["review-report.md"]
