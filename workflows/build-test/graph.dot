@@ -1,0 +1,67 @@
+digraph build_test {
+  graph [
+    goal="Detect build system, build, test, and report results",
+    outputs="build-report.json"
+  ]
+
+  start [shape=Mdiamond, label="Start"]
+
+  detect [
+    shape=parallelogram,
+    label="Detect Build System",
+    tool_command="sh .kilroy/package/scripts/detect-build-system.sh"
+  ]
+
+  build [
+    shape=parallelogram,
+    label="Build",
+    tool_command="sh .kilroy/package/scripts/run-build.sh"
+  ]
+
+  check_build [shape=diamond, label="Build OK?"]
+
+  test [
+    shape=parallelogram,
+    label="Test",
+    tool_command="sh .kilroy/package/scripts/run-tests.sh"
+  ]
+
+  check_test [shape=diamond, label="Tests OK?"]
+
+  report_success [
+    shape=parallelogram,
+    label="Report Success",
+    tool_command="sh .kilroy/package/scripts/generate-report.sh success"
+  ]
+
+  report_build_fail [
+    shape=parallelogram,
+    label="Report Build Failure",
+    tool_command="sh .kilroy/package/scripts/generate-report.sh build_failed"
+  ]
+
+  report_test_fail [
+    shape=parallelogram,
+    label="Report Test Failure",
+    tool_command="sh .kilroy/package/scripts/generate-report.sh test_failed"
+  ]
+
+  done [shape=Msquare, label="Done"]
+
+  start -> detect
+  detect -> build
+
+  build -> check_build
+  check_build -> test [condition="outcome=success"]
+  check_build -> report_build_fail [condition="outcome=fail"]
+  check_build -> report_build_fail
+
+  test -> check_test
+  check_test -> report_success [condition="outcome=success"]
+  check_test -> report_test_fail [condition="outcome=fail"]
+  check_test -> report_test_fail
+
+  report_success -> done
+  report_build_fail -> done
+  report_test_fail -> done
+}
