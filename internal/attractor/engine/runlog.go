@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -108,6 +109,52 @@ func minInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+// LineWriter wraps a file and emits each complete line to the RunLog.
+type LineWriter struct {
+	file   *os.File
+	log    *RunLog
+	node   string
+	event  string // "stdout" or "stderr"
+	buf    []byte
+}
+
+// NewLineWriter creates a writer that tees to file and emits lines to RunLog.
+func NewLineWriter(file *os.File, log *RunLog, node, event string) *LineWriter {
+	return &LineWriter{file: file, log: log, node: node, event: event}
+}
+
+func (w *LineWriter) Write(p []byte) (int, error) {
+	n, err := w.file.Write(p)
+	if w.log == nil {
+		return n, err
+	}
+	// Scan for complete lines in the buffered data.
+	w.buf = append(w.buf, p[:n]...)
+	for {
+		idx := bytes.IndexByte(w.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := string(w.buf[:idx])
+		w.buf = w.buf[idx+1:]
+		if line != "" {
+			w.log.Info("tool", w.node, w.event, line)
+		}
+	}
+	return n, err
+}
+
+// Flush emits any remaining buffered data as a final line.
+func (w *LineWriter) Flush() {
+	if len(w.buf) > 0 && w.log != nil {
+		line := string(w.buf)
+		w.buf = nil
+		if line != "" {
+			w.log.Info("tool", w.node, w.event, line)
+		}
+	}
 }
 
 // Close flushes and closes the underlying file.

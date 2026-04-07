@@ -870,15 +870,31 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		return runtime.Outcome{Status: runtime.StatusFail, FailureReason: err.Error()}, nil
 	}
 	defer func() { _ = stdoutFile.Close(); _ = stderrFile.Close() }()
-	cmd.Stdout = stdoutFile
-	cmd.Stderr = stderrFile
+
+	// Tee stdout/stderr through RunLog for line-by-line streaming.
+	var rl *RunLog
+	if execCtx != nil && execCtx.Engine != nil {
+		rl = execCtx.Engine.RunLog
+	}
+	stdoutWriter := NewLineWriter(stdoutFile, rl, node.ID, "stdout")
+	stderrWriter := NewLineWriter(stderrFile, rl, node.ID, "stderr")
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
 
 	commandStart := time.Now()
 	runErr := cmd.Run()
+	stdoutWriter.Flush()
+	stderrWriter.Flush()
 	dur := time.Since(commandStart)
 	exitCode := -1
 	if cmd.ProcessState != nil {
 		exitCode = cmd.ProcessState.ExitCode()
+	}
+	if rl != nil {
+		rl.Info("tool", node.ID, "exit", fmt.Sprintf("exit %d (%dms)", exitCode, dur.Milliseconds()), map[string]any{
+			"exit_code":   exitCode,
+			"duration_ms": dur.Milliseconds(),
+		})
 	}
 	if cctx.Err() == context.DeadlineExceeded {
 		if err := writeJSON(filepath.Join(stageDir, toolTimingFileName), map[string]any{

@@ -55,6 +55,50 @@ func TestRunLog_EmitsEvents(t *testing.T) {
 	}
 }
 
+func TestLineWriter_EmitsLines(t *testing.T) {
+	dir := t.TempDir()
+	rl, err := NewRunLog(dir, "test-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	outFile, err := os.Create(filepath.Join(dir, "stdout.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	lw := NewLineWriter(outFile, rl, "build", "stdout")
+
+	// Write data in chunks that don't align with newlines.
+	lw.Write([]byte("line one\nli"))
+	lw.Write([]byte("ne two\nline"))
+	lw.Write([]byte(" three"))
+	lw.Flush()
+	outFile.Close()
+	rl.Close()
+
+	// Verify the file got all the data.
+	data, _ := os.ReadFile(filepath.Join(dir, "stdout.log"))
+	if string(data) != "line one\nline two\nline three" {
+		t.Errorf("unexpected file contents: %q", string(data))
+	}
+
+	// Verify RunLog got 3 line events.
+	logData, _ := os.ReadFile(filepath.Join(dir, "run.log"))
+	lines := strings.Split(strings.TrimSpace(string(logData)), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("expected 3 RunLog lines, got %d: %s", len(lines), string(logData))
+	}
+	var ev RunLogEvent
+	json.Unmarshal([]byte(lines[0]), &ev)
+	if ev.Source != "tool" || ev.Node != "build" || ev.Event != "stdout" || ev.Message != "line one" {
+		t.Errorf("unexpected event: %+v", ev)
+	}
+	json.Unmarshal([]byte(lines[2]), &ev)
+	if ev.Message != "line three" {
+		t.Errorf("expected 'line three', got %q", ev.Message)
+	}
+}
+
 func TestRunLog_NilSafe(t *testing.T) {
 	var rl *RunLog
 	// These should not panic.
