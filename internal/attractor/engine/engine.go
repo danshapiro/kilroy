@@ -1336,8 +1336,20 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			return fo, nil
 		}
 		if out.Status == runtime.StatusSuccess || out.Status == runtime.StatusDegradedSuccess || out.Status == runtime.StatusPartialSuccess || out.Status == runtime.StatusSkipped {
-			retries[node.ID] = 0
-			return out, nil
+			// Check output contract: if declared outputs are missing, downgrade to fail.
+			if downgraded, violated := enforceOutputContract(e, node, out, attempt); violated {
+				out = downgraded
+				e.appendProgress(map[string]any{
+					"event":          "output_contract_violated",
+					"node_id":        node.ID,
+					"attempt":        attempt,
+					"failure_reason": out.FailureReason,
+				})
+				// Fall through to the retry logic below.
+			} else {
+				retries[node.ID] = 0
+				return out, nil
+			}
 		}
 
 		// Spec §3.3: custom (non-canonical) outcomes are routing decisions, not failures.
