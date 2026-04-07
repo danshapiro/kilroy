@@ -208,6 +208,9 @@ type Engine struct {
 	// handlers access it via Execution.Artifacts.
 	Artifacts *ArtifactStore
 
+	// Canonical run activity log (run.log). Nil until run starts.
+	RunLog *RunLog
+
 	// Model catalog snapshot metadata (metaspec).
 	ModelCatalogSHA    string
 	ModelCatalogSource string
@@ -472,6 +475,10 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 	if err := os.MkdirAll(e.LogsRoot, 0o755); err != nil {
 		return nil, err
 	}
+	if rl, rlErr := NewRunLog(e.LogsRoot, e.Options.RunID); rlErr == nil {
+		e.RunLog = rl
+		defer e.RunLog.Close()
+	}
 	releaseOwnership, err = acquireRunOwnership(e.LogsRoot, e.Options.RunID)
 	if err != nil {
 		return nil, err
@@ -532,6 +539,12 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 		return nil, err
 	}
 	e.rundbRecordRunStart()
+	e.RunLog.Info("engine", "", "run.started", fmt.Sprintf("Run started: %s", e.Graph.Name), map[string]any{
+		"run_id":    e.Options.RunID,
+		"workspace": e.WorktreeDir,
+		"inputs":    e.Options.Inputs,
+		"graph":     e.Graph.Name,
+	})
 
 	// Mirror graph attributes into context.
 	for k, v := range e.Graph.Attrs {
@@ -731,6 +744,11 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		e.Context.Set("outcome", string(out.Status))
 		e.Context.Set("preferred_label", out.PreferredLabel)
 		e.Context.Set("failure_reason", out.FailureReason)
+		if len(out.ContextUpdates) > 0 {
+			e.RunLog.Info("engine", node.ID, "context.updated", fmt.Sprintf("Context updated: %d keys", len(out.ContextUpdates)), map[string]any{
+				"keys": contextUpdateKeys(out.ContextUpdates),
+			})
+		}
 		failureClass := classifyFailureClass(out)
 		e.Context.Set("failure_class", failureClass)
 		e.updateFailureDossierContext(node, out, failureClass, nodeRetries)
@@ -783,6 +801,11 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		}
 		e.lastCheckpointSHA = sha
 		e.cxdbCheckpointSaved(ctx, node.ID, out.Status, sha)
+		if sha != "" {
+			e.RunLog.Info("engine", node.ID, "checkpoint.saved", fmt.Sprintf("Checkpoint: %s", sha[:minInt(8, len(sha))]), map[string]any{
+				"sha": sha,
+			})
+		}
 
 		// Record git diff for this node if SHAs differ.
 		e.recordNodeDiff(node.ID, nodeRetries[node.ID]+1, beforeSHA, sha)
@@ -922,6 +945,12 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			"selection_method":     nextHop.SelectionMeta.Method,
 			"candidates_evaluated": nextHop.SelectionMeta.CandidatesEvaluated,
 			"conditions_matched":   nextHop.SelectionMeta.ConditionsMatched,
+		})
+		e.RunLog.Info("engine", "", "edge.selected", fmt.Sprintf("%s → %s (%s)", node.ID, next.To, nextHop.SelectionMeta.Method), map[string]any{
+			"from":      node.ID,
+			"to":        next.To,
+			"reason":    nextHop.SelectionMeta.Method,
+			"condition": next.Condition(),
 		})
 
 		// loop_restart (attractor-spec §3.2 Step 7): terminate current run, re-launch
@@ -1270,7 +1299,18 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			"attempt": 1,
 			"max":     1,
 		})
+		handlerType := resolvedHandlerTypeName(e, node.ID)
+		e.RunLog.Info("engine", node.ID, "node.started", fmt.Sprintf("Executing: %s", node.Label()), map[string]any{
+			"handler": handlerType,
+			"attempt": 1,
+		})
+		nodeStart := time.Now()
 		out, _ := e.executeNode(ctx, node)
+		dur := time.Since(nodeStart)
+		e.RunLog.Info("engine", node.ID, "node.completed", fmt.Sprintf("Node %s: %s (%dms)", node.ID, out.Status, dur.Milliseconds()), map[string]any{
+			"status":      string(out.Status),
+			"duration_ms": dur.Milliseconds(),
+		})
 		e.appendProgress(map[string]any{
 			"event":          "stage_attempt_end",
 			"node_id":        node.ID,
@@ -1329,7 +1369,19 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 			"attempt": attempt,
 			"max":     maxAttempts,
 		})
+		handlerType := resolvedHandlerTypeName(e, node.ID)
+		e.RunLog.Info("engine", node.ID, "node.started", fmt.Sprintf("Executing: %s", node.Label()), map[string]any{
+			"handler": handlerType,
+			"attempt": attempt,
+		})
+		attemptStart := time.Now()
 		out, _ := e.executeNode(ctx, node)
+		attemptDur := time.Since(attemptStart)
+		e.RunLog.Info("engine", node.ID, "node.completed", fmt.Sprintf("Node %s: %s (%dms)", node.ID, out.Status, attemptDur.Milliseconds()), map[string]any{
+			"status":      string(out.Status),
+			"duration_ms": attemptDur.Milliseconds(),
+			"attempt":     attempt,
+		})
 		e.appendProgress(map[string]any{
 			"event":          "stage_attempt_end",
 			"node_id":        node.ID,
@@ -1860,6 +1912,12 @@ func (e *Engine) persistTerminalOutcome(ctx context.Context, final runtime.Final
 	}
 
 	e.terminalOutcomePersisted = true
+
+	e.RunLog.Info("engine", "", "run.completed", fmt.Sprintf("Run completed: %s", final.Status), map[string]any{
+		"status":         string(final.Status),
+		"failure_reason": final.FailureReason,
+		"sha":            final.FinalGitCommitSHA,
+	})
 
 	// Best-effort push after terminal outcome so remote has final state.
 	e.gitPushIfConfigured()

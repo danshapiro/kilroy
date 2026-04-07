@@ -93,6 +93,23 @@ func (l *RunLog) Error(source, node, event, msg string, data ...map[string]any) 
 	l.Emit("error", source, node, event, msg, d)
 }
 
+// contextUpdateKeys returns the keys from a context updates map.
+func contextUpdateKeys(updates map[string]any) []string {
+	keys := make([]string, 0, len(updates))
+	for k := range updates {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// minInt returns the smaller of two ints.
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 // Close flushes and closes the underlying file.
 func (l *RunLog) Close() error {
 	if l == nil {
