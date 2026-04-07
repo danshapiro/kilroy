@@ -13,23 +13,23 @@ import (
 
 // RunSummary is a read-only view of a run for listing and status display.
 type RunSummary struct {
-	RunID         string
-	GraphName     string
-	Goal          string
-	Status        string
-	LogsRoot      string
-	WorktreeDir   string
-	RunBranch     string
-	RepoPath      string
-	StartedAt     time.Time
-	CompletedAt   *time.Time
-	DurationMS    *int64
-	FinalSHA      string
-	FailureReason string
-	Labels        map[string]string
-	Inputs        map[string]any
-	Warnings      []string
-	NodeCount     int
+	RunID         string            `json:"run_id"`
+	GraphName     string            `json:"graph_name"`
+	Goal          string            `json:"goal"`
+	Status        string            `json:"status"`
+	LogsRoot      string            `json:"logs_root"`
+	WorktreeDir   string            `json:"worktree_dir"`
+	RunBranch     string            `json:"run_branch"`
+	RepoPath      string            `json:"repo_path"`
+	StartedAt     time.Time         `json:"started_at"`
+	CompletedAt   *time.Time        `json:"completed_at"`
+	DurationMS    *int64            `json:"duration_ms"`
+	FinalSHA      string            `json:"final_sha"`
+	FailureReason string            `json:"failure_reason"`
+	Labels        map[string]string `json:"labels"`
+	Inputs        map[string]any    `json:"inputs"`
+	Warnings      []string          `json:"warnings"`
+	NodeCount     int               `json:"node_count"`
 }
 
 // LatestRun returns the most recently started run.
@@ -185,16 +185,16 @@ func (d *DB) pruneOrphans() (int, error) {
 
 // NodeExecutionSummary is a read-only view of a node execution.
 type NodeExecutionSummary struct {
-	NodeID        string
-	Attempt       int
-	HandlerType   string
-	Status        string
-	StartedAt     time.Time
-	CompletedAt   *time.Time
-	DurationMS    *int64
-	FailureReason string
-	FailureClass  string
-	Notes         string
+	NodeID        string     `json:"node_id"`
+	Attempt       int        `json:"attempt"`
+	HandlerType   string     `json:"handler_type"`
+	Status        string     `json:"status"`
+	StartedAt     time.Time  `json:"started_at"`
+	CompletedAt   *time.Time `json:"completed_at"`
+	DurationMS    *int64     `json:"duration_ms"`
+	FailureReason string     `json:"failure_reason"`
+	FailureClass  string     `json:"failure_class"`
+	Notes         string     `json:"notes"`
 }
 
 // GetNodeExecutions returns all node executions for a run.
@@ -235,11 +235,11 @@ func (d *DB) GetNodeExecutions(runID string) ([]NodeExecutionSummary, error) {
 
 // EdgeDecisionSummary is a read-only view of a routing decision.
 type EdgeDecisionSummary struct {
-	FromNode  string
-	ToNode    string
-	EdgeLabel string
-	Reason    string
-	DecidedAt time.Time
+	FromNode  string    `json:"from_node"`
+	ToNode    string    `json:"to_node"`
+	EdgeLabel string    `json:"edge_label"`
+	Reason    string    `json:"reason"`
+	DecidedAt time.Time `json:"decided_at"`
 }
 
 // GetEdgeDecisions returns all edge decisions for a run.
@@ -266,11 +266,11 @@ func (d *DB) GetEdgeDecisions(runID string) ([]EdgeDecisionSummary, error) {
 
 // ProviderSelectionSummary is a read-only view of a provider selection.
 type ProviderSelectionSummary struct {
-	NodeID   string
-	Attempt  int
-	Provider string
-	Model    string
-	Backend  string
+	NodeID   string `json:"node_id"`
+	Attempt  int    `json:"attempt"`
+	Provider string `json:"provider"`
+	Model    string `json:"model"`
+	Backend  string `json:"backend"`
 }
 
 // GetProviderSelections returns all provider selections for a run.
@@ -298,6 +298,21 @@ func (d *DB) GetDotSource(runID string) string {
 	var src string
 	_ = d.db.QueryRow("SELECT COALESCE(dot_source, '') FROM runs WHERE run_id = ?", runID).Scan(&src)
 	return src
+}
+
+// ReconcileStaleRuns marks runs stuck in "running" status as "interrupted"
+// if they were started more than maxAge ago. Called on server startup.
+func (d *DB) ReconcileStaleRuns(maxAge time.Duration) (int, error) {
+	cutoff := time.Now().Add(-maxAge).UTC().Format(time.RFC3339Nano)
+	result, err := d.db.Exec(`UPDATE runs SET status = 'interrupted',
+		failure_reason = 'marked interrupted: process no longer running',
+		completed_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+		WHERE status = 'running' AND started_at < ?`, cutoff)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := result.RowsAffected()
+	return int(n), nil
 }
 
 func (d *DB) queryRuns(clause string, args []any) ([]RunSummary, error) {

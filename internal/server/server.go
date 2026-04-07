@@ -10,6 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/danshapiro/kilroy/internal/attractor/rundb"
 )
 
 // Config holds server configuration.
@@ -85,6 +87,14 @@ func (s *Server) ListenAndServe() error {
 		s.logger.Printf("received %s, shutting down...", sig)
 		s.Shutdown()
 	}()
+
+	// Reconcile stale runs on startup.
+	if db, err := rundb.Open(rundb.DefaultPath()); err == nil {
+		if n, err := db.ReconcileStaleRuns(2 * time.Hour); err == nil && n > 0 {
+			s.logger.Printf("reconciled %d stale run(s) → interrupted", n)
+		}
+		db.Close()
+	}
 
 	s.logger.Printf("listening on %s", s.config.Addr)
 	s.httpSrv.Addr = s.config.Addr
