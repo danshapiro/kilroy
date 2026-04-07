@@ -61,6 +61,7 @@ type ListFilter struct {
 	Status    string            // filter by status
 	Labels    map[string]string // filter by label key=value
 	GraphName string            // filter by graph name pattern
+	Sort      string            // "newest" (default), "oldest", "longest"
 	Limit     int               // max results (0 = no limit)
 }
 
@@ -86,7 +87,14 @@ func (d *DB) ListRuns(f ListFilter) ([]RunSummary, error) {
 	if len(where) > 0 {
 		clause = "WHERE " + strings.Join(where, " AND ")
 	}
-	clause += " ORDER BY started_at DESC"
+	switch f.Sort {
+	case "oldest":
+		clause += " ORDER BY started_at ASC"
+	case "longest":
+		clause += " ORDER BY COALESCE(duration_ms, 0) DESC"
+	default:
+		clause += " ORDER BY started_at DESC"
+	}
 	if f.Limit > 0 {
 		clause += fmt.Sprintf(" LIMIT %d", f.Limit)
 	}
@@ -223,6 +231,73 @@ func (d *DB) GetNodeExecutions(runID string) ([]NodeExecutionSummary, error) {
 		results = append(results, n)
 	}
 	return results, nil
+}
+
+// EdgeDecisionSummary is a read-only view of a routing decision.
+type EdgeDecisionSummary struct {
+	FromNode  string
+	ToNode    string
+	EdgeLabel string
+	Reason    string
+	DecidedAt time.Time
+}
+
+// GetEdgeDecisions returns all edge decisions for a run.
+func (d *DB) GetEdgeDecisions(runID string) ([]EdgeDecisionSummary, error) {
+	rows, err := d.db.Query(`SELECT from_node, to_node, edge_label, reason, decided_at
+		FROM edge_decisions WHERE run_id = ? ORDER BY id ASC`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []EdgeDecisionSummary
+	for rows.Next() {
+		var e EdgeDecisionSummary
+		var decidedAt string
+		if err := rows.Scan(&e.FromNode, &e.ToNode, &e.EdgeLabel, &e.Reason, &decidedAt); err != nil {
+			return nil, err
+		}
+		e.DecidedAt, _ = time.Parse(time.RFC3339Nano, decidedAt)
+		results = append(results, e)
+	}
+	return results, nil
+}
+
+// ProviderSelectionSummary is a read-only view of a provider selection.
+type ProviderSelectionSummary struct {
+	NodeID   string
+	Attempt  int
+	Provider string
+	Model    string
+	Backend  string
+}
+
+// GetProviderSelections returns all provider selections for a run.
+func (d *DB) GetProviderSelections(runID string) ([]ProviderSelectionSummary, error) {
+	rows, err := d.db.Query(`SELECT node_id, attempt, provider, model, backend
+		FROM provider_selections WHERE run_id = ? ORDER BY id ASC`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []ProviderSelectionSummary
+	for rows.Next() {
+		var p ProviderSelectionSummary
+		if err := rows.Scan(&p.NodeID, &p.Attempt, &p.Provider, &p.Model, &p.Backend); err != nil {
+			return nil, err
+		}
+		results = append(results, p)
+	}
+	return results, nil
+}
+
+// GetDotSource returns the stored DOT source for a run, if available.
+func (d *DB) GetDotSource(runID string) string {
+	var src string
+	_ = d.db.QueryRow("SELECT COALESCE(dot_source, '') FROM runs WHERE run_id = ?", runID).Scan(&src)
+	return src
 }
 
 func (d *DB) queryRuns(clause string, args []any) ([]RunSummary, error) {

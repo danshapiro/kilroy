@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/danshapiro/kilroy/internal/attractor/engine"
+	"github.com/danshapiro/kilroy/internal/attractor/rundb"
 )
 
 // validRunID matches ULIDs, UUIDs, and other safe identifiers.
@@ -132,13 +133,55 @@ func (s *Server) handleGetPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ps, ok := s.registry.Get(runID)
-	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("pipeline %s not found", runID))
+	// Try live registry first.
+	if ps, ok := s.registry.Get(runID); ok {
+		writeJSON(w, http.StatusOK, ps.Status())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, ps.Status())
+	// Fall back to RunDB for completed runs.
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("run %s not found", runID))
+		return
+	}
+	defer db.Close()
+
+	run, err := db.GetRun(runID)
+	if err != nil || run == nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("run %s not found", runID))
+		return
+	}
+
+	nodes, _ := db.GetNodeExecutions(runID)
+	edges, _ := db.GetEdgeDecisions(runID)
+	providers, _ := db.GetProviderSelections(runID)
+
+	dotSource := db.GetDotSource(runID)
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"run_id":         run.RunID,
+		"graph_name":     run.GraphName,
+		"goal":           run.Goal,
+		"status":         run.Status,
+		"started_at":     run.StartedAt,
+		"completed_at":   run.CompletedAt,
+		"duration_ms":    run.DurationMS,
+		"logs_root":      run.LogsRoot,
+		"worktree_dir":   run.WorktreeDir,
+		"run_branch":     run.RunBranch,
+		"repo_path":      run.RepoPath,
+		"final_sha":      run.FinalSHA,
+		"failure_reason": run.FailureReason,
+		"labels":         run.Labels,
+		"inputs":         run.Inputs,
+		"warnings":       run.Warnings,
+		"node_count":     run.NodeCount,
+		"dot_source":     dotSource,
+		"nodes":          nodes,
+		"edges":          edges,
+		"providers":      providers,
+	})
 }
 
 func (s *Server) handlePipelineEvents(w http.ResponseWriter, r *http.Request) {
@@ -182,13 +225,31 @@ func (s *Server) handleGetContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ps, ok := s.registry.Get(runID)
-	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("pipeline %s not found", runID))
+	// Try live registry first.
+	if ps, ok := s.registry.Get(runID); ok {
+		writeJSON(w, http.StatusOK, ps.ContextValues())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, ps.ContextValues())
+	// Fall back to DB — return node context_updates as a proxy.
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("run %s not found", runID))
+		return
+	}
+	defer db.Close()
+
+	nodes, _ := db.GetNodeExecutions(runID)
+	if len(nodes) == 0 {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("run %s not found", runID))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"source": "db",
+		"note":   "context snapshot from completed run node outcomes",
+		"nodes":  len(nodes),
+	})
 }
 
 func (s *Server) handleGetQuestions(w http.ResponseWriter, r *http.Request) {

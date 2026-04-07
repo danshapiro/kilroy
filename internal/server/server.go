@@ -47,6 +47,7 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("POST /runs", s.handleSubmitPipeline)
 	mux.HandleFunc("GET /runs", s.handleListRuns)
 	mux.HandleFunc("GET /runs/{id}", s.handleGetPipeline)
+	mux.HandleFunc("GET /workflows", s.handleListWorkflows)
 	mux.HandleFunc("GET /runs/{id}/events", s.handlePipelineEvents)
 	mux.HandleFunc("POST /runs/{id}/cancel", s.handleCancelPipeline)
 	mux.HandleFunc("GET /runs/{id}/context", s.handleGetContext)
