@@ -101,3 +101,7 @@ func (g *testGitOps) PushBranch(repoPath, remote, branch string) error {
 func (g *testGitOps) RemoveWorktree(repoPath, worktreeDir string) error {
 	return gitutil.RemoveWorktree(repoPath, worktreeDir)
 }
+
+func (g *testGitOps) DiffStat(dir, fromSHA, toSHA string) (int, int, int, error) {
+	return gitutil.DiffStat(dir, fromSHA, toSHA)
+}
