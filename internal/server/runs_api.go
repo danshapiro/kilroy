@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
+	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/rundb"
 )
 
@@ -214,6 +216,65 @@ func (s *Server) handleGetNodeTurns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+func (s *Server) handleGetNodeDiff(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	nodeId := r.PathValue("nodeId")
+	if id == "" || nodeId == "" {
+		writeError(w, http.StatusBadRequest, "run_id and nodeId are required")
+		return
+	}
+
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database unavailable: "+err.Error())
+		return
+	}
+	defer db.Close()
+
+	// Parse optional attempt query param (default: latest).
+	attempt := 0
+	if a := r.URL.Query().Get("attempt"); a != "" {
+		if v, err := strconv.Atoi(a); err == nil && v > 0 {
+			attempt = v
+		}
+	}
+
+	diff, err := db.GetNodeDiff(id, nodeId, attempt)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query node diff: "+err.Error())
+		return
+	}
+	if diff == nil {
+		writeError(w, http.StatusNotFound, "no diff data for node "+nodeId)
+		return
+	}
+
+	result := map[string]any{
+		"node_id":    diff.NodeID,
+		"attempt":    diff.Attempt,
+		"before_sha": diff.BeforeSHA,
+		"after_sha":  diff.AfterSHA,
+		"summary": map[string]any{
+			"files_changed": diff.FilesChanged,
+			"insertions":    diff.Insertions,
+			"deletions":     diff.Deletions,
+		},
+	}
+
+	// Try to get the full diff from the git repo.
+	run, _ := db.GetRun(id)
+	if run != nil && run.WorktreeDir != "" {
+		if fullDiff, err := gitDiff(run.WorktreeDir, diff.BeforeSHA, diff.AfterSHA); err == nil {
+			result["diff"] = fullDiff
+		}
+		if fileList, err := gitDiffFileList(run.WorktreeDir, diff.BeforeSHA, diff.AfterSHA); err == nil {
+			result["files"] = fileList
+		}
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
 	// Scan known workflow package directories.
 	searchDirs := []string{"workflows"}
@@ -287,4 +348,49 @@ func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
 		"workflows": workflows,
 		"count":     len(workflows),
 	})
+}
+
+// gitDiff returns the full unified diff between two commits.
+func gitDiff(dir, fromSHA, toSHA string) (string, error) {
+	return gitutil.Diff(dir, fromSHA, toSHA)
+}
+
+// gitDiffFileList returns per-file diff info between two commits.
+type diffFileEntry struct {
+	Path       string `json:"path"`
+	Status     string `json:"status"`
+	Insertions int    `json:"insertions"`
+	Deletions  int    `json:"deletions"`
+}
+
+func gitDiffFileList(dir, fromSHA, toSHA string) ([]diffFileEntry, error) {
+	raw, err := gitutil.DiffFileList(dir, fromSHA, toSHA)
+	if err != nil {
+		return nil, err
+	}
+	var entries []diffFileEntry
+	for _, line := range strings.Split(raw, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, "\t", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		ins, _ := strconv.Atoi(parts[0])
+		del, _ := strconv.Atoi(parts[1])
+		path := parts[2]
+		status := "modified"
+		if ins > 0 && del == 0 {
+			status = "added"
+		}
+		entries = append(entries, diffFileEntry{
+			Path:       path,
+			Status:     status,
+			Insertions: ins,
+			Deletions:  del,
+		})
+	}
+	return entries, nil
 }
