@@ -70,12 +70,12 @@ func (e *Engine) rundbRecordNodeComplete(dbID int64, out runtime.Outcome) {
 	}
 }
 
-func (e *Engine) rundbRecordEdgeDecision(fromNode, toNode, edgeLabel, reason string) {
+func (e *Engine) rundbRecordEdgeDecision(fromNode, toNode, edgeLabel, condition, reason string) {
 	if e == nil || e.RunDB == nil {
 		return
 	}
 	if err := e.RunDB.RecordEdgeDecision(
-		e.Options.RunID, fromNode, toNode, edgeLabel, reason,
+		e.Options.RunID, fromNode, toNode, edgeLabel, condition, reason,
 	); err != nil {
 		e.Warn("rundb: record edge decision: " + err.Error())
 	}

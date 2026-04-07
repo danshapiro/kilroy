@@ -237,14 +237,15 @@ func (d *DB) GetNodeExecutions(runID string) ([]NodeExecutionSummary, error) {
 type EdgeDecisionSummary struct {
 	FromNode  string    `json:"from_node"`
 	ToNode    string    `json:"to_node"`
-	EdgeLabel string    `json:"edge_label"`
+	EdgeLabel string    `json:"edge_label,omitempty"`
+	Condition string    `json:"condition,omitempty"`
 	Reason    string    `json:"reason"`
 	DecidedAt time.Time `json:"decided_at"`
 }
 
 // GetEdgeDecisions returns all edge decisions for a run.
 func (d *DB) GetEdgeDecisions(runID string) ([]EdgeDecisionSummary, error) {
-	rows, err := d.db.Query(`SELECT from_node, to_node, edge_label, reason, decided_at
+	rows, err := d.db.Query(`SELECT from_node, to_node, edge_label, COALESCE(condition, ''), reason, decided_at
 		FROM edge_decisions WHERE run_id = ? ORDER BY id ASC`, runID)
 	if err != nil {
 		return nil, err
@@ -255,7 +256,7 @@ func (d *DB) GetEdgeDecisions(runID string) ([]EdgeDecisionSummary, error) {
 	for rows.Next() {
 		var e EdgeDecisionSummary
 		var decidedAt string
-		if err := rows.Scan(&e.FromNode, &e.ToNode, &e.EdgeLabel, &e.Reason, &decidedAt); err != nil {
+		if err := rows.Scan(&e.FromNode, &e.ToNode, &e.EdgeLabel, &e.Condition, &e.Reason, &decidedAt); err != nil {
 			return nil, err
 		}
 		e.DecidedAt, _ = time.Parse(time.RFC3339Nano, decidedAt)

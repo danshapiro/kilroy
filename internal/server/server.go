@@ -55,6 +55,7 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("GET /runs/{id}/context", s.handleGetContext)
 	mux.HandleFunc("GET /runs/{id}/outputs", s.handleGetRunOutputs)
 	mux.HandleFunc("GET /runs/{id}/outputs/{name...}", s.handleDownloadOutput)
+	mux.HandleFunc("GET /runs/{id}/nodes/{nodeId}/turns", s.handleGetNodeTurns)
 	mux.HandleFunc("GET /runs/{id}/questions", s.handleGetQuestions)
 	mux.HandleFunc("POST /runs/{id}/questions/{qid}/answer", s.handleAnswerQuestion)
 

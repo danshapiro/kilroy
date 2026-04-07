@@ -138,6 +138,82 @@ func (s *Server) handleDownloadOutput(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func (s *Server) handleGetNodeTurns(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	nodeId := r.PathValue("nodeId")
+	if id == "" || nodeId == "" {
+		writeError(w, http.StatusBadRequest, "run_id and nodeId are required")
+		return
+	}
+
+	// Resolve logs_root.
+	var logsRoot string
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err == nil {
+		defer db.Close()
+		run, err := db.GetRun(id)
+		if err == nil && run != nil {
+			logsRoot = run.LogsRoot
+		}
+	}
+	if logsRoot == "" {
+		if p, ok := s.registry.Get(id); ok && p != nil {
+			logsRoot = p.LogsRoot
+		}
+	}
+	if logsRoot == "" {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+
+	stageDir := filepath.Join(logsRoot, nodeId)
+	if _, err := os.Stat(stageDir); err != nil {
+		writeError(w, http.StatusNotFound, "node directory not found: "+nodeId)
+		return
+	}
+
+	result := map[string]any{
+		"node_id": nodeId,
+		"run_id":  id,
+	}
+
+	// Read prompt.
+	if data, err := os.ReadFile(filepath.Join(stageDir, "prompt.md")); err == nil {
+		result["prompt"] = string(data)
+	}
+
+	// Read response (agent output).
+	if data, err := os.ReadFile(filepath.Join(stageDir, "response.md")); err == nil {
+		result["response"] = string(data)
+	}
+
+	// Read status.json for outcome details.
+	if data, err := os.ReadFile(filepath.Join(stageDir, "status.json")); err == nil {
+		var status map[string]any
+		if json.Unmarshal(data, &status) == nil {
+			result["status"] = status
+		}
+	}
+
+	// Read stdout/stderr for tool nodes.
+	if data, err := os.ReadFile(filepath.Join(stageDir, "stdout.log")); err == nil {
+		result["stdout"] = string(data)
+	}
+	if data, err := os.ReadFile(filepath.Join(stageDir, "stderr.log")); err == nil {
+		result["stderr"] = string(data)
+	}
+
+	// Read tool_timing.json if present.
+	if data, err := os.ReadFile(filepath.Join(stageDir, "tool_timing.json")); err == nil {
+		var timing map[string]any
+		if json.Unmarshal(data, &timing) == nil {
+			result["timing"] = timing
+		}
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
 func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {
 	// Scan known workflow package directories.
 	searchDirs := []string{"workflows"}

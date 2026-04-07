@@ -49,8 +49,8 @@ func (d *DB) RecordNodeComplete(id int64, status, failureReason, failureClass, p
 }
 
 // RecordEdgeDecision satisfies engine.RunDBWriter. Delegates to InsertEdgeDecision.
-func (d *DB) RecordEdgeDecision(runID, fromNode, toNode, edgeLabel, reason string) error {
-	return d.InsertEdgeDecision(runID, fromNode, toNode, edgeLabel, reason)
+func (d *DB) RecordEdgeDecision(runID, fromNode, toNode, edgeLabel, condition, reason string) error {
+	return d.InsertEdgeDecision(runID, fromNode, toNode, edgeLabel, condition, reason)
 }
 
 // RecordProviderSelection satisfies engine.RunDBWriter. Delegates to InsertProviderSelection.
@@ -127,12 +127,12 @@ func (d *DB) CompleteNode(id int64, status, failureReason, failureClass, preferr
 }
 
 // InsertEdgeDecision records an edge selection decision.
-func (d *DB) InsertEdgeDecision(runID, fromNode, toNode, edgeLabel, reason string) error {
+func (d *DB) InsertEdgeDecision(runID, fromNode, toNode, edgeLabel, condition, reason string) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := d.db.Exec(`INSERT INTO edge_decisions
-		(run_id, from_node, to_node, edge_label, reason, decided_at)
-		VALUES (?, ?, ?, ?, ?, ?)`,
-		runID, fromNode, toNode, edgeLabel, reason, now)
+		(run_id, from_node, to_node, edge_label, condition, reason, decided_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		runID, fromNode, toNode, edgeLabel, condition, reason, now)
 	return err
 }
 

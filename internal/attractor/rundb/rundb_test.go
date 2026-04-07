@@ -158,7 +158,7 @@ func TestEdgeDecision(t *testing.T) {
 	db := openTestDB(t)
 	_ = db.InsertRun(RunRecord{RunID: "run-004", Status: "running", StartedAt: time.Now()})
 
-	err := db.InsertEdgeDecision("run-004", "a", "b", "success", "condition_match")
+	err := db.InsertEdgeDecision("run-004", "a", "b", "success", "outcome=success", "condition_match")
 	if err != nil {
 		t.Fatalf("InsertEdgeDecision: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestCascadeDelete_NodesDeletedWithRun(t *testing.T) {
 	db := openTestDB(t)
 	_ = db.InsertRun(RunRecord{RunID: "r1", Status: "success", StartedAt: time.Now()})
 	_, _ = db.InsertNodeStart("r1", "a", 1, "tool")
-	_ = db.InsertEdgeDecision("r1", "start", "a", "", "lexical")
+	_ = db.InsertEdgeDecision("r1", "start", "a", "", "", "lexical")
 
 	// Delete the run.
 	_, err := db.SQL().Exec("DELETE FROM runs WHERE run_id = 'r1'")

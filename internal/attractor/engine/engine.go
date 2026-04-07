@@ -890,7 +890,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			}, nil
 		}
 		next := nextHop.Edge
-		e.rundbRecordEdgeDecision(node.ID, next.To, next.Label(), nextHop.SelectionMeta.Method)
+		e.rundbRecordEdgeDecision(node.ID, next.To, next.Label(), next.Condition(), nextHop.SelectionMeta.Method)
 		e.appendProgress(map[string]any{
 			"event":                "edge_selected",
 			"from_node":            node.ID,
