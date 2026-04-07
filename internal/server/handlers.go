@@ -243,13 +243,17 @@ func (s *Server) handleGetPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try live registry first.
+	// Try live registry first — but only for actively running pipelines.
+	// Completed runs get richer data from the DB (nodes, edges, providers).
 	if ps, ok := s.registry.Get(runID); ok {
-		writeJSON(w, http.StatusOK, ps.Status())
-		return
+		status := ps.Status()
+		if status.State == "running" {
+			writeJSON(w, http.StatusOK, status)
+			return
+		}
 	}
 
-	// Fall back to RunDB for completed runs.
+	// Fall back to RunDB for completed (or registry-completed) runs.
 	db, err := rundb.Open(rundb.DefaultPath())
 	if err != nil {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("run %s not found", runID))
