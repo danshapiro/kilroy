@@ -13,6 +13,7 @@ const (
 	stageLogsDirEnvKey   = "KILROY_STAGE_LOGS_DIR"
 	worktreeDirEnvKey    = "KILROY_WORKTREE_DIR"
 	inputsManifestEnvKey = "KILROY_INPUTS_MANIFEST_PATH"
+	dataDirEnvKey        = "KILROY_DATA_DIR"
 )
 
 var baseNodeEnvStripKeys = []string{
@@ -25,6 +26,7 @@ var baseNodeEnvStripKeys = []string{
 	inputsManifestEnvKey,
 	stageStatusPathEnvKey,
 	stageStatusFallbackPathEnvKey,
+	dataDirEnvKey,
 }
 
 // buildBaseNodeEnv constructs the base environment for any node execution.
@@ -84,6 +86,7 @@ func BuildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
 	}
 	if worktree := strings.TrimSpace(execCtx.WorktreeDir); worktree != "" {
 		out[worktreeDirEnvKey] = worktree
+		out[dataDirEnvKey] = filepath.Join(worktree, kilroyDir)
 	}
 	// Add structured input env vars (KILROY_INPUT_*).
 	if execCtx.Engine != nil {
@@ -122,13 +125,18 @@ func buildStageRuntimePreamble(execCtx *Execution, nodeID string) string {
 	if runID == "" && logsRoot == "" && stageDir == "" && worktree == "" && strings.TrimSpace(nodeID) == "" {
 		return ""
 	}
+	dataDir := ""
+	if worktree != "" {
+		dataDir = filepath.Join(worktree, kilroyDir)
+	}
 	return strings.TrimSpace(
 		"Execution context:\n" +
 			"- $" + runIDEnvKey + "=" + runID + "\n" +
 			"- $" + logsRootEnvKey + "=" + logsRoot + "\n" +
 			"- $" + stageLogsDirEnvKey + "=" + stageDir + "\n" +
 			"- $" + worktreeDirEnvKey + "=" + worktree + "\n" +
-			"- $" + nodeIDEnvKey + "=" + strings.TrimSpace(nodeID) + "\n",
+			"- $" + nodeIDEnvKey + "=" + strings.TrimSpace(nodeID) + "\n" +
+			"- $" + dataDirEnvKey + "=" + dataDir + "\n",
 	)
 }
 

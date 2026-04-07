@@ -505,6 +505,15 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 			return nil, fmt.Errorf("materialize package: %w", err)
 		}
 	}
+	// Create .kilroy/ convention directory and write INPUT.md.
+	if err := initKilroyDir(e.WorktreeDir); err != nil {
+		e.Warn("create .kilroy/ directory: " + err.Error())
+	} else {
+		if err := writeInputMD(e.WorktreeDir, e.Options.Inputs); err != nil {
+			e.Warn("write INPUT.md: " + err.Error())
+		}
+		ensureGitignoreKilroy(e.WorktreeDir)
+	}
 	if err := e.materializeRunStartupInputs(ctx); err != nil {
 		return nil, err
 	}
@@ -690,6 +699,9 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 				Warnings:       e.warningsCopy(),
 			}, nil
 		}
+
+		// Write .kilroy/ convention files before node execution.
+		e.writeKilroyPreNodeFiles(node, completed, nodeOutcomes)
 
 		e.cxdbStageStarted(ctx, node)
 		nodeDBID := e.rundbRecordNodeStart(node.ID, nodeRetries[node.ID]+1, resolvedHandlerTypeName(e, node.ID))
@@ -1293,6 +1305,9 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 	// postmortem), preserve its prior output under visit_N/ before overwriting.
 	archivePriorVisitDir(stageDir)
 
+	// Clear any stale FEEDBACK.md from previous nodes before first attempt.
+	clearFeedbackMD(e.WorktreeDir)
+
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
 		// Before running attempt N>1, archive the previous attempt's files into
 		// attempt_{N-1}/ so they survive when executeNode overwrites them.
@@ -1398,6 +1413,10 @@ func (e *Engine) executeWithRetry(ctx context.Context, node *model.Node, retries
 		e.cxdbStageFailed(ctx, node, out.FailureReason, willRetry, attempt)
 		if canRetry {
 			retries[node.ID]++
+			// Write FEEDBACK.md so the next attempt can see why the previous failed.
+			if err := writeFeedbackMD(e.WorktreeDir, node.ID, out.FailureReason, attempt, ""); err != nil {
+				e.Warn("write FEEDBACK.md: " + err.Error())
+			}
 			// Spec §5.1: update built-in context key internal.retry_count.<node_id> on each retry.
 			e.Context.Set(fmt.Sprintf("internal.retry_count.%s", node.ID), retries[node.ID])
 			delay := backoffDelayForNode(e.Options.RunID, e.Graph, node, attempt)
