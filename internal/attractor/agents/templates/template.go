@@ -10,7 +10,7 @@ import (
 type Template struct {
 	Name            string // tool name (e.g. "claude", "codex")
 	Binary          string // executable name
-	BuildArgs       func(prompt, workDir string) []string
+	BuildArgs       func(prompt, workDir, model string) []string
 	BuildEnv        func() map[string]string
 	PromptPrefix    string          // prompt prefix for readiness detection
 	BusyIndicators  []string        // strings indicating the agent is busy
@@ -36,8 +36,8 @@ type StartupDialog struct {
 }
 
 // BuildCommand constructs the full command string for the template.
-func (t *Template) BuildCommand(prompt, workDir string) string {
-	args := t.BuildArgs(prompt, workDir)
+func (t *Template) BuildCommand(prompt, workDir, model string) string {
+	args := t.BuildArgs(prompt, workDir, model)
 	// Simple shell-safe joining for the tmux respawn-pane command.
 	parts := make([]string, 0, len(args)+1)
 	parts = append(parts, t.Binary)

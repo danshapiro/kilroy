@@ -84,8 +84,11 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 		}
 	}
 
+	// Resolve model from node attributes.
+	modelID := strings.TrimSpace(node.Attr("llm_model", ""))
+
 	// Build and write the command.
-	command := tmpl.BuildCommand(prompt, exec.WorktreeDir)
+	command := tmpl.BuildCommand(prompt, exec.WorktreeDir, modelID)
 	stageDir := filepath.Join(exec.LogsRoot, node.ID)
 	_ = os.MkdirAll(stageDir, 0o755)
 	_ = os.WriteFile(filepath.Join(stageDir, "tmux_command.txt"), []byte(command), 0o644)

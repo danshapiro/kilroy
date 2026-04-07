@@ -56,7 +56,7 @@ func fakeAgentTemplate(scriptPath string) templates.Template {
 	return templates.Template{
 		Name:   "fake",
 		Binary: scriptPath,
-		BuildArgs: func(prompt, workDir string) []string {
+		BuildArgs: func(prompt, workDir, model string) []string {
 			return []string{prompt}
 		},
 		BuildEnv: func() map[string]string {

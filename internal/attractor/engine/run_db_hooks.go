@@ -92,10 +92,14 @@ func (e *Engine) rundbRecordProviderIfAgent(nodeID string, attempt int) {
 	}
 	provider := node.Attrs["llm_provider"]
 	model := node.Attrs["llm_model"]
-	if provider == "" && model == "" {
+	agentTool := node.Attrs["agent_tool"]
+	if provider == "" && model == "" && agentTool == "" {
 		return
 	}
-	backend := node.Attrs["backend"]
+	backend := agentTool
+	if backend == "" {
+		backend = node.Attrs["backend"]
+	}
 	if backend == "" {
 		backend = "cli"
 	}

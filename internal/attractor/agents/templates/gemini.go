@@ -11,11 +11,13 @@ func Gemini() Template {
 	return Template{
 		Name:   "gemini",
 		Binary: "gemini",
-		BuildArgs: func(prompt, workDir string) []string {
-			return []string{
-				"--auto-accept-all",
-				prompt,
+		BuildArgs: func(prompt, workDir, model string) []string {
+			args := []string{"--auto-accept-all"}
+			if model != "" {
+				args = append(args, "--model", model)
 			}
+			args = append(args, prompt)
+			return args
 		},
 		BuildEnv: func() map[string]string {
 			env := map[string]string{}

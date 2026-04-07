@@ -14,12 +14,13 @@ func Claude() Template {
 		Name:       "claude",
 		Binary:     "claude",
 		LogLocator: &agentlog.ClaudeLogLocator{},
-		BuildArgs: func(prompt, workDir string) []string {
-			return []string{
-				"--dangerously-skip-permissions",
-				"--print",
-				prompt,
+		BuildArgs: func(prompt, workDir, model string) []string {
+			args := []string{"--dangerously-skip-permissions", "--print"}
+			if model != "" {
+				args = append(args, "--model", model)
 			}
+			args = append(args, prompt)
+			return args
 		},
 		BuildEnv: func() map[string]string {
 			env := map[string]string{}

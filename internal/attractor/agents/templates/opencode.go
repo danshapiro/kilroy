@@ -14,7 +14,8 @@ func OpenCode() Template {
 		Name:       "opencode",
 		Binary:     "opencode",
 		LogLocator: &agentlog.OpenCodeLogLocator{},
-		BuildArgs: func(prompt, workDir string) []string {
+		BuildArgs: func(prompt, workDir, model string) []string {
+			// opencode model is configured via environment, not CLI flag.
 			return []string{"run", prompt}
 		},
 		BuildEnv: func() map[string]string {

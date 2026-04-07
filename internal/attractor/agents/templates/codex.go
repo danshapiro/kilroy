@@ -14,11 +14,13 @@ func Codex() Template {
 		Name:       "codex",
 		Binary:     "codex",
 		LogLocator: &agentlog.CodexLogLocator{},
-		BuildArgs: func(prompt, workDir string) []string {
-			return []string{
-				"--full-auto",
-				prompt,
+		BuildArgs: func(prompt, workDir, model string) []string {
+			args := []string{"--full-auto"}
+			if model != "" {
+				args = append(args, "--model", model)
 			}
+			args = append(args, prompt)
+			return args
 		},
 		BuildEnv: func() map[string]string {
 			env := map[string]string{}
