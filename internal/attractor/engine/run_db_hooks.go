@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
@@ -120,6 +121,15 @@ func (e *Engine) recordNodeDiff(nodeID string, attempt int, beforeSHA, afterSHA 
 	}
 	if err := e.RunDB.RecordNodeDiff(e.Options.RunID, nodeID, attempt, beforeSHA, afterSHA, filesChanged, insertions, deletions); err != nil {
 		e.Warn("rundb: record node diff: " + err.Error())
+	}
+	if e.RunLog != nil && filesChanged > 0 {
+		e.RunLog.Info("git", nodeID, "commit", fmt.Sprintf("%d files changed (+%d/-%d) %s", filesChanged, insertions, deletions, afterSHA[:minInt(8, len(afterSHA))]), map[string]any{
+			"before_sha":    beforeSHA,
+			"after_sha":     afterSHA,
+			"files_changed": filesChanged,
+			"insertions":    insertions,
+			"deletions":     deletions,
+		})
 	}
 }
 

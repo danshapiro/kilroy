@@ -495,6 +495,11 @@ func (e *Engine) run(ctx context.Context) (res *Result, err error) {
 		if err := e.GitOps.SetupRunWorkspace(e.Options.RepoPath, e.WorktreeDir, e.RunBranch, e.baseSHA); err != nil {
 			return nil, err
 		}
+		e.RunLog.Info("git", "", "worktree.created", fmt.Sprintf("Worktree: %s (branch: %s)", e.WorktreeDir, e.RunBranch), map[string]any{
+			"path":     e.WorktreeDir,
+			"branch":   e.RunBranch,
+			"base_sha": e.baseSHA,
+		})
 		// Copy gitignored files (e.g. .env, secrets, local configs) from the
 		// source repo into the run worktree.
 		if err := e.GitOps.CopyIgnoredFiles(e.Options.RepoPath, e.WorktreeDir); err != nil {
