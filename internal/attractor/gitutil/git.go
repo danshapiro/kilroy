@@ -200,6 +200,54 @@ func DiffNameOnly(dir, baseRef string) ([]string, error) {
 	return files, nil
 }
 
+// DiffStat returns the number of files changed, insertions, and deletions
+// between two commits using git diff --stat.
+func DiffStat(dir, fromSHA, toSHA string) (filesChanged, insertions, deletions int, err error) {
+	out, _, err := runGit(dir, "diff", "--shortstat", fromSHA+".."+toSHA)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	f, i, d := parseShortstat(strings.TrimSpace(out))
+	return f, i, d, nil
+}
+
+// Diff returns the full unified diff between two commits.
+func Diff(dir, fromSHA, toSHA string) (string, error) {
+	out, _, err := runGit(dir, "diff", fromSHA+".."+toSHA)
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+// DiffFileList returns per-file status and stats between two commits.
+func DiffFileList(dir, fromSHA, toSHA string) (string, error) {
+	out, _, err := runGit(dir, "diff", "--numstat", "--diff-filter=ACDMR", fromSHA+".."+toSHA)
+	if err != nil {
+		return "", err
+	}
+	return out, nil
+}
+
+// parseShortstat extracts file/insertion/deletion counts from git diff --shortstat output.
+// Example: " 3 files changed, 47 insertions(+), 12 deletions(-)"
+func parseShortstat(s string) (filesChanged, insertions, deletions int) {
+	if s == "" {
+		return 0, 0, 0
+	}
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		if strings.Contains(part, "file") {
+			fmt.Sscanf(part, "%d", &filesChanged)
+		} else if strings.Contains(part, "insertion") {
+			fmt.Sscanf(part, "%d", &insertions)
+		} else if strings.Contains(part, "deletion") {
+			fmt.Sscanf(part, "%d", &deletions)
+		}
+	}
+	return
+}
+
 func ensureUserIdentity(worktreeDir string) error {
 	name, _, err := runGit(worktreeDir, "config", "--get", "user.name")
 	if err != nil {

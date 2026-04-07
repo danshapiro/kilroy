@@ -105,6 +105,24 @@ func (e *Engine) rundbRecordProviderIfAgent(nodeID string, attempt int) {
 	}
 }
 
+func (e *Engine) recordNodeDiff(nodeID string, attempt int, beforeSHA, afterSHA string) {
+	if e == nil || e.RunDB == nil || e.GitOps == nil {
+		return
+	}
+	beforeSHA = strings.TrimSpace(beforeSHA)
+	afterSHA = strings.TrimSpace(afterSHA)
+	if beforeSHA == "" || afterSHA == "" || beforeSHA == afterSHA {
+		return
+	}
+	filesChanged, insertions, deletions, err := e.GitOps.DiffStat(e.WorktreeDir, beforeSHA, afterSHA)
+	if err != nil {
+		e.Warn("rundb: diffstat for node " + nodeID + ": " + err.Error())
+	}
+	if err := e.RunDB.RecordNodeDiff(e.Options.RunID, nodeID, attempt, beforeSHA, afterSHA, filesChanged, insertions, deletions); err != nil {
+		e.Warn("rundb: record node diff: " + err.Error())
+	}
+}
+
 // resolvedHandlerTypeName returns the handler type string for a node.
 func resolvedHandlerTypeName(e *Engine, nodeID string) string {
 	if e == nil || e.Graph == nil || e.Registry == nil {

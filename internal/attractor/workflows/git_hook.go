@@ -107,3 +107,7 @@ func (g *GitHook) PushBranch(repoPath, remote, branch string) error {
 func (g *GitHook) RemoveWorktree(repoPath, worktreeDir string) error {
 	return gitutil.RemoveWorktree(repoPath, worktreeDir)
 }
+
+func (g *GitHook) DiffStat(dir, fromSHA, toSHA string) (filesChanged, insertions, deletions int, err error) {
+	return gitutil.DiffStat(dir, fromSHA, toSHA)
+}

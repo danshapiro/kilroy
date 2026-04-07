@@ -294,6 +294,96 @@ func (d *DB) GetProviderSelections(runID string) ([]ProviderSelectionSummary, er
 	return results, nil
 }
 
+// NodeDiffSummary is a read-only view of a node's git diff.
+type NodeDiffSummary struct {
+	NodeID       string    `json:"node_id"`
+	Attempt      int       `json:"attempt"`
+	BeforeSHA    string    `json:"before_sha"`
+	AfterSHA     string    `json:"after_sha"`
+	FilesChanged *int      `json:"files_changed,omitempty"`
+	Insertions   *int      `json:"insertions,omitempty"`
+	Deletions    *int      `json:"deletions,omitempty"`
+	RecordedAt   time.Time `json:"recorded_at"`
+}
+
+// GetNodeDiffs returns all node diffs for a run.
+func (d *DB) GetNodeDiffs(runID string) ([]NodeDiffSummary, error) {
+	rows, err := d.db.Query(`SELECT node_id, attempt, before_sha, after_sha,
+		files_changed, insertions, deletions, recorded_at
+		FROM node_diffs WHERE run_id = ? ORDER BY id ASC`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var results []NodeDiffSummary
+	for rows.Next() {
+		var n NodeDiffSummary
+		var recordedAt string
+		var filesChanged, insertions, deletions sql.NullInt64
+		if err := rows.Scan(&n.NodeID, &n.Attempt, &n.BeforeSHA, &n.AfterSHA,
+			&filesChanged, &insertions, &deletions, &recordedAt); err != nil {
+			return nil, err
+		}
+		n.RecordedAt, _ = time.Parse(time.RFC3339Nano, recordedAt)
+		if filesChanged.Valid {
+			v := int(filesChanged.Int64)
+			n.FilesChanged = &v
+		}
+		if insertions.Valid {
+			v := int(insertions.Int64)
+			n.Insertions = &v
+		}
+		if deletions.Valid {
+			v := int(deletions.Int64)
+			n.Deletions = &v
+		}
+		results = append(results, n)
+	}
+	return results, nil
+}
+
+// GetNodeDiff returns the diff for a specific node and attempt.
+// If attempt is 0, returns the latest attempt.
+func (d *DB) GetNodeDiff(runID, nodeID string, attempt int) (*NodeDiffSummary, error) {
+	var q string
+	var args []any
+	if attempt > 0 {
+		q = `SELECT node_id, attempt, before_sha, after_sha, files_changed, insertions, deletions, recorded_at
+			FROM node_diffs WHERE run_id = ? AND node_id = ? AND attempt = ?`
+		args = []any{runID, nodeID, attempt}
+	} else {
+		q = `SELECT node_id, attempt, before_sha, after_sha, files_changed, insertions, deletions, recorded_at
+			FROM node_diffs WHERE run_id = ? AND node_id = ? ORDER BY attempt DESC LIMIT 1`
+		args = []any{runID, nodeID}
+	}
+	row := d.db.QueryRow(q, args...)
+	var n NodeDiffSummary
+	var recordedAt string
+	var filesChanged, insertions, deletions sql.NullInt64
+	if err := row.Scan(&n.NodeID, &n.Attempt, &n.BeforeSHA, &n.AfterSHA,
+		&filesChanged, &insertions, &deletions, &recordedAt); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	n.RecordedAt, _ = time.Parse(time.RFC3339Nano, recordedAt)
+	if filesChanged.Valid {
+		v := int(filesChanged.Int64)
+		n.FilesChanged = &v
+	}
+	if insertions.Valid {
+		v := int(insertions.Int64)
+		n.Insertions = &v
+	}
+	if deletions.Valid {
+		v := int(deletions.Int64)
+		n.Deletions = &v
+	}
+	return &n, nil
+}
+
 // GetDotSource returns the stored DOT source for a run, if available.
 func (d *DB) GetDotSource(runID string) string {
 	var src string

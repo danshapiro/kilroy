@@ -145,3 +145,12 @@ func (d *DB) InsertProviderSelection(runID, nodeID string, attempt int, provider
 		runID, nodeID, attempt, provider, model, backend, now)
 	return err
 }
+
+// RecordNodeDiff records the git diff for a node execution.
+func (d *DB) RecordNodeDiff(runID, nodeID string, attempt int, beforeSHA, afterSHA string, filesChanged, insertions, deletions int) error {
+	_, err := d.db.Exec(`INSERT INTO node_diffs
+		(run_id, node_id, attempt, before_sha, after_sha, files_changed, insertions, deletions)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		runID, nodeID, attempt, beforeSHA, afterSHA, filesChanged, insertions, deletions)
+	return err
+}

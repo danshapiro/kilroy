@@ -11,4 +11,5 @@ type RunDBWriter interface {
 	RecordNodeComplete(id int64, status, failureReason, failureClass, preferredLabel, notes string, contextUpdates map[string]any) error
 	RecordEdgeDecision(runID, fromNode, toNode, edgeLabel, condition, reason string) error
 	RecordProviderSelection(runID, nodeID string, attempt int, provider, model, backend string) error
+	RecordNodeDiff(runID, nodeID string, attempt int, beforeSHA, afterSHA string, filesChanged, insertions, deletions int) error
 }

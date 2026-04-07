@@ -700,6 +700,12 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			}, nil
 		}
 
+		// Capture git HEAD before node execution for diff tracking.
+		var beforeSHA string
+		if e.GitOps != nil {
+			beforeSHA, _ = e.GitOps.HeadSHA(e.WorktreeDir)
+		}
+
 		// Write .kilroy/ convention files before node execution.
 		e.writeKilroyPreNodeFiles(node, completed, nodeOutcomes)
 
@@ -777,6 +783,9 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		}
 		e.lastCheckpointSHA = sha
 		e.cxdbCheckpointSaved(ctx, node.ID, out.Status, sha)
+
+		// Record git diff for this node if SHAs differ.
+		e.recordNodeDiff(node.ID, nodeRetries[node.ID]+1, beforeSHA, sha)
 
 		// Kilroy v1: explicit parallel nodes control the next hop via context.
 		isExplicitParallel := false

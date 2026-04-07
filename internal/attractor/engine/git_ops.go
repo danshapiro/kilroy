@@ -60,4 +60,8 @@ type GitOps interface {
 
 	// RemoveWorktree cleans up a worktree directory.
 	RemoveWorktree(repoPath, worktreeDir string) error
+
+	// DiffStat returns the number of files changed, insertions, and deletions
+	// between two commits. Used for recording per-node diff statistics.
+	DiffStat(dir, fromSHA, toSHA string) (filesChanged, insertions, deletions int, err error)
 }
