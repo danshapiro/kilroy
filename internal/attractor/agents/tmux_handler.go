@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/danshapiro/kilroy/internal/attractor/agents/agentlog"
 	"github.com/danshapiro/kilroy/internal/attractor/agents/templates"
 	"github.com/danshapiro/kilroy/internal/attractor/agents/tmux"
 	"github.com/danshapiro/kilroy/internal/attractor/engine"
@@ -103,6 +104,7 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 	}
 
 	// Create tmux session.
+	sessionStartTime := time.Now()
 	session, err := h.Tmux.CreateSession(sessionName, exec.WorktreeDir, command, env)
 	if err != nil {
 		return runtime.Outcome{
@@ -146,6 +148,11 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 	exitCode := h.Tmux.PaneExitStatus(sessionName)
 	if strings.TrimSpace(output) != "" {
 		_ = os.WriteFile(filepath.Join(stageDir, "response.md"), []byte(output), 0o644)
+	}
+
+	// Parse agent conversation log and emit RunLog events.
+	if exec.Engine != nil && exec.Engine.RunLog != nil && tmpl.LogLocator != nil {
+		h.emitAgentLogEvents(exec, node.ID, tmpl, sessionStartTime)
 	}
 
 	// Clean up session.
@@ -199,6 +206,30 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 			"last_response": engine.Truncate(output, 200),
 		},
 	}, nil
+}
+
+// emitAgentLogEvents finds and parses the agent's conversation log, emitting events to RunLog.
+func (h *TmuxAgentHandler) emitAgentLogEvents(exec *engine.Execution, nodeID string, tmpl *templates.Template, startedAfter time.Time) {
+	logPath, err := tmpl.LogLocator.FindLog(exec.WorktreeDir, startedAfter)
+	if err != nil {
+		exec.Engine.RunLog.Warn("agent", nodeID, "agent.log_not_found", fmt.Sprintf("Agent log not found: %v", err))
+		return
+	}
+
+	parser := agentlog.ParserForTool(tmpl.Name)
+	if parser == nil {
+		return
+	}
+
+	events, err := parser(logPath)
+	if err != nil {
+		exec.Engine.RunLog.Warn("agent", nodeID, "agent.log_parse_error", fmt.Sprintf("Parse agent log: %v", err))
+		return
+	}
+
+	for _, ev := range events {
+		exec.Engine.RunLog.Info("agent", nodeID, ev.Type, ev.Message, ev.Data)
+	}
 }
 
 // handleStartupDialog polls for a startup dialog and dismisses it.

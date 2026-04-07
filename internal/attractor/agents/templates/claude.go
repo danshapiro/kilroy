@@ -4,13 +4,16 @@ package templates
 import (
 	"os"
 	"time"
+
+	"github.com/danshapiro/kilroy/internal/attractor/agents/agentlog"
 )
 
 // Claude returns an invocation template for Claude Code (--print mode).
 func Claude() Template {
 	return Template{
-		Name:   "claude",
-		Binary: "claude",
+		Name:       "claude",
+		Binary:     "claude",
+		LogLocator: &agentlog.ClaudeLogLocator{},
 		BuildArgs: func(prompt, workDir string) []string {
 			return []string{
 				"--dangerously-skip-permissions",

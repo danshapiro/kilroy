@@ -18,6 +18,14 @@ type Template struct {
 	ExitsOnComplete bool            // true if tool exits after finishing (e.g. --print mode)
 	StartupDialogs  []StartupDialog // dialogs to dismiss at startup
 	StartupTimeout  time.Duration   // max time to wait for initial readiness
+	LogLocator      LogLocator      // finds the CLI tool's conversation log after execution
+}
+
+// LogLocator finds and parses the conversation log written by a CLI tool.
+type LogLocator interface {
+	// FindLog returns the path to the most recent conversation log
+	// for an execution that started at startedAfter in the given workDir.
+	FindLog(workDir string, startedAfter time.Time) (string, error)
 }
 
 // StartupDialog describes an interactive dialog that must be dismissed at startup.

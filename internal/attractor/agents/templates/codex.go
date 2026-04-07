@@ -4,13 +4,16 @@ package templates
 import (
 	"os"
 	"time"
+
+	"github.com/danshapiro/kilroy/internal/attractor/agents/agentlog"
 )
 
 // Codex returns an invocation template for OpenAI Codex CLI.
 func Codex() Template {
 	return Template{
-		Name:   "codex",
-		Binary: "codex",
+		Name:       "codex",
+		Binary:     "codex",
+		LogLocator: &agentlog.CodexLogLocator{},
 		BuildArgs: func(prompt, workDir string) []string {
 			return []string{
 				"--full-auto",

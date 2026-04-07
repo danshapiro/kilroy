@@ -4,13 +4,16 @@ package templates
 import (
 	"os"
 	"time"
+
+	"github.com/danshapiro/kilroy/internal/attractor/agents/agentlog"
 )
 
 // OpenCode returns an invocation template for the opencode CLI.
 func OpenCode() Template {
 	return Template{
-		Name:   "opencode",
-		Binary: "opencode",
+		Name:       "opencode",
+		Binary:     "opencode",
+		LogLocator: &agentlog.OpenCodeLogLocator{},
 		BuildArgs: func(prompt, workDir string) []string {
 			return []string{"run", prompt}
 		},
