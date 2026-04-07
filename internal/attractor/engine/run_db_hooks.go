@@ -81,6 +81,30 @@ func (e *Engine) rundbRecordEdgeDecision(fromNode, toNode, edgeLabel, reason str
 	}
 }
 
+func (e *Engine) rundbRecordProviderIfAgent(nodeID string, attempt int) {
+	if e == nil || e.RunDB == nil || e.Graph == nil {
+		return
+	}
+	node := e.Graph.Nodes[nodeID]
+	if node == nil {
+		return
+	}
+	provider := node.Attrs["llm_provider"]
+	model := node.Attrs["llm_model"]
+	if provider == "" && model == "" {
+		return
+	}
+	backend := node.Attrs["backend"]
+	if backend == "" {
+		backend = "cli"
+	}
+	if err := e.RunDB.RecordProviderSelection(
+		e.Options.RunID, nodeID, attempt, provider, model, backend,
+	); err != nil {
+		e.Warn("rundb: record provider selection: " + err.Error())
+	}
+}
+
 // resolvedHandlerTypeName returns the handler type string for a node.
 func resolvedHandlerTypeName(e *Engine, nodeID string) string {
 	if e == nil || e.Graph == nil || e.Registry == nil {

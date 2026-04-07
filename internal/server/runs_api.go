@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/danshapiro/kilroy/internal/attractor/rundb"
@@ -81,6 +82,60 @@ func (s *Server) handleGetRunOutputs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"outputs": outputs,
 	})
+}
+
+func (s *Server) handleDownloadOutput(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	name := r.PathValue("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "output name is required")
+		return
+	}
+
+	// Resolve logs_root from DB.
+	var logsRoot string
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err == nil {
+		defer db.Close()
+		run, err := db.GetRun(id)
+		if err == nil && run != nil {
+			logsRoot = run.LogsRoot
+		}
+	}
+	if logsRoot == "" {
+		if p, ok := s.registry.Get(id); ok && p != nil {
+			logsRoot = p.LogsRoot
+		}
+	}
+	if logsRoot == "" {
+		writeError(w, http.StatusNotFound, "run not found")
+		return
+	}
+
+	// Serve from outputs/ directory. Sanitize the name to prevent traversal.
+	clean := filepath.Clean(name)
+	if strings.Contains(clean, "..") {
+		writeError(w, http.StatusBadRequest, "invalid output name")
+		return
+	}
+
+	outputPath := filepath.Join(logsRoot, "outputs", clean)
+	data, err := os.ReadFile(outputPath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "output not found: "+name)
+		return
+	}
+
+	// Detect content type.
+	if strings.HasSuffix(name, ".json") {
+		w.Header().Set("Content-Type", "application/json")
+	} else if strings.HasSuffix(name, ".md") {
+		w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	} else {
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
+	w.WriteHeader(http.StatusOK)
+	w.Write(data)
 }
 
 func (s *Server) handleListWorkflows(w http.ResponseWriter, r *http.Request) {

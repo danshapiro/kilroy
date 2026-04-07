@@ -693,6 +693,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 
 		e.cxdbStageStarted(ctx, node)
 		nodeDBID := e.rundbRecordNodeStart(node.ID, nodeRetries[node.ID]+1, resolvedHandlerTypeName(e, node.ID))
+		e.rundbRecordProviderIfAgent(node.ID, nodeRetries[node.ID]+1)
 		out, err := e.executeWithRetry(ctx, node, nodeRetries)
 		if err != nil {
 			return nil, err

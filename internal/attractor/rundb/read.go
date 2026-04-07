@@ -15,20 +15,20 @@ import (
 type RunSummary struct {
 	RunID         string            `json:"run_id"`
 	GraphName     string            `json:"graph_name"`
-	Goal          string            `json:"goal"`
+	Goal          string            `json:"goal,omitempty"`
 	Status        string            `json:"status"`
-	LogsRoot      string            `json:"logs_root"`
-	WorktreeDir   string            `json:"worktree_dir"`
-	RunBranch     string            `json:"run_branch"`
-	RepoPath      string            `json:"repo_path"`
+	LogsRoot      string            `json:"logs_root,omitempty"`
+	WorktreeDir   string            `json:"worktree_dir,omitempty"`
+	RunBranch     string            `json:"run_branch,omitempty"`
+	RepoPath      string            `json:"repo_path,omitempty"`
 	StartedAt     time.Time         `json:"started_at"`
-	CompletedAt   *time.Time        `json:"completed_at"`
-	DurationMS    *int64            `json:"duration_ms"`
-	FinalSHA      string            `json:"final_sha"`
-	FailureReason string            `json:"failure_reason"`
-	Labels        map[string]string `json:"labels"`
-	Inputs        map[string]any    `json:"inputs"`
-	Warnings      []string          `json:"warnings"`
+	CompletedAt   *time.Time        `json:"completed_at,omitempty"`
+	DurationMS    *int64            `json:"duration_ms,omitempty"`
+	FinalSHA      string            `json:"final_sha,omitempty"`
+	FailureReason string            `json:"failure_reason,omitempty"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	Inputs        map[string]any    `json:"inputs,omitempty"`
+	Warnings      []string          `json:"warnings,omitempty"`
 	NodeCount     int               `json:"node_count"`
 }
 
@@ -190,11 +190,11 @@ type NodeExecutionSummary struct {
 	HandlerType   string     `json:"handler_type"`
 	Status        string     `json:"status"`
 	StartedAt     time.Time  `json:"started_at"`
-	CompletedAt   *time.Time `json:"completed_at"`
-	DurationMS    *int64     `json:"duration_ms"`
-	FailureReason string     `json:"failure_reason"`
-	FailureClass  string     `json:"failure_class"`
-	Notes         string     `json:"notes"`
+	CompletedAt   *time.Time `json:"completed_at,omitempty"`
+	DurationMS    *int64     `json:"duration_ms,omitempty"`
+	FailureReason string     `json:"failure_reason,omitempty"`
+	FailureClass  string     `json:"failure_class,omitempty"`
+	Notes         string     `json:"notes,omitempty"`
 }
 
 // GetNodeExecutions returns all node executions for a run.
