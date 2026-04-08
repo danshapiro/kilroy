@@ -17,7 +17,7 @@ func Codex() Template {
 		Binary:     "codex",
 		LogLocator: &agentlog.CodexLogLocator{},
 		BuildArgs: func(prompt, workDir, model string) []string {
-			args := []string{"exec", "--full-auto", "--skip-git-repo-check"}
+			args := []string{"exec", "--sandbox", "workspace-write", "--skip-git-repo-check"}
 			if model != "" {
 				args = append(args, "--model", model)
 			}
