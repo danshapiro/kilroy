@@ -12,6 +12,7 @@ type Template struct {
 	Binary          string // executable name
 	BuildArgs       func(prompt, workDir, model string) []string
 	BuildEnv        func() map[string]string
+	PrepareSession  func(stageDir string, env map[string]string) error // optional pre-session setup (e.g. write config files)
 	PromptPrefix    string          // prompt prefix for readiness detection
 	BusyIndicators  []string        // strings indicating the agent is busy
 	ProcessNames    []string        // expected process names for liveness

@@ -2,6 +2,7 @@
 package templates
 
 import (
+	"encoding/json"
 	"os"
 	"time"
 
@@ -15,15 +16,42 @@ func OpenCode() Template {
 		Binary:     "opencode",
 		LogLocator: &agentlog.OpenCodeLogLocator{},
 		BuildArgs: func(prompt, workDir, model string) []string {
-			// opencode model is configured via environment, not CLI flag.
-			return []string{"run", prompt}
+			args := []string{"run", "--format", "json", "--pure"}
+			if model != "" {
+				// opencode uses provider/model format (e.g. "anthropic/claude-sonnet-4-5").
+				args = append(args, "--model", model)
+			}
+			if workDir != "" {
+				args = append(args, "--dir", workDir)
+			}
+			args = append(args, prompt)
+			return args
 		},
 		BuildEnv: func() map[string]string {
 			env := map[string]string{}
 			if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
 				env["ANTHROPIC_API_KEY"] = key
 			}
+			if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+				env["OPENAI_API_KEY"] = key
+			}
 			return env
+		},
+		PrepareSession: func(stageDir string, env map[string]string) error {
+			// Inject provider config via OPENCODE_CONFIG_CONTENT so opencode
+			// doesn't rely on ~/.config/opencode/ or interactive auth.
+			config := map[string]any{
+				"provider": map[string]any{
+					"anthropic": map[string]any{
+						"options": map[string]any{
+							"apiKey": "{env:ANTHROPIC_API_KEY}",
+						},
+					},
+				},
+			}
+			data, _ := json.Marshal(config)
+			env["OPENCODE_CONFIG_CONTENT"] = string(data)
+			return nil
 		},
 		PromptPrefix:    ">",
 		BusyIndicators:  []string{},

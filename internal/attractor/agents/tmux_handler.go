@@ -91,6 +91,16 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 	command := tmpl.BuildCommand(prompt, exec.WorktreeDir, modelID)
 	stageDir := filepath.Join(exec.LogsRoot, node.ID)
 	_ = os.MkdirAll(stageDir, 0o755)
+
+	// Run per-tool session preparation (e.g. write isolated config files).
+	if tmpl.PrepareSession != nil {
+		if err := tmpl.PrepareSession(stageDir, env); err != nil {
+			return runtime.Outcome{
+				Status:        runtime.StatusFail,
+				FailureReason: fmt.Sprintf("prepare session for %s: %v", toolName, err),
+			}, nil
+		}
+	}
 	_ = os.WriteFile(filepath.Join(stageDir, "tmux_command.txt"), []byte(command), 0o644)
 
 	// Write prompt for debugging.
