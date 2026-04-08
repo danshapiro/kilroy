@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/cxdb"
 )
@@ -90,6 +91,8 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 
 	res, err := eng.run(ctx)
 	if err != nil {
+		// Record the failure in the run DB so it doesn't stay "running" forever.
+		eng.rundbRecordRunComplete(runtime.FinalFail, err.Error(), "")
 		return nil, err
 	}
 	if boot.Startup != nil {
