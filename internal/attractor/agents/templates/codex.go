@@ -17,7 +17,7 @@ func Codex() Template {
 		Binary:     "codex",
 		LogLocator: &agentlog.CodexLogLocator{},
 		BuildArgs: func(prompt, workDir, model string) []string {
-			args := []string{"exec", "--sandbox", "workspace-write", "--skip-git-repo-check"}
+			args := []string{"exec", "--sandbox", "workspace-write", "--skip-git-repo-check", "--json"}
 			if model != "" {
 				args = append(args, "--model", model)
 			}
@@ -56,7 +56,8 @@ func Codex() Template {
 		PromptPrefix:    "›",
 		BusyIndicators:  []string{"Working", "esc to interrupt"},
 		ProcessNames:    []string{"codex", "node"},
-		ExitsOnComplete: true, // exec mode exits on completion
+		StructuredOutput: true,
+		ExitsOnComplete:  true, // exec mode exits on completion
 		StartupTimeout:  30 * time.Second,
 	}
 }

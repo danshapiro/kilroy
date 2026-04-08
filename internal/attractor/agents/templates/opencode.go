@@ -62,7 +62,8 @@ func OpenCode() Template {
 		PromptPrefix:    ">",
 		BusyIndicators:  []string{},
 		ProcessNames:    []string{"opencode"},
-		ExitsOnComplete: true,
+		StructuredOutput: true,
+		ExitsOnComplete:  true,
 		StartupTimeout:  15 * time.Second,
 	}
 }

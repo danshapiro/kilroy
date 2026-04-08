@@ -88,9 +88,16 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 	modelID := strings.TrimSpace(node.Attr("llm_model", ""))
 
 	// Build and write the command.
-	command := tmpl.BuildCommand(prompt, exec.WorktreeDir, modelID)
 	stageDir := filepath.Join(exec.LogsRoot, node.ID)
 	_ = os.MkdirAll(stageDir, 0o755)
+	command := tmpl.BuildCommand(prompt, exec.WorktreeDir, modelID)
+	// When the template produces structured JSONL output, redirect it to a
+	// known file so the log parser can find it without hunting through
+	// tool-specific directories.
+	agentOutputPath := filepath.Join(stageDir, "agent_output.jsonl")
+	if tmpl.StructuredOutput {
+		command = command + " > " + shellQuoteSimple(agentOutputPath) + " 2>&1"
+	}
 
 	// Run per-tool session preparation (e.g. write isolated config files).
 	if tmpl.PrepareSession != nil {
@@ -159,13 +166,24 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 	// Capture output and exit status before destroying the session.
 	output, _ := h.Tmux.CaptureOutput(sessionName, 0)
 	exitCode := h.Tmux.PaneExitStatus(sessionName)
+
+	// When structured output was redirected to a file, the pane is empty.
+	// Extract the response text from the JSONL and also save the raw JSONL.
+	if tmpl.StructuredOutput {
+		if jsonlData, err := os.ReadFile(agentOutputPath); err == nil {
+			responseText := agentlog.ExtractResponseText(tmpl.Name, jsonlData)
+			if responseText != "" {
+				output = responseText
+			}
+		}
+	}
 	if strings.TrimSpace(output) != "" {
 		_ = os.WriteFile(filepath.Join(stageDir, "response.md"), []byte(output), 0o644)
 	}
 
 	// Parse agent conversation log and emit RunLog events.
-	if exec.Engine != nil && exec.Engine.RunLog != nil && tmpl.LogLocator != nil {
-		h.emitAgentLogEvents(exec, node.ID, tmpl, sessionStartTime)
+	if exec.Engine != nil && exec.Engine.RunLog != nil {
+		h.emitAgentLogEvents(exec, node.ID, tmpl, stageDir, sessionStartTime)
 	}
 
 	// Clean up session.
@@ -221,12 +239,24 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 	}, nil
 }
 
-// emitAgentLogEvents finds and parses the agent's conversation log, emitting events to RunLog.
-func (h *TmuxAgentHandler) emitAgentLogEvents(exec *engine.Execution, nodeID string, tmpl *templates.Template, startedAfter time.Time) {
-	logPath, err := tmpl.LogLocator.FindLog(exec.WorktreeDir, startedAfter)
-	if err != nil {
-		exec.Engine.RunLog.Warn("agent", nodeID, "agent.log_not_found", fmt.Sprintf("Agent log not found: %v", err))
-		return
+// emitAgentLogEvents parses the agent's structured output and emits events to RunLog.
+// Reads from the known agent_output.jsonl in the stage dir first, falls back to
+// the template's LogLocator for non-structured-output modes.
+func (h *TmuxAgentHandler) emitAgentLogEvents(exec *engine.Execution, nodeID string, tmpl *templates.Template, stageDir string, startedAfter time.Time) {
+	// Primary: read from known output file.
+	logPath := filepath.Join(stageDir, "agent_output.jsonl")
+	if _, err := os.Stat(logPath); err != nil {
+		// Fallback: use LogLocator to find tool-specific log files.
+		if tmpl.LogLocator != nil {
+			found, locErr := tmpl.LogLocator.FindLog(exec.WorktreeDir, startedAfter)
+			if locErr != nil {
+				exec.Engine.RunLog.Warn("agent", nodeID, "agent.log_not_found", fmt.Sprintf("Agent log not found: %v", locErr))
+				return
+			}
+			logPath = found
+		} else {
+			return
+		}
 	}
 
 	parser := agentlog.ParserForTool(tmpl.Name)
@@ -312,4 +342,9 @@ func buildSessionName(runID, nodeID string) string {
 		}
 		return '_'
 	}, name)
+}
+
+// shellQuoteSimple wraps a path in single quotes for shell redirection.
+func shellQuoteSimple(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

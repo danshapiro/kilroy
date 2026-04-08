@@ -13,13 +13,14 @@ type Template struct {
 	BuildArgs       func(prompt, workDir, model string) []string
 	BuildEnv        func() map[string]string
 	PrepareSession  func(stageDir string, env map[string]string) error // optional pre-session setup (e.g. write config files)
+	StructuredOutput bool  // when true, command output is JSONL; handler redirects to agent_output.jsonl
 	PromptPrefix    string          // prompt prefix for readiness detection
 	BusyIndicators  []string        // strings indicating the agent is busy
 	ProcessNames    []string        // expected process names for liveness
 	ExitsOnComplete bool            // true if tool exits after finishing (e.g. --print mode)
 	StartupDialogs  []StartupDialog // dialogs to dismiss at startup
 	StartupTimeout  time.Duration   // max time to wait for initial readiness
-	LogLocator      LogLocator      // finds the CLI tool's conversation log after execution
+	LogLocator      LogLocator      // fallback: finds the CLI tool's conversation log after execution
 }
 
 // LogLocator finds and parses the conversation log written by a CLI tool.
