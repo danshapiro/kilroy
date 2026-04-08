@@ -45,7 +45,7 @@ func Codex() Template {
 			if err := os.MkdirAll(codexHome, 0o700); err != nil {
 				return err
 			}
-			auth := map[string]string{"auth_mode": "apikey", "token": apiKey}
+			auth := map[string]string{"auth_mode": "apikey", "OPENAI_API_KEY": apiKey}
 			data, _ := json.Marshal(auth)
 			if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), data, 0o600); err != nil {
 				return err
