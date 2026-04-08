@@ -26,7 +26,7 @@ HEAD_BRANCH=$(python3 -c "import json; print(json.load(open('$SCRATCH/pr-meta.js
 TITLE=$(python3 -c "import json; print(json.load(open('$SCRATCH/pr-meta.json'))['title'])")
 
 # Clone the repo if we're in an empty workspace
-if [ ! -d ".git" ]; then
+if [ ! -e ".git" ]; then
     echo "No git repo found — cloning ${PR_REPO}..."
     git clone "https://github.com/${PR_REPO}.git" _repo
     # Move contents up (clone into subdir, then move to workspace root)
