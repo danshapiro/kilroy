@@ -225,6 +225,7 @@ func attractorRun(args []string) {
 	var workspace string
 	var labelSpecs []string
 	var useTmux bool
+	var skipPreflight bool
 	var packagePath string
 
 	for i := 0; i < len(args); i++ {
@@ -301,6 +302,8 @@ func attractorRun(args []string) {
 			labelSpecs = append(labelSpecs, args[i])
 		case "--tmux":
 			useTmux = true
+		case "--skip-preflight":
+			skipPreflight = true
 		case "--package":
 			i++
 			if i >= len(args) {
@@ -554,6 +557,7 @@ func attractorRun(args []string) {
 		LogsRoot:      logsRoot,
 		AllowTestShim: allowTestShim,
 		DisableCXDB:   noCXDB,
+		SkipPreflight: skipPreflight,
 		ForceModels:   forceModels,
 		Registry:      newLayeredRegistry(useTmux),
 		RunDB:         rdb,

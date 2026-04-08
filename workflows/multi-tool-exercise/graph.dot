@@ -35,6 +35,7 @@ digraph multi_tool_exercise {
         label="Codex Perspective",
         agent_tool="codex",
         llm_provider="openai",
+        llm_model="o3-mini",
         prompt="Read .kilroy/INPUT.md for the topic. Write a short unique perspective (2-3 paragraphs) on that topic. Save your writing to .kilroy/data/codex-perspective.md. Then write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
         outputs=".kilroy/data/codex-perspective.md"
     ]

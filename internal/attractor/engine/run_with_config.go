@@ -358,8 +358,10 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 		_ = writePreflightReport(opts.LogsRoot, report)
 		return nil, catalogErr
 	}
-	if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts, catalog, catalogChecks); err != nil {
-		return nil, err
+	if !opts.SkipPreflight {
+		if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts, catalog, catalogChecks); err != nil {
+			return nil, err
+		}
 	}
 
 	var (

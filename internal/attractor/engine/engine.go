@@ -121,6 +121,11 @@ type RunOptions struct {
 	// the engine copies package scripts and prompts into the workspace
 	// at .kilroy/package/ after workspace creation.
 	PackageDir string
+
+	// When true, skip provider preflight probes (CLI prompt probes,
+	// API key validation). Useful when using tmux-managed sessions
+	// with isolated auth that differs from the host environment.
+	SkipPreflight bool
 }
 
 func (o *RunOptions) applyDefaults() error {
