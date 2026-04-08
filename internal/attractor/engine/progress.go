@@ -87,6 +87,13 @@ func (e *Engine) appendProgressImpl(ev map[string]any, updateStallTimer bool) {
 	}
 }
 
+// TickStallWatchdog resets the stall watchdog timer to now, indicating
+// the run is making progress. Called by handlers that produce output
+// through channels other than AppendProgress (e.g., agent log tailing).
+func (e *Engine) TickStallWatchdog() {
+	e.setLastProgressTime(time.Now().UTC())
+}
+
 func (e *Engine) setLastProgressTime(ts time.Time) {
 	if e == nil {
 		return

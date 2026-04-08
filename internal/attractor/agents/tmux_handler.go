@@ -155,6 +155,7 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 			tailCancel = cancel
 			go agentlog.TailJSONL(tailCtx, agentOutputPath, lineParser, func(ev agentlog.AgentEvent) {
 				exec.Engine.RunLog.Info("agent", node.ID, ev.Type, ev.Message, ev.Data)
+				exec.Engine.TickStallWatchdog()
 			}, agentlog.TailConfig{PollInterval: 500 * time.Millisecond})
 		}
 	}
