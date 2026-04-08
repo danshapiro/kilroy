@@ -4,6 +4,7 @@ package templates
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/danshapiro/kilroy/internal/attractor/agents/agentlog"
@@ -19,7 +20,12 @@ func OpenCode() Template {
 			args := []string{"run", "--format", "json", "--pure"}
 			if model != "" {
 				// opencode uses provider/model format (e.g. "anthropic/claude-sonnet-4-5").
-				args = append(args, "--model", model)
+				// Add "anthropic/" prefix if missing, normalize dots to dashes.
+				m := strings.ReplaceAll(model, ".", "-")
+				if !strings.Contains(m, "/") {
+					m = "anthropic/" + m
+				}
+				args = append(args, "--model", m)
 			}
 			if workDir != "" {
 				args = append(args, "--dir", workDir)

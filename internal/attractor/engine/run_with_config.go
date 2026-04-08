@@ -223,6 +223,7 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 		opts.RunBranchPrefix = overrides.RunBranchPrefix
 	}
 	opts.AllowTestShim = overrides.AllowTestShim
+	opts.SkipPreflight = overrides.SkipPreflight
 	opts.ForceModels = normalizeForceModels(overrides.ForceModels)
 	opts.ProgressSink = overrides.ProgressSink
 	opts.Interviewer = overrides.Interviewer
@@ -358,7 +359,9 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 		_ = writePreflightReport(opts.LogsRoot, report)
 		return nil, catalogErr
 	}
-	if !opts.SkipPreflight {
+	if opts.SkipPreflight {
+		// Skip CLI prompt probes — caller asserts tools are configured.
+	} else {
 		if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts, catalog, catalogChecks); err != nil {
 			return nil, err
 		}

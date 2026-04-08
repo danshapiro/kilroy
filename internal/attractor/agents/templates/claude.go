@@ -3,6 +3,7 @@ package templates
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"github.com/danshapiro/kilroy/internal/attractor/agents/agentlog"
@@ -17,7 +18,8 @@ func Claude() Template {
 		BuildArgs: func(prompt, workDir, model string) []string {
 			args := []string{"--bare", "--dangerously-skip-permissions", "--print"}
 			if model != "" {
-				args = append(args, "--model", model)
+				// Claude CLI uses dashes (claude-sonnet-4-6), not dots (claude-sonnet-4.6).
+				args = append(args, "--model", strings.ReplaceAll(model, ".", "-"))
 			}
 			args = append(args, prompt)
 			return args
