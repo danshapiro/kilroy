@@ -1,5 +1,5 @@
 // OpenCode CLI conversation log locator and parser.
-// OpenCode stores session data in its own format — this parses tool calls and text output.
+// Parses opencode run --format json JSONL output: tool_use, text, step_start/finish events.
 package agentlog
 
 import (
@@ -20,13 +20,11 @@ func (l *OpenCodeLogLocator) FindLog(workDir string, startedAfter time.Time) (st
 	if err != nil {
 		return "", fmt.Errorf("user home dir: %w", err)
 	}
-
-	// OpenCode stores logs under ~/.opencode/sessions/.
 	sessDir := filepath.Join(home, ".opencode", "sessions")
 	return findNewestJSONL(sessDir, startedAfter)
 }
 
-// ParseOpenCodeLog reads an OpenCode conversation log and returns structured events.
+// ParseOpenCodeLog reads opencode run --format json JSONL output and returns structured events.
 func ParseOpenCodeLog(path string) ([]AgentEvent, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -45,38 +43,55 @@ func ParseOpenCodeLog(path string) ([]AgentEvent, error) {
 		}
 
 		typ, _ := raw["type"].(string)
-		role, _ := raw["role"].(string)
+		part, _ := raw["part"].(map[string]any)
 
-		switch {
-		case typ == "assistant" || role == "assistant":
-			events = append(events, parseOpenCodeAssistant(raw)...)
-		case typ == "tool_result" || typ == "tool":
-			events = append(events, parseOpenCodeToolResult(raw)...)
-		}
-	}
-	return events, nil
-}
+		switch typ {
+		case "tool_use":
+			if part == nil {
+				continue
+			}
+			tool, _ := part["tool"].(string)
+			state, _ := part["state"].(map[string]any)
+			if state == nil {
+				continue
+			}
+			input, _ := state["input"].(map[string]any)
+			output, _ := state["output"].(string)
+			status, _ := state["status"].(string)
+			title, _ := state["title"].(string)
 
-func parseOpenCodeAssistant(raw map[string]any) []AgentEvent {
-	var events []AgentEvent
+			// Emit tool_call.
+			msg := formatOpenCodeToolCall(tool, input, title)
+			events = append(events, AgentEvent{
+				Type:    "tool_call",
+				Tool:    tool,
+				Message: msg,
+				Data:    map[string]any{"tool": tool, "args": input},
+			})
 
-	// Try content blocks.
-	content, ok := raw["content"].([]any)
-	if !ok {
-		if msg, ok := raw["message"].(map[string]any); ok {
-			content, _ = msg["content"].([]any)
-		}
-	}
+			// Emit tool_result if completed with output.
+			if status == "completed" && output != "" {
+				events = append(events, AgentEvent{
+					Type:    "tool_result",
+					Message: truncate(output, 200),
+					Data:    map[string]any{"content": truncate(output, 2000)},
+				})
+			}
 
-	for _, item := range content {
-		block, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		blockType, _ := block["type"].(string)
-		switch blockType {
 		case "text":
-			text, _ := block["text"].(string)
+			if part == nil {
+				continue
+			}
+			// part.type == "text", content in part.content or raw text field.
+			text := ""
+			if content, ok := part["content"].(string); ok {
+				text = content
+			}
+			if text == "" {
+				if t, ok := raw["text"].(string); ok {
+					text = t
+				}
+			}
 			if text != "" {
 				events = append(events, AgentEvent{
 					Type:    "text",
@@ -84,59 +99,34 @@ func parseOpenCodeAssistant(raw map[string]any) []AgentEvent {
 					Data:    map[string]any{"text": text},
 				})
 			}
-		case "tool_use", "tool_call":
-			name, _ := block["name"].(string)
-			input, _ := block["input"].(map[string]any)
-			events = append(events, AgentEvent{
-				Type:    "tool_call",
-				Tool:    name,
-				Message: fmt.Sprintf("%s(%s)", name, truncate(jsonStr(input), 80)),
-				Data:    map[string]any{"tool": name, "args": input},
-			})
 		}
 	}
-
-	// Fallback: plain text content.
-	if len(events) == 0 {
-		if text, ok := raw["content"].(string); ok && text != "" {
-			events = append(events, AgentEvent{
-				Type:    "text",
-				Message: truncate(text, 200),
-				Data:    map[string]any{"text": text},
-			})
-		}
-	}
-
-	return events
+	return events, nil
 }
 
-func parseOpenCodeToolResult(raw map[string]any) []AgentEvent {
-	output := ""
-	if content, ok := raw["content"].(string); ok {
-		output = content
-	} else if content, ok := raw["output"].(string); ok {
-		output = content
+func formatOpenCodeToolCall(tool string, input map[string]any, title string) string {
+	if title != "" {
+		return fmt.Sprintf("%s(%s)", tool, truncate(title, 100))
 	}
-	if output == "" {
-		return nil
+	switch tool {
+	case "read":
+		if path, ok := input["filePath"].(string); ok {
+			return fmt.Sprintf("Read(%s)", path)
+		}
+	case "write":
+		if path, ok := input["filePath"].(string); ok {
+			return fmt.Sprintf("Write(%s)", path)
+		}
+	case "bash":
+		if cmd, ok := input["command"].(string); ok {
+			return fmt.Sprintf("Bash(%s)", truncate(cmd, 100))
+		}
 	}
-	return []AgentEvent{{
-		Type:    "tool_result",
-		Message: truncate(output, 200),
-		Data:    map[string]any{"content": truncate(output, 2000)},
-	}}
+	b, _ := json.Marshal(input)
+	return fmt.Sprintf("%s(%s)", tool, truncate(string(b), 80))
 }
 
 func jsonStr(v any) string {
 	b, _ := json.Marshal(v)
 	return string(b)
-}
-
-// OpenCodeLogDir returns the path where OpenCode stores session logs.
-func OpenCodeLogDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	return filepath.Join(home, ".opencode", "sessions")
 }

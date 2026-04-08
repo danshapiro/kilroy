@@ -1,5 +1,6 @@
 // Codex CLI conversation log locator and parser.
-// Codex writes JSON logs to its own format — this parses tool calls and text output.
+// Parses codex exec --json JSONL output: item.completed events with agent_message,
+// command_execution, and file_change item types.
 package agentlog
 
 import (
@@ -15,20 +16,16 @@ import (
 type CodexLogLocator struct{}
 
 // FindLog locates the most recently modified Codex log file.
-// Codex stores logs in ~/.codex/sessions/ or similar paths.
 func (l *CodexLogLocator) FindLog(workDir string, startedAfter time.Time) (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", fmt.Errorf("user home dir: %w", err)
 	}
-
-	// Codex stores session logs under ~/.codex/sessions/.
 	sessDir := filepath.Join(home, ".codex", "sessions")
 	return findNewestJSONL(sessDir, startedAfter)
 }
 
-// ParseCodexLog reads a Codex conversation log and returns structured events.
-// Codex uses a similar JSONL format to Claude with message/content blocks.
+// ParseCodexLog reads codex exec --json JSONL output and returns structured events.
 func ParseCodexLog(path string) ([]AgentEvent, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -47,94 +44,59 @@ func ParseCodexLog(path string) ([]AgentEvent, error) {
 		}
 
 		typ, _ := raw["type"].(string)
-		switch typ {
-		case "assistant", "response":
-			events = append(events, parseCodexAssistant(raw)...)
-		case "tool_result", "function_result":
-			events = append(events, parseCodexToolResult(raw)...)
+		item, _ := raw["item"].(map[string]any)
+		if item == nil {
+			continue
+		}
+		itemType, _ := item["type"].(string)
+
+		switch {
+		case typ == "item.completed" && itemType == "agent_message":
+			text, _ := item["text"].(string)
+			if text != "" {
+				events = append(events, AgentEvent{
+					Type:    "text",
+					Message: truncate(text, 200),
+					Data:    map[string]any{"text": text},
+				})
+			}
+
+		case (typ == "item.completed" || typ == "item.started") && itemType == "command_execution":
+			cmd, _ := item["command"].(string)
+			exitCode, _ := item["exit_code"].(float64)
+			output, _ := item["aggregated_output"].(string)
+			status, _ := item["status"].(string)
+
+			if typ == "item.started" {
+				events = append(events, AgentEvent{
+					Type:    "tool_call",
+					Tool:    "command",
+					Message: fmt.Sprintf("Bash(%s)", truncate(cmd, 100)),
+					Data:    map[string]any{"tool": "command", "command": cmd},
+				})
+			} else if status == "completed" && output != "" {
+				events = append(events, AgentEvent{
+					Type:    "tool_result",
+					Message: truncate(output, 200),
+					Data: map[string]any{
+						"content":   truncate(output, 2000),
+						"exit_code": int(exitCode),
+					},
+				})
+			}
+
+		case typ == "item.completed" && itemType == "file_change":
+			path, _ := item["path"].(string)
+			action, _ := item["action"].(string)
+			events = append(events, AgentEvent{
+				Type:    "tool_call",
+				Tool:    "file_change",
+				Message: fmt.Sprintf("FileChange(%s: %s)", action, path),
+				Data:    map[string]any{"tool": "file_change", "path": path, "action": action},
+			})
 		}
 	}
 	return events, nil
-}
-
-func parseCodexAssistant(raw map[string]any) []AgentEvent {
-	// Codex may use different field names, but the structure is similar.
-	var events []AgentEvent
-
-	// Try OpenAI-style response format.
-	if output, ok := raw["output"].([]any); ok {
-		for _, item := range output {
-			block, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-			blockType, _ := block["type"].(string)
-			switch blockType {
-			case "message":
-				if content, ok := block["content"].([]any); ok {
-					for _, c := range content {
-						if cm, ok := c.(map[string]any); ok {
-							if text, ok := cm["text"].(string); ok && text != "" {
-								events = append(events, AgentEvent{
-									Type:    "text",
-									Message: truncate(text, 200),
-									Data:    map[string]any{"text": text},
-								})
-							}
-						}
-					}
-				}
-			case "function_call":
-				name, _ := block["name"].(string)
-				args, _ := block["arguments"].(string)
-				var input map[string]any
-				_ = json.Unmarshal([]byte(args), &input)
-				events = append(events, AgentEvent{
-					Type:    "tool_call",
-					Tool:    name,
-					Message: fmt.Sprintf("%s(%s)", name, truncate(args, 80)),
-					Data:    map[string]any{"tool": name, "args": input},
-				})
-			}
-		}
-	}
-
-	// Also try Claude-style content blocks.
-	if msg, ok := raw["message"].(map[string]any); ok {
-		if content, ok := msg["content"].([]any); ok {
-			for _, item := range content {
-				block, ok := item.(map[string]any)
-				if !ok {
-					continue
-				}
-				blockType, _ := block["type"].(string)
-				if blockType == "text" {
-					text, _ := block["text"].(string)
-					if text != "" {
-						events = append(events, AgentEvent{
-							Type:    "text",
-							Message: truncate(text, 200),
-							Data:    map[string]any{"text": text},
-						})
-					}
-				}
-			}
-		}
-	}
-
-	return events
-}
-
-func parseCodexToolResult(raw map[string]any) []AgentEvent {
-	output, _ := raw["output"].(string)
-	if output == "" {
-		return nil
-	}
-	return []AgentEvent{{
-		Type:    "tool_result",
-		Message: truncate(output, 200),
-		Data:    map[string]any{"content": truncate(output, 2000)},
-	}}
 }
 
 // findNewestJSONL returns the most recently modified .jsonl file in a directory.
