@@ -117,6 +117,19 @@ func TestDefaultCLIInvocation_OpenAI_DoesNotUseDeprecatedAskForApproval(t *testi
 	}
 }
 
+func TestDefaultCLIInvocation_OpenAI_UsesWorkspaceWriteSandbox(t *testing.T) {
+	_, args := defaultCLIInvocation("openai", "gpt-5.4", "/tmp/worktree")
+	for i := 0; i < len(args)-1; i++ {
+		if args[i] == "--sandbox" {
+			if args[i+1] != "workspace-write" {
+				t.Fatalf("expected --sandbox workspace-write, got %v", args)
+			}
+			return
+		}
+	}
+	t.Fatalf("expected --sandbox workspace-write in args: %v", args)
+}
+
 func TestBuildCodexIsolatedEnv_ConfiguresCodexScopedOverrides(t *testing.T) {
 	home := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
