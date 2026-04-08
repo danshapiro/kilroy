@@ -144,6 +144,21 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 		h.handleStartupDialog(session.Name, dialog, tmpl.StartupTimeout)
 	}
 
+	// Start real-time log tailer if structured output is enabled.
+	// Emits agent events to RunLog as they appear, rather than waiting
+	// for completion. Works for any CLI tool that writes JSONL.
+	var tailCancel context.CancelFunc
+	if tmpl.StructuredOutput && exec.Engine != nil && exec.Engine.RunLog != nil {
+		lineParser := agentlog.LineParserForTool(tmpl.Name)
+		if lineParser != nil {
+			tailCtx, cancel := context.WithCancel(ctx)
+			tailCancel = cancel
+			go agentlog.TailJSONL(tailCtx, agentOutputPath, lineParser, func(ev agentlog.AgentEvent) {
+				exec.Engine.RunLog.Info("agent", node.ID, ev.Type, ev.Message, ev.Data)
+			}, agentlog.TailConfig{PollInterval: 500 * time.Millisecond})
+		}
+	}
+
 	// Determine timeout.
 	timeout := h.Timeout
 	if timeout <= 0 {
@@ -161,6 +176,13 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 			ConsecutiveIdle: 2,
 			PollInterval:    200 * time.Millisecond,
 		}, timeout)
+	}
+
+	// Stop the real-time log tailer — give it a moment to drain remaining lines.
+	if tailCancel != nil {
+		// Brief sleep to let the tailer pick up final lines written before exit.
+		time.Sleep(600 * time.Millisecond)
+		tailCancel()
 	}
 
 	// Capture output and exit status before destroying the session.
@@ -181,8 +203,8 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 		_ = os.WriteFile(filepath.Join(stageDir, "response.md"), []byte(output), 0o644)
 	}
 
-	// Parse agent conversation log and emit RunLog events.
-	if exec.Engine != nil && exec.Engine.RunLog != nil {
+	// If no real-time tailer was running, do a batch parse of the log.
+	if tailCancel == nil && exec.Engine != nil && exec.Engine.RunLog != nil {
 		h.emitAgentLogEvents(exec, node.ID, tmpl, stageDir, sessionStartTime)
 	}
 

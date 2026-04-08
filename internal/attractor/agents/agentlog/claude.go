@@ -111,24 +111,26 @@ func ParseClaudeLog(path string) ([]AgentEvent, error) {
 
 	var events []AgentEvent
 	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		raw, ok := ParseJSONLine(line)
+		if !ok {
 			continue
 		}
-		var raw map[string]any
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			continue
-		}
-
-		typ, _ := raw["type"].(string)
-		switch typ {
-		case "assistant":
-			events = append(events, parseAssistantMessage(raw)...)
-		case "user":
-			events = append(events, parseUserMessage(raw)...)
-		}
+		events = append(events, ParseClaudeLine(raw)...)
 	}
 	return events, nil
+}
+
+// ParseClaudeLine parses a single Claude JSONL line into events.
+func ParseClaudeLine(raw map[string]any) []AgentEvent {
+	typ, _ := raw["type"].(string)
+	switch typ {
+	case "assistant":
+		return parseAssistantMessage(raw)
+	case "user":
+		return parseUserMessage(raw)
+	default:
+		return nil
+	}
 }
 
 // parseAssistantMessage extracts text, tool_use, and thinking blocks from an assistant message.

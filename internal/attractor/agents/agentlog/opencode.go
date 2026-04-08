@@ -33,75 +33,73 @@ func ParseOpenCodeLog(path string) ([]AgentEvent, error) {
 
 	var events []AgentEvent
 	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		raw, ok := ParseJSONLine(line)
+		if !ok {
 			continue
 		}
-		var raw map[string]any
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			continue
-		}
-
-		typ, _ := raw["type"].(string)
-		part, _ := raw["part"].(map[string]any)
-
-		switch typ {
-		case "tool_use":
-			if part == nil {
-				continue
-			}
-			tool, _ := part["tool"].(string)
-			state, _ := part["state"].(map[string]any)
-			if state == nil {
-				continue
-			}
-			input, _ := state["input"].(map[string]any)
-			output, _ := state["output"].(string)
-			status, _ := state["status"].(string)
-			title, _ := state["title"].(string)
-
-			// Emit tool_call.
-			msg := formatOpenCodeToolCall(tool, input, title)
-			events = append(events, AgentEvent{
-				Type:    "tool_call",
-				Tool:    tool,
-				Message: msg,
-				Data:    map[string]any{"tool": tool, "args": input},
-			})
-
-			// Emit tool_result if completed with output.
-			if status == "completed" && output != "" {
-				events = append(events, AgentEvent{
-					Type:    "tool_result",
-					Message: truncate(output, 200),
-					Data:    map[string]any{"content": truncate(output, 2000)},
-				})
-			}
-
-		case "text":
-			if part == nil {
-				continue
-			}
-			// part.type == "text", content in part.content or raw text field.
-			text := ""
-			if content, ok := part["content"].(string); ok {
-				text = content
-			}
-			if text == "" {
-				if t, ok := raw["text"].(string); ok {
-					text = t
-				}
-			}
-			if text != "" {
-				events = append(events, AgentEvent{
-					Type:    "text",
-					Message: truncate(text, 200),
-					Data:    map[string]any{"text": text},
-				})
-			}
-		}
+		events = append(events, ParseOpenCodeLine(raw)...)
 	}
 	return events, nil
+}
+
+// ParseOpenCodeLine parses a single OpenCode JSONL line into events.
+func ParseOpenCodeLine(raw map[string]any) []AgentEvent {
+	typ, _ := raw["type"].(string)
+	part, _ := raw["part"].(map[string]any)
+
+	switch typ {
+	case "tool_use":
+		if part == nil {
+			return nil
+		}
+		tool, _ := part["tool"].(string)
+		state, _ := part["state"].(map[string]any)
+		if state == nil {
+			return nil
+		}
+		input, _ := state["input"].(map[string]any)
+		output, _ := state["output"].(string)
+		status, _ := state["status"].(string)
+		title, _ := state["title"].(string)
+
+		var events []AgentEvent
+		events = append(events, AgentEvent{
+			Type:    "tool_call",
+			Tool:    tool,
+			Message: formatOpenCodeToolCall(tool, input, title),
+			Data:    map[string]any{"tool": tool, "args": input},
+		})
+		if status == "completed" && output != "" {
+			events = append(events, AgentEvent{
+				Type:    "tool_result",
+				Message: truncate(output, 200),
+				Data:    map[string]any{"content": truncate(output, 2000)},
+			})
+		}
+		return events
+
+	case "text":
+		if part == nil {
+			return nil
+		}
+		text := ""
+		if content, ok := part["content"].(string); ok {
+			text = content
+		}
+		if text == "" {
+			if t, ok := raw["text"].(string); ok {
+				text = t
+			}
+		}
+		if text != "" {
+			return []AgentEvent{{
+				Type:    "text",
+				Message: truncate(text, 200),
+				Data:    map[string]any{"text": text},
+			}}
+		}
+	}
+	return nil
 }
 
 func formatOpenCodeToolCall(tool string, input map[string]any, title string) string {

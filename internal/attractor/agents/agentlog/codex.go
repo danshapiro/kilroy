@@ -4,7 +4,6 @@
 package agentlog
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -34,69 +33,70 @@ func ParseCodexLog(path string) ([]AgentEvent, error) {
 
 	var events []AgentEvent
 	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
+		raw, ok := ParseJSONLine(line)
+		if !ok {
 			continue
 		}
-		var raw map[string]any
-		if err := json.Unmarshal([]byte(line), &raw); err != nil {
-			continue
-		}
-
-		typ, _ := raw["type"].(string)
-		item, _ := raw["item"].(map[string]any)
-		if item == nil {
-			continue
-		}
-		itemType, _ := item["type"].(string)
-
-		switch {
-		case typ == "item.completed" && itemType == "agent_message":
-			text, _ := item["text"].(string)
-			if text != "" {
-				events = append(events, AgentEvent{
-					Type:    "text",
-					Message: truncate(text, 200),
-					Data:    map[string]any{"text": text},
-				})
-			}
-
-		case (typ == "item.completed" || typ == "item.started") && itemType == "command_execution":
-			cmd, _ := item["command"].(string)
-			exitCode, _ := item["exit_code"].(float64)
-			output, _ := item["aggregated_output"].(string)
-			status, _ := item["status"].(string)
-
-			if typ == "item.started" {
-				events = append(events, AgentEvent{
-					Type:    "tool_call",
-					Tool:    "command",
-					Message: fmt.Sprintf("Bash(%s)", truncate(cmd, 100)),
-					Data:    map[string]any{"tool": "command", "command": cmd},
-				})
-			} else if status == "completed" && output != "" {
-				events = append(events, AgentEvent{
-					Type:    "tool_result",
-					Message: truncate(output, 200),
-					Data: map[string]any{
-						"content":   truncate(output, 2000),
-						"exit_code": int(exitCode),
-					},
-				})
-			}
-
-		case typ == "item.completed" && itemType == "file_change":
-			path, _ := item["path"].(string)
-			action, _ := item["action"].(string)
-			events = append(events, AgentEvent{
-				Type:    "tool_call",
-				Tool:    "file_change",
-				Message: fmt.Sprintf("FileChange(%s: %s)", action, path),
-				Data:    map[string]any{"tool": "file_change", "path": path, "action": action},
-			})
-		}
+		events = append(events, ParseCodexLine(raw)...)
 	}
 	return events, nil
+}
+
+// ParseCodexLine parses a single Codex JSONL line into events.
+func ParseCodexLine(raw map[string]any) []AgentEvent {
+	typ, _ := raw["type"].(string)
+	item, _ := raw["item"].(map[string]any)
+	if item == nil {
+		return nil
+	}
+	itemType, _ := item["type"].(string)
+
+	switch {
+	case typ == "item.completed" && itemType == "agent_message":
+		text, _ := item["text"].(string)
+		if text != "" {
+			return []AgentEvent{{
+				Type:    "text",
+				Message: truncate(text, 200),
+				Data:    map[string]any{"text": text},
+			}}
+		}
+
+	case (typ == "item.completed" || typ == "item.started") && itemType == "command_execution":
+		cmd, _ := item["command"].(string)
+		exitCode, _ := item["exit_code"].(float64)
+		output, _ := item["aggregated_output"].(string)
+		status, _ := item["status"].(string)
+
+		if typ == "item.started" {
+			return []AgentEvent{{
+				Type:    "tool_call",
+				Tool:    "command",
+				Message: fmt.Sprintf("Bash(%s)", truncate(cmd, 100)),
+				Data:    map[string]any{"tool": "command", "command": cmd},
+			}}
+		} else if status == "completed" && output != "" {
+			return []AgentEvent{{
+				Type:    "tool_result",
+				Message: truncate(output, 200),
+				Data: map[string]any{
+					"content":   truncate(output, 2000),
+					"exit_code": int(exitCode),
+				},
+			}}
+		}
+
+	case typ == "item.completed" && itemType == "file_change":
+		path, _ := item["path"].(string)
+		action, _ := item["action"].(string)
+		return []AgentEvent{{
+			Type:    "tool_call",
+			Tool:    "file_change",
+			Message: fmt.Sprintf("FileChange(%s: %s)", action, path),
+			Data:    map[string]any{"tool": "file_change", "path": path, "action": action},
+		}}
+	}
+	return nil
 }
 
 // findNewestJSONL returns the most recently modified .jsonl file in a directory.
