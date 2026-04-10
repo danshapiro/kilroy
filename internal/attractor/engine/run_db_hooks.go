@@ -3,6 +3,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -21,10 +22,17 @@ func (e *Engine) rundbRecordRunStart() {
 	if e.Graph != nil {
 		graphName = e.Graph.Name
 	}
+	var configMap map[string]any
+	if e.RunConfig != nil {
+		if b, err := json.Marshal(e.RunConfig); err == nil {
+			_ = json.Unmarshal(b, &configMap)
+		}
+	}
 	if err := e.RunDB.RecordRunStart(
 		e.Options.RunID, graphName, goal, "running",
 		e.LogsRoot, e.WorktreeDir, e.RunBranch, e.Options.RepoPath,
 		string(e.DotSource), e.Options.Inputs, e.Options.Labels,
+		e.Options.Invocation, configMap,
 	); err != nil {
 		e.Warn("rundb: record run start: " + err.Error())
 	}

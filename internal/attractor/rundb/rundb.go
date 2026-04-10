@@ -34,17 +34,19 @@ func DefaultPath() string {
 }
 
 // Open opens (or creates) the run database at the given path and applies
-// any pending migrations. The database uses WAL mode for concurrent reads.
+// any pending migrations. Uses WAL mode for concurrent reads and a 5-second
+// busy timeout so concurrent writers retry instead of failing immediately.
 func Open(path string) (*DB, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create db directory: %w", err)
 	}
 
-	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)")
+	db, err := sql.Open("sqlite", path+"?_pragma=journal_mode(wal)&_pragma=foreign_keys(on)&_pragma=busy_timeout(5000)&_pragma=synchronous(normal)")
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
 	}
+	db.SetMaxOpenConns(1)
 
 	rdb := &DB{db: db, path: path}
 	if err := rdb.migrate(); err != nil {

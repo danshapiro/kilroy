@@ -131,6 +131,33 @@ Runs live under `~/.local/state/kilroy/attractor/runs/<run_id>/`. Key files:
 - `progress.ndjson` — full event log (stage starts/ends, edge selections, LLM retries).
 - `manifest.json` — run metadata (goal, graph, repo, base SHA).
 
+### Agent Backend Configuration
+
+Agent nodes (`shape=box`, `agent_tool="claude"`) require specific backend and handler configuration for proper agent log capture:
+
+- **`backend: cli`** in the run config — invokes the actual CLI binary (`claude`, `codex`, `opencode`) with `--output-format stream-json`, producing `agent_output.jsonl` with full conversation logs (tool calls, thinking, responses). The server parses this into structured agent events for the UI.
+- **`backend: api`** — uses the Anthropic HTTP API directly. Produces `events.ndjson` in a different format. The server does NOT currently parse this into UI-visible agent events. Use `backend: cli` for runs where you want the UI to show agent conversation detail.
+- **`--tmux` flag** — required for agent nodes that use CLI backends. Registers `TmuxAgentHandler` which runs agent CLIs in tmux sessions for reliable headless execution. Without `--tmux`, the default `AgentHandler` is used (API-only path).
+- **`--package` flag** — points to a workflow package directory (e.g., `workflows/pr-review/`). Copies scripts, prompts, and graph into the worktree at `.kilroy/package/`.
+
+Example production PR review launch:
+```bash
+./kilroy attractor run --detach --tmux \
+  --package workflows/pr-review \
+  --config run.yaml \
+  --no-cxdb --skip-cli-headless-warning \
+  --input '{"pr_repo": "owner/repo", "pr_number": 123}'
+```
+
+The run config must specify `backend: cli` for providers used by agent nodes:
+```yaml
+llm:
+  cli_profile: real
+  providers:
+    anthropic:
+      backend: cli
+```
+
 ### PR Review Process
 
 For PRs we want to accept: check out the PR branch into a worktree, review, add fix-up commits, then non-squash merge — this preserves contributor credit while maintaining code quality.

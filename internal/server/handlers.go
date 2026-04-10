@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/danshapiro/kilroy/internal/attractor/agents"
@@ -267,11 +269,13 @@ func (s *Server) handleGetPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	nodes, _ := db.GetNodeExecutions(runID)
-	edges, _ := db.GetEdgeDecisions(runID)
-	providers, _ := db.GetProviderSelections(runID)
+	// Use the resolved full ID for subsequent queries (handles prefix lookups).
+	resolvedID := run.RunID
+	nodes, _ := db.GetNodeExecutions(resolvedID)
+	edges, _ := db.GetEdgeDecisions(resolvedID)
+	providers, _ := db.GetProviderSelections(resolvedID)
 
-	dotSource := db.GetDotSource(runID)
+	dotSource := db.GetDotSource(resolvedID)
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"run_id":         run.RunID,
@@ -321,15 +325,41 @@ func (s *Server) handleCancelPipeline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ps, ok := s.registry.Get(runID)
-	if !ok {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("pipeline %s not found", runID))
+	// Try in-memory registry first (server-submitted runs).
+	if ps, ok := s.registry.Get(runID); ok {
+		ps.Cancel(fmt.Errorf("canceled via HTTP API"))
+		ps.Interviewer.Cancel()
+		writeJSON(w, http.StatusOK, map[string]string{"status": "canceling"})
 		return
 	}
 
-	ps.Cancel(fmt.Errorf("canceled via HTTP API"))
-	ps.Interviewer.Cancel()
-	writeJSON(w, http.StatusOK, map[string]string{"status": "canceling"})
+	// Fall back to PID-based cancellation for CLI-launched detached runs.
+	logsRoot, _ := s.resolveRunDirs(runID)
+	if logsRoot == "" {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("run %s not found", runID))
+		return
+	}
+	pidPath := filepath.Join(logsRoot, "run.pid")
+	pidBytes, err := os.ReadFile(pidPath)
+	if err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("run %s has no PID file", runID))
+		return
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidBytes)))
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "invalid PID file")
+		return
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		writeError(w, http.StatusGone, fmt.Sprintf("process %d not found", pid))
+		return
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil {
+		writeError(w, http.StatusGone, fmt.Sprintf("process %d: %v", pid, err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "canceling", "method": "signal", "pid": strconv.Itoa(pid)})
 }
 
 func (s *Server) handleGetContext(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -128,12 +129,28 @@ func (r *PipelineRegistry) Register(runID string, ps *PipelineState) error {
 	return nil
 }
 
-// Get returns a pipeline by ID, or nil and false if not found.
+// Get returns a pipeline by exact ID or unique prefix, or nil and false if not found.
 func (r *PipelineRegistry) Get(runID string) (*PipelineState, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	ps, ok := r.pipelines[runID]
-	return ps, ok
+	// Exact match.
+	if ps, ok := r.pipelines[runID]; ok {
+		return ps, true
+	}
+	// Prefix match.
+	var match *PipelineState
+	for id, ps := range r.pipelines {
+		if strings.HasPrefix(id, runID) {
+			if match != nil {
+				return nil, false // ambiguous
+			}
+			match = ps
+		}
+	}
+	if match != nil {
+		return match, true
+	}
+	return nil, false
 }
 
 // List returns all pipeline IDs.

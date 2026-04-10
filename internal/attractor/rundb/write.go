@@ -21,14 +21,17 @@ type RunRecord struct {
 	DotSource   string
 	Inputs      map[string]any
 	Labels      map[string]string
+	Invocation  []string
+	Config      map[string]any
 }
 
 // RecordRunStart satisfies engine.RunDBWriter. Delegates to InsertRun.
-func (d *DB) RecordRunStart(runID, graphName, goal, status, logsRoot, worktreeDir, runBranch, repoPath, dotSource string, inputs map[string]any, labels map[string]string) error {
+func (d *DB) RecordRunStart(runID, graphName, goal, status, logsRoot, worktreeDir, runBranch, repoPath, dotSource string, inputs map[string]any, labels map[string]string, invocation []string, config map[string]any) error {
 	return d.InsertRun(RunRecord{
 		RunID: runID, GraphName: graphName, Goal: goal, Status: status,
 		LogsRoot: logsRoot, WorktreeDir: worktreeDir, RunBranch: runBranch,
 		RepoPath: repoPath, DotSource: dotSource, Inputs: inputs, Labels: labels,
+		Invocation: invocation, Config: config,
 		StartedAt: time.Now(),
 	})
 }
@@ -62,12 +65,15 @@ func (d *DB) RecordProviderSelection(runID, nodeID string, attempt int, provider
 func (d *DB) InsertRun(r RunRecord) error {
 	inputsJSON, _ := json.Marshal(r.Inputs)
 	labelsJSON, _ := json.Marshal(r.Labels)
+	invocationJSON, _ := json.Marshal(r.Invocation)
+	configJSON, _ := json.Marshal(r.Config)
 	startedAt := r.StartedAt.UTC().Format(time.RFC3339Nano)
 	_, err := d.db.Exec(`INSERT OR REPLACE INTO runs
-		(run_id, graph_name, goal, status, logs_root, worktree_dir, run_branch, repo_path, started_at, dot_source, inputs_json, labels_json)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(run_id, graph_name, goal, status, logs_root, worktree_dir, run_branch, repo_path, started_at, dot_source, inputs_json, labels_json, invocation_json, config_json)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		r.RunID, r.GraphName, r.Goal, r.Status, r.LogsRoot, r.WorktreeDir,
-		r.RunBranch, r.RepoPath, startedAt, r.DotSource, string(inputsJSON), string(labelsJSON))
+		r.RunBranch, r.RepoPath, startedAt, r.DotSource, string(inputsJSON), string(labelsJSON),
+		string(invocationJSON), string(configJSON))
 	return err
 }
 

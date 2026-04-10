@@ -463,6 +463,35 @@ func attractorRun(args []string) {
 		if noCXDB {
 			childArgs = append(childArgs, "--no-cxdb")
 		}
+		if inputPath != "" && !strings.HasPrefix(strings.TrimSpace(inputPath), "{") {
+			if abs, err := filepath.Abs(inputPath); err == nil {
+				inputPath = abs
+			}
+			childArgs = append(childArgs, "--input", inputPath)
+		} else if inputPath != "" {
+			childArgs = append(childArgs, "--input", inputPath)
+		}
+		if workspace != "" {
+			if abs, err := filepath.Abs(workspace); err == nil {
+				workspace = abs
+			}
+			childArgs = append(childArgs, "--workspace", workspace)
+		}
+		if packagePath != "" {
+			if abs, err := filepath.Abs(packagePath); err == nil {
+				packagePath = abs
+			}
+			childArgs = append(childArgs, "--package", packagePath)
+		}
+		if useTmux {
+			childArgs = append(childArgs, "--tmux")
+		}
+		if skipPreflight {
+			childArgs = append(childArgs, "--skip-preflight")
+		}
+		for _, spec := range labelSpecs {
+			childArgs = append(childArgs, "--label", spec)
+		}
 		childArgs = append(childArgs, skipCLIHeadlessWarningFlag)
 		for _, spec := range canonicalForceSpecs {
 			childArgs = append(childArgs, "--force-model", spec)
@@ -566,6 +595,7 @@ func attractorRun(args []string) {
 		GraphDir:      graphDir,
 		Labels:        labels,
 		GitOps:        gitOps,
+		Invocation:    os.Args,
 		PackageDir:    func() string { if pkg != nil { return pkg.Dir }; return "" }(),
 		OnCXDBStartup: func(info *engine.CXDBStartupInfo) {
 			if info == nil {

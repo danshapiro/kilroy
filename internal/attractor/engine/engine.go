@@ -126,6 +126,9 @@ type RunOptions struct {
 	// API key validation). Useful when using tmux-managed sessions
 	// with isolated auth that differs from the host environment.
 	SkipPreflight bool
+
+	// CLI arguments used to launch this run. Captured from os.Args.
+	Invocation []string
 }
 
 func (o *RunOptions) applyDefaults() error {
@@ -1825,6 +1828,12 @@ func (e *Engine) writeManifest(baseSHA string) error {
 	}
 	if len(e.Options.Labels) > 0 {
 		manifest["labels"] = copyStringStringMap(e.Options.Labels)
+	}
+	if len(e.Options.Invocation) > 0 {
+		manifest["invocation"] = e.Options.Invocation
+	}
+	if len(e.Options.Inputs) > 0 {
+		manifest["inputs"] = e.Options.Inputs
 	}
 	return writeJSON(filepath.Join(e.LogsRoot, "manifest.json"), manifest)
 }
