@@ -918,6 +918,14 @@ func (h *ToolHandler) Execute(ctx context.Context, execCtx *Execution, node *mod
 		buildBaseNodeEnv(artifactPolicyFromExecution(execCtx)),
 		BuildStageRuntimeEnv(execCtx, node.ID),
 	)
+	// Put the command in its own process group so a context cancel can kill
+	// the entire tree (not just the shell). Without this, a cancelled
+	// `bash -c "sleep 20"` leaves sleep as an orphan with the stdout pipe
+	// still open, and cmd.Wait() blocks until sleep finishes naturally.
+	setProcessGroupAttr(cmd)
+	cmd.Cancel = func() error {
+		return forceKillProcessGroup(cmd)
+	}
 	// Avoid hanging on interactive reads; tool_command doesn't provide a way to supply stdin.
 	cmd.Stdin = strings.NewReader("")
 	stdoutPath := filepath.Join(stageDir, "stdout.log")
