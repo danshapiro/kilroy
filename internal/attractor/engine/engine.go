@@ -267,6 +267,13 @@ type Engine struct {
 	// every body node gets its own DB row and captured artifacts.
 	activeLoopIteration int
 
+	// concurrentDepth is >0 while the engine is executing inside a
+	// concurrent region (between a concurrent.split and its paired
+	// concurrent.join). Per-node git commits are suppressed while this is
+	// >0 — commits are consolidated at the join node instead — to avoid
+	// concurrent write contention on the shared worktree.
+	concurrentDepth int
+
 	// parallelDispatchCounts tracks how many times each fan-out node has been
 	// dispatched in this run. Incremented once per dispatch call. Used to
 	// produce unique pass-numbered branch names so each re-visit of a fan-out
@@ -852,6 +859,33 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 
 		// Record git diff for this node if SHAs differ.
 		e.recordNodeDiff(node.ID, nodeRetries[node.ID]+1, beforeSHA, sha)
+
+		// Concurrent primitive: when the just-completed node is a
+		// concurrent.split, dispatch all outgoing edges as concurrent
+		// branches in the shared workspace and resume at the paired join.
+		// Evaluated before the loop check so concurrent regions can't be
+		// confused with loop back-edges.
+		if shapeToType(node.Shape()) == "concurrent.split" {
+			joinID, concErr := e.runConcurrentRegion(ctx, node, &completed, nodeRetries, nodeOutcomes)
+			if concErr != nil {
+				failedTurnID, _ := e.cxdbRunFailed(ctx, node.ID, sha, concErr.Error())
+				final := runtime.FinalOutcome{
+					Timestamp:         time.Now().UTC(),
+					Status:            runtime.FinalFail,
+					RunID:             e.Options.RunID,
+					FinalGitCommitSHA: sha,
+					FailureReason:     concErr.Error(),
+					CXDBContextID:     cxdbContextID(e.CXDB),
+					CXDBHeadTurnID:    failedTurnID,
+				}
+				e.persistTerminalOutcome(ctx, final)
+				e.rundbRecordRunComplete(runtime.FinalFail, concErr.Error(), sha)
+				return nil, concErr
+			}
+			e.incomingEdge = nil
+			current = joinID
+			continue
+		}
 
 		// Loop primitive: single-node and multi-node iteration.
 		// Evaluated after the node completes but before any routing decisions so
@@ -1777,6 +1811,18 @@ func runContextError(ctx context.Context) error {
 }
 
 func (e *Engine) checkpoint(nodeID string, out runtime.Outcome, completed []string, retries map[string]int) (string, error) {
+	// Skip per-node git commits while inside a concurrent region. Multiple
+	// branches writing to the shared worktree would race on commits. The
+	// region consolidates into a single commit at the concurrent.join node.
+	if e.concurrentDepth > 0 && e.Graph != nil {
+		if n := e.Graph.Nodes[nodeID]; n != nil {
+			t := shapeToType(n.Shape())
+			if t != "concurrent.join" && t != "concurrent.split" {
+				// Keep the last known SHA so checkpoint metadata is consistent.
+				return e.lastCheckpointSHA, nil
+			}
+		}
+	}
 	msg := fmt.Sprintf("attractor(%s): %s (%s)", e.Options.RunID, nodeID, out.Status)
 	sha := ""
 	if out.Meta != nil {

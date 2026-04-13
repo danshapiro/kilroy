@@ -80,6 +80,8 @@ func NewCoreRegistry() *HandlerRegistry {
 	reg.Register("tool", &ToolHandler{})
 	reg.Register("loop.begin", &LoopBeginHandler{})
 	reg.Register("loop.end", &LoopEndHandler{})
+	reg.Register("concurrent.split", &ConcurrentSplitHandler{})
+	reg.Register("concurrent.join", &ConcurrentJoinHandler{})
 	return reg
 }
 
@@ -160,6 +162,10 @@ func shapeToType(shape string) string {
 		return "loop.begin"
 	case "invtrapezium":
 		return "loop.end"
+	case "pentagon":
+		return "concurrent.split"
+	case "cylinder":
+		return "concurrent.join"
 	default:
 		return "agent"
 	}
@@ -200,6 +206,31 @@ func (h *LoopEndHandler) SkipRetry() bool { return true }
 
 func (h *LoopEndHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
 	return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "loop_end"}, nil
+}
+
+// ConcurrentSplitHandler marks a fan-out point for concurrent execution.
+// Pass-through — the engine's main loop detects the split, finds the paired
+// concurrent.join, and dispatches each outgoing branch as a goroutine running
+// in the shared workspace. No isolation, no winner selection; branches are
+// expected to be independent.
+type ConcurrentSplitHandler struct{}
+
+func (h *ConcurrentSplitHandler) SkipRetry() bool { return true }
+
+func (h *ConcurrentSplitHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
+	return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "concurrent_split"}, nil
+}
+
+// ConcurrentJoinHandler marks the barrier where concurrent branches converge.
+// Pass-through — the engine treats the join as the termination point for each
+// branch goroutine. When all branches complete, the main loop resumes at the
+// join and follows its outgoing edges normally.
+type ConcurrentJoinHandler struct{}
+
+func (h *ConcurrentJoinHandler) SkipRetry() bool { return true }
+
+func (h *ConcurrentJoinHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
+	return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "concurrent_join"}, nil
 }
 
 type ConditionalHandler struct{}
