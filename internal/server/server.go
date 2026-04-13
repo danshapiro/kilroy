@@ -45,6 +45,13 @@ func New(cfg Config) *Server {
 	// Go 1.22+ method+pattern routing.
 	mux.HandleFunc("GET /health", s.handleHealth)
 
+	// Embedded dashboard UI.
+	ui := uiHandler()
+	mux.Handle("GET /ui/", ui)
+	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
+	})
+
 	// /runs endpoints (canonical names per platform-reframe plan).
 	mux.HandleFunc("POST /runs", s.handleSubmitPipeline)
 	mux.HandleFunc("GET /runs", s.handleListRuns)
