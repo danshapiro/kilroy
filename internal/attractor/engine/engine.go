@@ -259,6 +259,14 @@ type Engine struct {
 	// because retries and loop iterations are different semantic concerns.
 	loopIterations map[string]int
 
+	// activeLoopIteration is the current iteration of the innermost active
+	// loop scope. Zero when no loop is active. Set by handleLoopIteration
+	// on loop-back and cleared when a loop terminates normally. Used by the
+	// main runLoop to assign attempt numbers to every node that runs inside
+	// a multi-node loop body (not just the jump target) so each iteration of
+	// every body node gets its own DB row and captured artifacts.
+	activeLoopIteration int
+
 	// parallelDispatchCounts tracks how many times each fan-out node has been
 	// dispatched in this run. Incremented once per dispatch call. Used to
 	// produce unique pass-numbered branch names so each re-visit of a fan-out
@@ -744,12 +752,17 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		e.writeKilroyPreNodeFiles(node, completed, nodeOutcomes)
 
 		e.cxdbStageStarted(ctx, node)
-		// Prefer loop iteration counter if this node is mid-loop; otherwise
-		// fall back to the retry counter. Loops advance in whole iterations,
-		// retries are internal to a single stage execution — they are
-		// orthogonal.
+		// Attempt numbering precedence:
+		//   1. Active loop iteration (multi-node loop body or re-entry to a
+		//      single-node loop) — every body node uses the same iteration
+		//      count so all iterations are distinct in the DB.
+		//   2. Per-node loop iteration counter (covers the first iteration
+		//      before activeLoopIteration is set).
+		//   3. Retry counter from executeWithRetry.
 		startAttempt := nodeRetries[node.ID] + 1
-		if iter, ok := e.loopIterations[node.ID]; ok && iter > 0 {
+		if e.activeLoopIteration > 0 {
+			startAttempt = e.activeLoopIteration
+		} else if iter, ok := e.loopIterations[node.ID]; ok && iter > 0 {
 			startAttempt = iter + 1
 		}
 		nodeDBID := e.rundbRecordNodeStart(node.ID, startAttempt, resolvedHandlerTypeName(e, node.ID))

@@ -410,9 +410,18 @@
         outputUrl(runId, name) {
           return apiUrl('/runs/' + encodeURIComponent(runId) + '/outputs/' + encodeURIComponent(name))
         },
-        async getTurns(runId, nodeId) {
+        async getTurns(runId, nodeId, attempt) {
           try {
-            const res = await fetch(apiUrl('/runs/' + encodeURIComponent(runId) + '/nodes/' + encodeURIComponent(nodeId) + '/turns'))
+            const url = apiUrl('/runs/' + encodeURIComponent(runId) + '/nodes/' + encodeURIComponent(nodeId) + '/turns') +
+              (attempt ? '?attempt=' + attempt : '')
+            const res = await fetch(url)
+            if (!res.ok) return null
+            return res.json()
+          } catch { return null }
+        },
+        async getNodeAttempts(runId, nodeId) {
+          try {
+            const res = await fetch(apiUrl('/runs/' + encodeURIComponent(runId) + '/nodes/' + encodeURIComponent(nodeId) + '/attempts'))
             if (!res.ok) return null
             return res.json()
           } catch { return null }
@@ -1041,10 +1050,11 @@
         outputs = await API.getOutputs(runId)
       }
 
-      async function loadTurns(nodeId) {
-        if (turnsCache[nodeId] !== undefined) return turnsCache[nodeId]
-        const data = await API.getTurns(runId, nodeId)
-        turnsCache[nodeId] = data
+      async function loadTurns(nodeId, attempt) {
+        const cacheKey = nodeId + (attempt ? '#' + attempt : '')
+        if (turnsCache[cacheKey] !== undefined) return turnsCache[cacheKey]
+        const data = await API.getTurns(runId, nodeId, attempt)
+        turnsCache[cacheKey] = data
         return data
       }
 
@@ -1140,12 +1150,22 @@
           sidebar.innerHTML = '<div style="color:#4b5563;font-size:11px;padding:8px">No node data yet</div>'
           return
         }
+        // Count occurrences of each node_id so we can label loop iterations
+        // (iter 1 of 3, iter 2 of 3, ...).
+        const counts = {}
+        for (const n of nodeList) counts[n.node_id] = (counts[n.node_id] || 0) + 1
+        const seen = {}
         sidebar.innerHTML = nodeList.map((n, i) => {
           const dur = n.duration_ms ? formatDuration(n.duration_ms) : ''
+          seen[n.node_id] = (seen[n.node_id] || 0) + 1
+          const total = counts[n.node_id]
+          const iterBadge = total > 1
+            ? `<span class="node-iter" style="color:#a78bfa;font-size:10px;margin-left:4px">↻${seen[n.node_id]}/${total}</span>`
+            : ''
           return `
             <div class="node-item ${selectedNode === i ? 'selected' : ''}" data-index="${i}">
               <span class="node-icon">${statusIcon(nodeStatus(n))}</span>
-              <span class="node-name">${esc(n.node_id || ('Node ' + i))}</span>
+              <span class="node-name">${esc(n.node_id || ('Node ' + i))}${iterBadge}</span>
               <span class="node-duration">${dur}</span>
             </div>`
         }).join('') +
@@ -1524,7 +1544,7 @@
       async function renderPanelTurns(n) {
         const body = document.getElementById('panel-body')
         body.innerHTML = '<div class="loading" style="padding:12px">Loading…</div>'
-        const data = await loadTurns(n.node_id)
+        const data = await loadTurns(n.node_id, n.attempt)
 
         if (!data) {
           body.innerHTML = '<div style="color:#4b5563;font-size:11px;padding:8px">No data available for this node</div>'
@@ -1532,6 +1552,14 @@
         }
 
         let html = ''
+        // Iteration badge at the top when this node has multiple attempts.
+        const nodeList = run?.nodes || nodes
+        const attempts = nodeList.filter(x => x.node_id === n.node_id)
+        if (attempts.length > 1) {
+          html += '<div style="margin-bottom:12px;padding:6px 8px;background:#111118;border:1px solid #1e1e2e;border-radius:4px;font-size:11px;color:#a78bfa">'
+          html += '↻ Iteration ' + (n.attempt || 1) + ' of ' + attempts.length
+          html += '</div>'
+        }
 
         // Agent nodes: prompt + response
         if (data.prompt) {
@@ -1541,6 +1569,21 @@
         if (data.response) {
           html += '<div class="turn"><div class="turn-role turn-role-assistant">Response</div>' +
             '<div class="turn-text">' + esc(data.response) + '</div></div>'
+        }
+
+        // Tool invocation: show the command that ran.
+        if (data.tool_invocation && data.tool_invocation.command) {
+          html += '<div class="turn"><div class="turn-role" style="color:#f59e0b">command</div>' +
+            '<div class="turn-tool"><div class="turn-tool-output" style="max-height:200px;color:#d1d5db">' +
+            esc(data.tool_invocation.command) + '</div></div></div>'
+        }
+        // Captured tool scripts (files referenced by the command).
+        if (Array.isArray(data.scripts) && data.scripts.length > 0) {
+          for (const script of data.scripts) {
+            html += '<div class="turn"><div class="turn-role" style="color:#a78bfa">script: ' + esc(script.name) + '</div>' +
+              '<div class="turn-tool"><div class="turn-tool-output" style="max-height:300px;color:#d1d5db">' +
+              esc(script.content) + '</div></div></div>'
+          }
         }
 
         // Tool nodes: stdout + stderr

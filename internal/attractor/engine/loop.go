@@ -189,6 +189,7 @@ func (e *Engine) handleLoopIteration(node *model.Node, out runtime.Outcome) (boo
 			delete(e.loopIterations, jumpTo)
 			delete(e.loopIterations, spec.EndNode)
 		}
+		e.activeLoopIteration = 0
 		e.appendProgress(map[string]any{
 			"event":      "loop_terminated",
 			"loop_id":    spec.LoopID,
@@ -205,6 +206,10 @@ func (e *Engine) handleLoopIteration(node *model.Node, out runtime.Outcome) (boo
 		e.loopIterations = map[string]int{}
 	}
 	e.loopIterations[jumpTo] = iteration
+	// Set activeLoopIteration so every body node in the next iteration
+	// records its attempt as iteration+1. We increment here (mid-run) so
+	// the NEXT visit to any body node picks up the new value.
+	e.activeLoopIteration = iteration + 1
 
 	e.appendProgress(map[string]any{
 		"event":      "loop_iteration",

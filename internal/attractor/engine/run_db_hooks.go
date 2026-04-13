@@ -111,7 +111,8 @@ const maxCapturedArtifactBytes = 10 * 1024 * 1024 // 10 MB
 // rundbCaptureNodeArtifacts reads the files in a node's stage directory and
 // stores them against the node execution record. Called after CompleteNode so
 // that iteration/retry history is preserved in the DB even when filesystem
-// stage dirs are reused or cleaned up.
+// stage dirs are reused or cleaned up. Also captures any script files that
+// the tool_command referenced so reruns/debugging can see exactly what ran.
 func (e *Engine) rundbCaptureNodeArtifacts(dbID int64, nodeID string) {
 	if e == nil || e.RunDB == nil || dbID == 0 || e.LogsRoot == "" {
 		return
@@ -137,6 +138,113 @@ func (e *Engine) rundbCaptureNodeArtifacts(dbID int64, nodeID string) {
 		if err := e.RunDB.RecordNodeArtifact(dbID, entry.name, entry.contentType, data, truncated); err != nil {
 			e.Warn(fmt.Sprintf("rundb: record artifact %s/%s: %v", nodeID, entry.name, err))
 		}
+	}
+	// Capture any script files referenced by tool_invocation.json. This gives
+	// debuggers the exact script content that ran even if the package is
+	// updated or deleted later.
+	e.captureReferencedScripts(dbID, stageDir)
+}
+
+// captureReferencedScripts inspects tool_invocation.json and captures any
+// file-path tokens that exist in the worktree as tool_script artifacts.
+// Tokens are extracted from both argv entries and the joined command string
+// (split on whitespace) to handle the common `bash -c "sh scripts/foo.sh"`
+// pattern where the script path is embedded inside a single argv entry.
+func (e *Engine) captureReferencedScripts(dbID int64, stageDir string) {
+	invocationPath := filepath.Join(stageDir, "tool_invocation.json")
+	raw, err := os.ReadFile(invocationPath)
+	if err != nil {
+		return
+	}
+	var inv struct {
+		Argv    []string `json:"argv"`
+		Command string   `json:"command"`
+	}
+	if json.Unmarshal(raw, &inv) != nil {
+		return
+	}
+	// Collect tokens from argv entries plus the command string itself.
+	var tokens []string
+	for _, arg := range inv.Argv {
+		tokens = append(tokens, strings.Fields(arg)...)
+	}
+	if inv.Command != "" {
+		tokens = append(tokens, strings.Fields(inv.Command)...)
+	}
+	seen := map[string]bool{}
+	for _, token := range tokens {
+		candidate := extractScriptPath(token)
+		if candidate == "" || seen[candidate] {
+			continue
+		}
+		seen[candidate] = true
+		path := candidate
+		if !filepath.IsAbs(path) && e.WorktreeDir != "" {
+			path = filepath.Join(e.WorktreeDir, candidate)
+		}
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		data, err := readCapped(path, maxCapturedArtifactBytes)
+		if err != nil {
+			continue
+		}
+		truncated := info.Size() > maxCapturedArtifactBytes
+		artifactName := "tool_script:" + filepath.Base(candidate)
+		contentType := scriptContentType(candidate)
+		if err := e.RunDB.RecordNodeArtifact(dbID, artifactName, contentType, data, truncated); err != nil {
+			e.Warn(fmt.Sprintf("rundb: record script %s: %v", artifactName, err))
+		}
+	}
+}
+
+// extractScriptPath returns the argument path if it looks like a script file
+// (ends with a known script extension or lives under a scripts/ directory).
+// Returns empty string for non-script args.
+func extractScriptPath(arg string) string {
+	trimmed := strings.TrimSpace(arg)
+	if trimmed == "" {
+		return ""
+	}
+	lower := strings.ToLower(trimmed)
+	// Recognize common script extensions.
+	extensions := []string{".sh", ".py", ".js", ".mjs", ".ts", ".rb", ".pl", ".bash", ".zsh", ".fish", ".ps1"}
+	hasExt := false
+	for _, ext := range extensions {
+		if strings.HasSuffix(lower, ext) {
+			hasExt = true
+			break
+		}
+	}
+	// Also recognize paths inside .kilroy/package/scripts/ even without an extension.
+	isInScriptsDir := strings.Contains(trimmed, "/scripts/") || strings.Contains(trimmed, ".kilroy/package/")
+	if !hasExt && !isInScriptsDir {
+		return ""
+	}
+	// Strip any shell redirection or flags.
+	if strings.ContainsAny(trimmed, "<>|;&") {
+		return ""
+	}
+	return trimmed
+}
+
+// scriptContentType returns a reasonable content-type for a script path.
+func scriptContentType(path string) string {
+	lower := strings.ToLower(path)
+	switch {
+	case strings.HasSuffix(lower, ".py"):
+		return "text/x-python"
+	case strings.HasSuffix(lower, ".js"), strings.HasSuffix(lower, ".mjs"):
+		return "application/javascript"
+	case strings.HasSuffix(lower, ".ts"):
+		return "application/typescript"
+	case strings.HasSuffix(lower, ".rb"):
+		return "text/x-ruby"
+	case strings.HasSuffix(lower, ".pl"):
+		return "text/x-perl"
+	default:
+		return "text/x-shellscript"
 	}
 }
 

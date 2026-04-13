@@ -212,6 +212,44 @@ type NodeExecutionSummary struct {
 	Notes         string     `json:"notes,omitempty"`
 }
 
+// GetNodeAttempts returns all attempts for a specific node in a run, ordered
+// by attempt number ascending. Used by the UI to render an iteration picker
+// for loop/retry history.
+func (d *DB) GetNodeAttempts(runID, nodeID string) ([]NodeExecutionSummary, error) {
+	rows, err := d.db.Query(`SELECT node_id, attempt, handler_type, status,
+		started_at, completed_at, duration_ms, failure_reason, failure_class, notes
+		FROM node_executions WHERE run_id = ? AND node_id = ?
+		ORDER BY id ASC`, runID, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var results []NodeExecutionSummary
+	for rows.Next() {
+		var n NodeExecutionSummary
+		var startedAt string
+		var completedAt, failureReason, failureClass, notes sql.NullString
+		var durationMS sql.NullInt64
+		if err := rows.Scan(&n.NodeID, &n.Attempt, &n.HandlerType, &n.Status,
+			&startedAt, &completedAt, &durationMS, &failureReason, &failureClass, &notes); err != nil {
+			return nil, err
+		}
+		n.StartedAt, _ = time.Parse(time.RFC3339Nano, startedAt)
+		if completedAt.Valid {
+			t, _ := time.Parse(time.RFC3339Nano, completedAt.String)
+			n.CompletedAt = &t
+		}
+		if durationMS.Valid {
+			n.DurationMS = &durationMS.Int64
+		}
+		n.FailureReason = failureReason.String
+		n.FailureClass = failureClass.String
+		n.Notes = notes.String
+		results = append(results, n)
+	}
+	return results, nil
+}
+
 // GetNodeExecutions returns all node executions for a run.
 func (d *DB) GetNodeExecutions(runID string) ([]NodeExecutionSummary, error) {
 	rows, err := d.db.Query(`SELECT node_id, attempt, handler_type, status,

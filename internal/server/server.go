@@ -63,6 +63,7 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("GET /runs/{id}/outputs", s.handleGetRunOutputs)
 	mux.HandleFunc("GET /runs/{id}/outputs/{name...}", s.handleDownloadOutput)
 	mux.HandleFunc("GET /runs/{id}/nodes/{nodeId}/turns", s.handleGetNodeTurns)
+	mux.HandleFunc("GET /runs/{id}/nodes/{nodeId}/attempts", s.handleGetNodeAttempts)
 	mux.HandleFunc("GET /runs/{id}/nodes/{nodeId}/diff", s.handleGetNodeDiff)
 	mux.HandleFunc("GET /runs/{id}/log", s.handleGetRunLog)
 	mux.HandleFunc("GET /runs/{id}/files/{path...}", s.handleBrowseFiles)

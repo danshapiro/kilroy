@@ -163,6 +163,15 @@ func (s *Server) handleGetNodeTurns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Optional ?attempt=N selects a specific attempt (for loop iteration
+	// history). When absent, returns the latest attempt.
+	requestedAttempt := 0
+	if s := strings.TrimSpace(r.URL.Query().Get("attempt")); s != "" {
+		if n, err := strconv.Atoi(s); err == nil && n > 0 {
+			requestedAttempt = n
+		}
+	}
+
 	// Resolve the full run via DB (handles prefix IDs) and attempt DB-first artifact read.
 	db, err := rundb.Open(rundb.DefaultPath())
 	var run *rundb.RunSummary
@@ -180,12 +189,19 @@ func (s *Server) handleGetNodeTurns(w http.ResponseWriter, r *http.Request) {
 	result := map[string]any{
 		"node_id": nodeId,
 		"run_id":  resolvedID,
+		"attempt": requestedAttempt,
 	}
 
-	// DB-first: read captured artifacts for the latest attempt of this node.
+	// DB-first: read captured artifacts for the requested attempt of this node
+	// (or the latest when no attempt was requested).
 	dbServed := false
 	if db != nil {
-		artifacts, _ := db.GetNodeArtifactsForRunNode(resolvedID, nodeId)
+		var artifacts []rundb.NodeArtifactSummary
+		if requestedAttempt > 0 {
+			artifacts, _ = db.GetNodeArtifactsForAttempt(resolvedID, nodeId, requestedAttempt)
+		} else {
+			artifacts, _ = db.GetNodeArtifactsForRunNode(resolvedID, nodeId)
+		}
 		if len(artifacts) > 0 {
 			dbServed = true
 			assignArtifactsToTurnsResult(result, artifacts)
@@ -216,40 +232,94 @@ func (s *Server) handleGetNodeTurns(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
+// handleGetNodeAttempts returns all attempts for a node in a run, letting
+// the UI render a visit/iteration picker. Each entry includes attempt number,
+// status, timing, and failure details. Sorted by auto-increment id so the
+// order matches execution order (which for loop iterations is the same as
+// iteration order).
+func (s *Server) handleGetNodeAttempts(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	nodeId := r.PathValue("nodeId")
+	if id == "" || nodeId == "" {
+		writeError(w, http.StatusBadRequest, "run_id and nodeId are required")
+		return
+	}
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "database unavailable: "+err.Error())
+		return
+	}
+	defer db.Close()
+
+	// Resolve full ID via prefix lookup.
+	resolvedID := id
+	if run, err := db.GetRun(id); err == nil && run != nil {
+		resolvedID = run.RunID
+	}
+
+	attempts, err := db.GetNodeAttempts(resolvedID, nodeId)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "query attempts: "+err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"run_id":   resolvedID,
+		"node_id":  nodeId,
+		"attempts": attempts,
+		"count":    len(attempts),
+	})
+}
+
 // assignArtifactsToTurnsResult maps captured DB artifacts into the response
 // shape the UI expects (prompt, response, agent_log, stdout, stderr, status).
 func assignArtifactsToTurnsResult(result map[string]any, artifacts []rundb.NodeArtifactSummary) {
+	scripts := []map[string]any{}
 	for _, a := range artifacts {
-		switch a.Name {
-		case "prompt.md":
+		switch {
+		case a.Name == "prompt.md":
 			result["prompt"] = string(a.Content)
-		case "response.md":
+		case a.Name == "response.md":
 			result["response"] = string(a.Content)
-		case "agent_output.jsonl":
+		case a.Name == "agent_output.jsonl":
 			result["agent_log"] = string(a.Content)
 			result["agent_log_format"] = "claude-stream-jsonl"
-		case "events.ndjson":
+		case a.Name == "events.ndjson":
 			result["agent_log"] = string(a.Content)
 			result["agent_log_format"] = "kilroy-events-ndjson"
-		case "status.json":
+		case a.Name == "status.json":
 			var status map[string]any
 			if json.Unmarshal(a.Content, &status) == nil {
 				result["status"] = status
 			}
-		case "stdout.log":
+		case a.Name == "stdout.log":
 			result["stdout"] = string(a.Content)
-		case "stderr.log":
+		case a.Name == "stderr.log":
 			result["stderr"] = string(a.Content)
-		case "tool_timing.json":
+		case a.Name == "tool_timing.json":
 			var timing map[string]any
 			if json.Unmarshal(a.Content, &timing) == nil {
 				result["timing"] = timing
 			}
+		case a.Name == "tool_invocation.json":
+			var inv map[string]any
+			if json.Unmarshal(a.Content, &inv) == nil {
+				result["tool_invocation"] = inv
+			}
+		case strings.HasPrefix(a.Name, "tool_script:"):
+			scripts = append(scripts, map[string]any{
+				"name":         strings.TrimPrefix(a.Name, "tool_script:"),
+				"content":      string(a.Content),
+				"content_type": a.ContentType,
+				"truncated":    a.Truncated,
+			})
 		}
 		if a.Truncated {
 			trunc, _ := result["truncated"].([]string)
 			result["truncated"] = append(trunc, a.Name)
 		}
+	}
+	if len(scripts) > 0 {
+		result["scripts"] = scripts
 	}
 	result["source"] = "db"
 }
