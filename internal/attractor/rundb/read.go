@@ -399,6 +399,77 @@ func (d *DB) GetNodeDiff(runID, nodeID string, attempt int) (*NodeDiffSummary, e
 	return &n, nil
 }
 
+// NodeArtifactSummary is a read-only view of a stored node execution artifact.
+type NodeArtifactSummary struct {
+	ID              int64     `json:"id"`
+	NodeExecutionID int64     `json:"node_execution_id"`
+	Name            string    `json:"name"`
+	ContentType     string    `json:"content_type"`
+	SizeBytes       int64     `json:"size_bytes"`
+	Truncated       bool      `json:"truncated"`
+	Content         []byte    `json:"content,omitempty"`
+	CapturedAt      time.Time `json:"captured_at"`
+}
+
+// GetNodeArtifactsForRunNode returns captured artifacts for a node's latest
+// attempt in a run. Content is always included.
+func (d *DB) GetNodeArtifactsForRunNode(runID, nodeID string) ([]NodeArtifactSummary, error) {
+	return d.getNodeArtifacts(runID, nodeID, 0)
+}
+
+// GetNodeArtifactsForAttempt returns captured artifacts for a specific attempt
+// of a node in a run.
+func (d *DB) GetNodeArtifactsForAttempt(runID, nodeID string, attempt int) ([]NodeArtifactSummary, error) {
+	return d.getNodeArtifacts(runID, nodeID, attempt)
+}
+
+func (d *DB) getNodeArtifacts(runID, nodeID string, attempt int) ([]NodeArtifactSummary, error) {
+	var execID int64
+	if attempt > 0 {
+		row := d.db.QueryRow(`SELECT id FROM node_executions
+			WHERE run_id = ? AND node_id = ? AND attempt = ?`, runID, nodeID, attempt)
+		if err := row.Scan(&execID); err != nil {
+			if err == sql.ErrNoRows {
+				return nil, nil
+			}
+			return nil, err
+		}
+	} else {
+		row := d.db.QueryRow(`SELECT id FROM node_executions
+			WHERE run_id = ? AND node_id = ?
+			ORDER BY attempt DESC LIMIT 1`, runID, nodeID)
+		if err := row.Scan(&execID); err != nil {
+			if err == sql.ErrNoRows {
+				return nil, nil
+			}
+			return nil, err
+		}
+	}
+	rows, err := d.db.Query(`SELECT id, node_execution_id, name, content_type,
+		size_bytes, truncated, content, captured_at
+		FROM node_execution_artifacts
+		WHERE node_execution_id = ?
+		ORDER BY id ASC`, execID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []NodeArtifactSummary
+	for rows.Next() {
+		var a NodeArtifactSummary
+		var truncated int
+		var capturedAt string
+		if err := rows.Scan(&a.ID, &a.NodeExecutionID, &a.Name, &a.ContentType,
+			&a.SizeBytes, &truncated, &a.Content, &capturedAt); err != nil {
+			return nil, err
+		}
+		a.Truncated = truncated != 0
+		a.CapturedAt, _ = time.Parse(time.RFC3339Nano, capturedAt)
+		out = append(out, a)
+	}
+	return out, nil
+}
+
 // GetDotSource returns the stored DOT source for a run, if available.
 func (d *DB) GetDotSource(runID string) string {
 	var src string

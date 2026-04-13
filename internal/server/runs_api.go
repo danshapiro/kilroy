@@ -30,6 +30,21 @@ func (s *Server) handleListRuns(w http.ResponseWriter, r *http.Request) {
 		GraphName: r.URL.Query().Get("graph"),
 		Sort:      r.URL.Query().Get("sort"),
 	}
+	// Parse repeatable ?label=KEY=VALUE query params.
+	if labelParams := r.URL.Query()["label"]; len(labelParams) > 0 {
+		filter.Labels = map[string]string{}
+		for _, spec := range labelParams {
+			parts := strings.SplitN(spec, "=", 2)
+			if len(parts) == 2 {
+				filter.Labels[parts[0]] = parts[1]
+			}
+		}
+	}
+	if limitStr := r.URL.Query().Get("limit"); limitStr != "" {
+		if n, err := strconv.Atoi(limitStr); err == nil && n > 0 {
+			filter.Limit = n
+		}
+	}
 
 	runs, err := db.ListRuns(filter)
 	if err != nil {
@@ -148,72 +163,132 @@ func (s *Server) handleGetNodeTurns(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Resolve logs_root.
-	var logsRoot string
+	// Resolve the full run via DB (handles prefix IDs) and attempt DB-first artifact read.
 	db, err := rundb.Open(rundb.DefaultPath())
+	var run *rundb.RunSummary
+	var resolvedID string
 	if err == nil {
 		defer db.Close()
-		run, err := db.GetRun(id)
-		if err == nil && run != nil {
-			logsRoot = run.LogsRoot
-		}
+		run, _ = db.GetRun(id)
 	}
-	if logsRoot == "" {
-		if p, ok := s.registry.Get(id); ok && p != nil {
-			logsRoot = p.LogsRoot
-		}
-	}
-	if logsRoot == "" {
-		writeError(w, http.StatusNotFound, "run not found")
-		return
-	}
-
-	stageDir := filepath.Join(logsRoot, nodeId)
-	if _, err := os.Stat(stageDir); err != nil {
-		writeError(w, http.StatusNotFound, "node directory not found: "+nodeId)
-		return
+	if run != nil {
+		resolvedID = run.RunID
+	} else {
+		resolvedID = id
 	}
 
 	result := map[string]any{
 		"node_id": nodeId,
-		"run_id":  id,
+		"run_id":  resolvedID,
 	}
 
-	// Read prompt.
+	// DB-first: read captured artifacts for the latest attempt of this node.
+	dbServed := false
+	if db != nil {
+		artifacts, _ := db.GetNodeArtifactsForRunNode(resolvedID, nodeId)
+		if len(artifacts) > 0 {
+			dbServed = true
+			assignArtifactsToTurnsResult(result, artifacts)
+		}
+	}
+
+	// Filesystem fallback: legacy runs (pre-artifact-capture) or running nodes
+	// whose completion hook hasn't fired yet.
+	if !dbServed {
+		var logsRoot string
+		if run != nil {
+			logsRoot = run.LogsRoot
+		} else if p, ok := s.registry.Get(resolvedID); ok && p != nil {
+			logsRoot = p.LogsRoot
+		}
+		if logsRoot == "" {
+			writeError(w, http.StatusNotFound, "run not found")
+			return
+		}
+		stageDir := filepath.Join(logsRoot, nodeId)
+		if _, err := os.Stat(stageDir); err != nil {
+			writeError(w, http.StatusNotFound, "node directory not found: "+nodeId)
+			return
+		}
+		readFilesystemTurns(result, stageDir)
+	}
+
+	writeJSON(w, http.StatusOK, result)
+}
+
+// assignArtifactsToTurnsResult maps captured DB artifacts into the response
+// shape the UI expects (prompt, response, agent_log, stdout, stderr, status).
+func assignArtifactsToTurnsResult(result map[string]any, artifacts []rundb.NodeArtifactSummary) {
+	for _, a := range artifacts {
+		switch a.Name {
+		case "prompt.md":
+			result["prompt"] = string(a.Content)
+		case "response.md":
+			result["response"] = string(a.Content)
+		case "agent_output.jsonl":
+			result["agent_log"] = string(a.Content)
+			result["agent_log_format"] = "claude-stream-jsonl"
+		case "events.ndjson":
+			result["agent_log"] = string(a.Content)
+			result["agent_log_format"] = "kilroy-events-ndjson"
+		case "status.json":
+			var status map[string]any
+			if json.Unmarshal(a.Content, &status) == nil {
+				result["status"] = status
+			}
+		case "stdout.log":
+			result["stdout"] = string(a.Content)
+		case "stderr.log":
+			result["stderr"] = string(a.Content)
+		case "tool_timing.json":
+			var timing map[string]any
+			if json.Unmarshal(a.Content, &timing) == nil {
+				result["timing"] = timing
+			}
+		}
+		if a.Truncated {
+			trunc, _ := result["truncated"].([]string)
+			result["truncated"] = append(trunc, a.Name)
+		}
+	}
+	result["source"] = "db"
+}
+
+// readFilesystemTurns is the legacy path: reads stage files directly from disk
+// for runs that predate artifact capture or are still in flight.
+func readFilesystemTurns(result map[string]any, stageDir string) {
 	if data, err := os.ReadFile(filepath.Join(stageDir, "prompt.md")); err == nil {
 		result["prompt"] = string(data)
 	}
-
-	// Read response (agent output).
 	if data, err := os.ReadFile(filepath.Join(stageDir, "response.md")); err == nil {
 		result["response"] = string(data)
 	}
-
-	// Read status.json for outcome details.
+	if data, err := os.ReadFile(filepath.Join(stageDir, "agent_output.jsonl")); err == nil {
+		result["agent_log"] = string(data)
+		result["agent_log_format"] = "claude-stream-jsonl"
+	} else if data, err := os.ReadFile(filepath.Join(stageDir, "events.ndjson")); err == nil {
+		result["agent_log"] = string(data)
+		result["agent_log_format"] = "kilroy-events-ndjson"
+	}
 	if data, err := os.ReadFile(filepath.Join(stageDir, "status.json")); err == nil {
 		var status map[string]any
 		if json.Unmarshal(data, &status) == nil {
 			result["status"] = status
 		}
 	}
-
-	// Read stdout/stderr for tool nodes.
 	if data, err := os.ReadFile(filepath.Join(stageDir, "stdout.log")); err == nil {
 		result["stdout"] = string(data)
 	}
 	if data, err := os.ReadFile(filepath.Join(stageDir, "stderr.log")); err == nil {
 		result["stderr"] = string(data)
 	}
-
-	// Read tool_timing.json if present.
 	if data, err := os.ReadFile(filepath.Join(stageDir, "tool_timing.json")); err == nil {
 		var timing map[string]any
 		if json.Unmarshal(data, &timing) == nil {
 			result["timing"] = timing
 		}
 	}
-
-	writeJSON(w, http.StatusOK, result)
+	result["source"] = "filesystem"
 }
 
 func (s *Server) handleGetNodeDiff(w http.ResponseWriter, r *http.Request) {

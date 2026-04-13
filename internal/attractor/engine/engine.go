@@ -252,6 +252,13 @@ type Engine struct {
 	// resetting would defeat the breaker in impl-succeeds/verify-fails cycles.
 	loopFailureSignatures map[string]int
 
+	// loopIterations tracks the current iteration count per loop body entry
+	// node. Used by handleLoopIteration to assign distinct attempt numbers
+	// to each loop iteration so every iteration gets its own DB row and
+	// captured artifacts. Separate from executeWithRetry's retry counter
+	// because retries and loop iterations are different semantic concerns.
+	loopIterations map[string]int
+
 	// parallelDispatchCounts tracks how many times each fan-out node has been
 	// dispatched in this run. Incremented once per dispatch call. Used to
 	// produce unique pass-numbered branch names so each re-visit of a fan-out
@@ -692,6 +699,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			completed = append(completed, node.ID)
 			e.cxdbStageFinished(ctx, node, out)
 			e.rundbRecordNodeComplete(nodeDBID, out)
+			e.rundbCaptureNodeArtifacts(nodeDBID, node.ID)
 			if err := runContextError(ctx); err != nil {
 				return nil, err
 			}
@@ -736,7 +744,15 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		e.writeKilroyPreNodeFiles(node, completed, nodeOutcomes)
 
 		e.cxdbStageStarted(ctx, node)
-		nodeDBID := e.rundbRecordNodeStart(node.ID, nodeRetries[node.ID]+1, resolvedHandlerTypeName(e, node.ID))
+		// Prefer loop iteration counter if this node is mid-loop; otherwise
+		// fall back to the retry counter. Loops advance in whole iterations,
+		// retries are internal to a single stage execution — they are
+		// orthogonal.
+		startAttempt := nodeRetries[node.ID] + 1
+		if iter, ok := e.loopIterations[node.ID]; ok && iter > 0 {
+			startAttempt = iter + 1
+		}
+		nodeDBID := e.rundbRecordNodeStart(node.ID, startAttempt, resolvedHandlerTypeName(e, node.ID))
 		out, err := e.executeWithRetry(ctx, node, nodeRetries)
 		if err != nil {
 			return nil, err
@@ -744,6 +760,7 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 		e.rundbRecordProviderIfAgent(node.ID, nodeRetries[node.ID]+1)
 		e.cxdbStageFinished(ctx, node, out)
 		e.rundbRecordNodeComplete(nodeDBID, out)
+		e.rundbCaptureNodeArtifacts(nodeDBID, node.ID)
 		if err := runContextError(ctx); err != nil {
 			return nil, err
 		}
@@ -822,6 +839,29 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 
 		// Record git diff for this node if SHAs differ.
 		e.recordNodeDiff(node.ID, nodeRetries[node.ID]+1, beforeSHA, sha)
+
+		// Loop primitive: single-node and multi-node iteration.
+		// Evaluated after the node completes but before any routing decisions so
+		// we bypass edge selection when looping back.
+		if shouldLoop, jumpTo, loopFailReason := e.handleLoopIteration(node, out); shouldLoop {
+			e.incomingEdge = nil
+			current = jumpTo
+			continue
+		} else if loopFailReason != "" {
+			failedTurnID, _ := e.cxdbRunFailed(ctx, node.ID, sha, loopFailReason)
+			final := runtime.FinalOutcome{
+				Timestamp:         time.Now().UTC(),
+				Status:            runtime.FinalFail,
+				RunID:             e.Options.RunID,
+				FinalGitCommitSHA: sha,
+				FailureReason:     loopFailReason,
+				CXDBContextID:     cxdbContextID(e.CXDB),
+				CXDBHeadTurnID:    failedTurnID,
+			}
+			e.persistTerminalOutcome(ctx, final)
+			e.rundbRecordRunComplete(runtime.FinalFail, loopFailReason, sha)
+			return nil, fmt.Errorf("%s", loopFailReason)
+		}
 
 		// Kilroy v1: explicit parallel nodes control the next hop via context.
 		isExplicitParallel := false

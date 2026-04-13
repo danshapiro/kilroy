@@ -5,6 +5,9 @@ package engine
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
@@ -77,6 +80,79 @@ func (e *Engine) rundbRecordNodeComplete(dbID int64, out runtime.Outcome) {
 	); err != nil {
 		e.Warn("rundb: record node complete: " + err.Error())
 	}
+}
+
+// artifactCaptureList enumerates the files captured from a stage directory
+// after each node attempt. Each entry pairs a filename with a content type hint.
+var artifactCaptureList = []struct {
+	name        string
+	contentType string
+}{
+	{"prompt.md", "text/markdown"},
+	{"response.md", "text/markdown"},
+	{"agent_output.jsonl", "application/x-ndjson"},
+	{"events.ndjson", "application/x-ndjson"},
+	{"events.json", "application/json"},
+	{"status.json", "application/json"},
+	{"stdout.log", "text/plain"},
+	{"stderr.log", "text/plain"},
+	{"tool_timing.json", "application/json"},
+	{"tool_invocation.json", "application/json"},
+	{"tmux_command.txt", "text/plain"},
+	{"inputs_manifest.json", "application/json"},
+	{"provider_used.json", "application/json"},
+	{"panic.txt", "text/plain"},
+}
+
+// maxCapturedArtifactBytes caps a single captured file. Files larger than this
+// are stored truncated with the truncated flag set.
+const maxCapturedArtifactBytes = 10 * 1024 * 1024 // 10 MB
+
+// rundbCaptureNodeArtifacts reads the files in a node's stage directory and
+// stores them against the node execution record. Called after CompleteNode so
+// that iteration/retry history is preserved in the DB even when filesystem
+// stage dirs are reused or cleaned up.
+func (e *Engine) rundbCaptureNodeArtifacts(dbID int64, nodeID string) {
+	if e == nil || e.RunDB == nil || dbID == 0 || e.LogsRoot == "" {
+		return
+	}
+	stageDir := filepath.Join(e.LogsRoot, nodeID)
+	for _, entry := range artifactCaptureList {
+		path := filepath.Join(stageDir, entry.name)
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		truncated := false
+		size := info.Size()
+		readLimit := int64(maxCapturedArtifactBytes)
+		if size > readLimit {
+			truncated = true
+		}
+		data, err := readCapped(path, readLimit)
+		if err != nil {
+			e.Warn(fmt.Sprintf("rundb: capture artifact %s/%s: %v", nodeID, entry.name, err))
+			continue
+		}
+		if err := e.RunDB.RecordNodeArtifact(dbID, entry.name, entry.contentType, data, truncated); err != nil {
+			e.Warn(fmt.Sprintf("rundb: record artifact %s/%s: %v", nodeID, entry.name, err))
+		}
+	}
+}
+
+// readCapped reads up to limit bytes from path.
+func readCapped(path string, limit int64) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf := make([]byte, limit)
+	n, err := io.ReadFull(f, buf)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return nil, err
+	}
+	return buf[:n], nil
 }
 
 func (e *Engine) rundbRecordEdgeDecision(fromNode, toNode, edgeLabel, condition, reason string) {

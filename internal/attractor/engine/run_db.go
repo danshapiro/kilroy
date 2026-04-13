@@ -12,4 +12,5 @@ type RunDBWriter interface {
 	RecordEdgeDecision(runID, fromNode, toNode, edgeLabel, condition, reason string) error
 	RecordProviderSelection(runID, nodeID string, attempt int, provider, model, backend string) error
 	RecordNodeDiff(runID, nodeID string, attempt int, beforeSHA, afterSHA string, filesChanged, insertions, deletions int) error
+	RecordNodeArtifact(nodeExecID int64, name, contentType string, content []byte, truncated bool) error
 }

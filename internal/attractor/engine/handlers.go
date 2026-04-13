@@ -78,6 +78,8 @@ func NewCoreRegistry() *HandlerRegistry {
 	reg.Register("parallel", &ParallelHandler{})
 	reg.Register("parallel.fan_in", &FanInHandler{})
 	reg.Register("tool", &ToolHandler{})
+	reg.Register("loop.begin", &LoopBeginHandler{})
+	reg.Register("loop.end", &LoopEndHandler{})
 	return reg
 }
 
@@ -154,6 +156,10 @@ func shapeToType(shape string) string {
 		return "tool"
 	case "house":
 		return "stack.manager_loop"
+	case "trapezium":
+		return "loop.begin"
+	case "invtrapezium":
+		return "loop.end"
 	default:
 		return "agent"
 	}
@@ -169,6 +175,31 @@ type ExitHandler struct{}
 
 func (h *ExitHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
 	return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "exit"}, nil
+}
+
+// LoopBeginHandler marks the entry of a multi-node loop scope. Pass-through —
+// iteration state is tracked in engine context and managed by the engine's
+// main loop when it reaches the paired LoopEnd node.
+type LoopBeginHandler struct{}
+
+// SkipRetry: loop_begin is a routing sentinel, not a work node; retrying it
+// would burn retry budget for nothing.
+func (h *LoopBeginHandler) SkipRetry() bool { return true }
+
+func (h *LoopBeginHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
+	return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "loop_begin"}, nil
+}
+
+// LoopEndHandler marks the exit of a multi-node loop scope. Pass-through —
+// the engine's main loop inspects the node, evaluates termination conditions
+// via shouldContinueLoop, and either follows the forward edge or jumps back
+// to the paired loop_begin.
+type LoopEndHandler struct{}
+
+func (h *LoopEndHandler) SkipRetry() bool { return true }
+
+func (h *LoopEndHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
+	return runtime.Outcome{Status: runtime.StatusSuccess, Notes: "loop_end"}, nil
 }
 
 type ConditionalHandler struct{}

@@ -152,6 +152,39 @@ func (d *DB) InsertProviderSelection(runID, nodeID string, attempt int, provider
 	return err
 }
 
+// NodeArtifact represents a captured stage file attached to a node execution.
+type NodeArtifact struct {
+	Name        string
+	ContentType string
+	Content     []byte
+	Truncated   bool
+}
+
+// InsertNodeArtifact stores a single artifact blob against a node execution.
+// Best-effort: size is computed from the content and the truncated flag is stored
+// as-is so readers can detect capped files.
+func (d *DB) InsertNodeArtifact(nodeExecID int64, a NodeArtifact) error {
+	if nodeExecID == 0 {
+		return nil
+	}
+	truncated := 0
+	if a.Truncated {
+		truncated = 1
+	}
+	_, err := d.db.Exec(`INSERT INTO node_execution_artifacts
+		(node_execution_id, name, content_type, size_bytes, truncated, content)
+		VALUES (?, ?, ?, ?, ?, ?)`,
+		nodeExecID, a.Name, a.ContentType, len(a.Content), truncated, a.Content)
+	return err
+}
+
+// RecordNodeArtifact satisfies engine.RunDBWriter. Delegates to InsertNodeArtifact.
+func (d *DB) RecordNodeArtifact(nodeExecID int64, name, contentType string, content []byte, truncated bool) error {
+	return d.InsertNodeArtifact(nodeExecID, NodeArtifact{
+		Name: name, ContentType: contentType, Content: content, Truncated: truncated,
+	})
+}
+
 // RecordNodeDiff records the git diff for a node execution.
 func (d *DB) RecordNodeDiff(runID, nodeID string, attempt int, beforeSHA, afterSHA string, filesChanged, insertions, deletions int) error {
 	_, err := d.db.Exec(`INSERT INTO node_diffs

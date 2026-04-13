@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -30,7 +31,7 @@ func attractorRuns(args []string) {
 
 func runsUsage() {
 	fmt.Fprintln(os.Stderr, "usage:")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor runs list [--json]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs list [--json] [--label KEY=VALUE] [--status STATUS] [--graph PATTERN] [--limit N]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor runs prune [--before YYYY-MM-DD] [--graph PATTERN] [--label KEY=VALUE] [--orphans] [--dry-run | --yes]")
 }
 
@@ -134,21 +135,68 @@ func readFinalStatus(logsRoot string) string {
 
 func attractorRunsList(args []string) {
 	asJSON := false
-	for _, a := range args {
-		switch a {
+	filter := rundb.ListFilter{}
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
 		case "--json":
 			asJSON = true
+		case "--label":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--label requires KEY=VALUE")
+				os.Exit(1)
+			}
+			parts := strings.SplitN(args[i], "=", 2)
+			if len(parts) != 2 {
+				fmt.Fprintf(os.Stderr, "--label %q: expected KEY=VALUE\n", args[i])
+				os.Exit(1)
+			}
+			if filter.Labels == nil {
+				filter.Labels = map[string]string{}
+			}
+			filter.Labels[parts[0]] = parts[1]
+		case "--status":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--status requires a value")
+				os.Exit(1)
+			}
+			filter.Status = args[i]
+		case "--graph":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--graph requires a value")
+				os.Exit(1)
+			}
+			filter.GraphName = args[i]
+		case "--limit":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--limit requires a value")
+				os.Exit(1)
+			}
+			n, err := strconv.Atoi(args[i])
+			if err != nil || n <= 0 {
+				fmt.Fprintf(os.Stderr, "--limit %q: expected positive integer\n", args[i])
+				os.Exit(1)
+			}
+			filter.Limit = n
 		default:
-			fmt.Fprintf(os.Stderr, "unknown arg: %s\n", a)
+			fmt.Fprintf(os.Stderr, "unknown arg: %s\n", args[i])
 			runsUsage()
 			os.Exit(1)
 		}
 	}
 
-	// Try RunDB first, fall back to filesystem scan.
-	if records := listRunsFromDB(); len(records) > 0 {
+	// Try RunDB first, fall back to filesystem scan (which only supports no-filter listings).
+	if records := listRunsFromDB(filter); records != nil {
 		printRunRecords(records, asJSON, "run database")
 		return
+	}
+
+	if filter.Status != "" || filter.GraphName != "" || len(filter.Labels) > 0 || filter.Limit > 0 {
+		fmt.Fprintln(os.Stderr, "filter flags (--label, --status, --graph, --limit) require the run database")
+		os.Exit(1)
 	}
 
 	baseDir := engine.DefaultRunsBaseDir()
@@ -160,14 +208,14 @@ func attractorRunsList(args []string) {
 	printRunRecords(records, asJSON, baseDir)
 }
 
-func listRunsFromDB() []runRecord {
+func listRunsFromDB(filter rundb.ListFilter) []runRecord {
 	db, err := rundb.Open(rundb.DefaultPath())
 	if err != nil {
 		return nil
 	}
 	defer db.Close()
 
-	runs, err := db.ListRuns(rundb.ListFilter{})
+	runs, err := db.ListRuns(filter)
 	if err != nil {
 		return nil
 	}
