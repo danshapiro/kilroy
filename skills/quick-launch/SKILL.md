@@ -17,9 +17,17 @@ Don't use this for:
 - Long-running build/test pipelines. Use a real workflow package.
 - Tasks where you need live conversational back-and-forth with the agent.
 
+## Step 0: Preflight checklist
+
+Before invoking the skill, confirm:
+
+- `kilroy` is on PATH. (`which kilroy` — if missing, the skill is not installed; tell the user and stop.)
+- `~/.local/share/kilroy/workflows/quick-launch/` exists. This is the canonical workflow package path; all invocations below reference it directly.
+- Current working directory is a git repo. The engine auto-detects and creates an isolated run branch + worktree, so the user's source tree is never touched. If cwd is not a git repo, the run still works but isolation degrades to plain-directory mode — warn the user.
+
 ## Step 1: Pick the agent
 
-The quick-launch package (`workflows/quick-launch/`) ships three graph variants:
+The quick-launch package ships three graph variants:
 
 - `graph.dot` — claude (default)
 - `graph.codex.dot` — OpenAI codex CLI
@@ -46,22 +54,24 @@ If the task is short and self-contained, you can skip the context entirely — t
 
 ## Step 3: Launch
 
-From a directory containing a `run.yaml` (see "Minimal run.yaml" below):
+From the user's current working directory (which should be a git repo — see Step 0):
 
 ```bash
 kilroy attractor run --detach --tmux \
-  --package <ABS_PATH>/workflows/quick-launch \
-  --config run.yaml \
+  --package ~/.local/share/kilroy/workflows/quick-launch \
   --no-cxdb --skip-cli-headless-warning \
-  --label task=<SHORT_SLUG> --label workflow=quick-launch \
-  --input '{"prompt":"...","context_file":"/abs/path/to/context.md"}'
+  --label task=<SHORT_SLUG> \
+  --input '{"prompt":"<TASK_DESCRIPTION>","context_file":"<ABS_PATH_OR_OMIT>"}'
 ```
 
-Optional additions:
-- `--graph <ABS_PATH>/workflows/quick-launch/graph.codex.dot` to pick codex (or `.gemini.dot`).
-- More `--label KEY=VALUE` flags to tag owner, run group, ticket id, etc. Tags are the only durable handle you have — use at least one specific one so you can find this run later.
+That is the whole invocation. No `--config` needed — when no run.yaml is supplied, kilroy auto-builds a default config for cwd and auto-detects installed provider CLIs (claude, codex, gemini). The `workflow=quick-launch` label is added automatically by the package's `workflow.toml`.
 
-On success the command prints `run_id=<ulid>` and `logs_root=...` and returns immediately. The run continues in a detached tmux session.
+Optional additions:
+- `--graph ~/.local/share/kilroy/workflows/quick-launch/graph.codex.dot` to pick codex. Swap `.gemini.dot` for gemini. Omit for claude.
+- Additional `--label KEY=VALUE` flags to tag owner, ticket id, run group, etc. The `task=` tag is the minimum — use a specific slug so `runs list --label task=<slug>` finds exactly this run later.
+- `--workspace <dir>` to run against a different directory than cwd. Use this when the user wants the run to operate against a repo they're not currently in.
+
+On success the command prints `run_id=<ulid>` and `logs_root=...` and returns immediately. The run continues in a detached tmux session. Print the `run_id` and the `runs show` command to the user so they can follow up.
 
 ## Step 4: Check status
 
