@@ -13,23 +13,15 @@ digraph quick_launch_codex {
     start [shape=Mdiamond, label="Start"]
     done  [shape=Msquare,  label="Done"]
 
-    stage [
-        shape=parallelogram,
-        label="Stage task + context",
-        tool_command="sh .kilroy/package/scripts/stage.sh"
-    ]
-
     agent [
         shape=box,
         label="Run agent",
         agent_tool="codex",
         llm_provider="openai",
-        prompt="Read .kilroy/TASK.md for your assignment. If .kilroy/CONTEXT.md exists, read it for background context. Complete the task and write your findings to result.md at the workspace root. Keep result.md self-contained (the caller will read it directly). When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
+        prompt="Read .kilroy/INPUT.md for the user's request. The '## prompt' section is your assignment. If a '## context_file' section exists, read the file at that path for background context. If a '## context' section exists instead, use it as inline context. Complete the task and write your findings to result.md at the workspace root. Keep result.md self-contained — the caller will read it directly. When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
         outputs="result.md"
     ]
 
-    start -> stage
-    stage -> agent [condition="outcome=success"]
-    stage -> done
+    start -> agent
     agent -> done
 }

@@ -35,22 +35,29 @@ The quick-launch package ships three graph variants:
 
 The agent is encoded in the graph file. Pick one with `--graph` when launching; otherwise the package loader uses `graph.dot`.
 
-## Step 2: Prepare inputs
+## Step 2: Prepare the task
 
-Two inputs land on disk for the agent:
+All inputs are written to `.kilroy/INPUT.md` in the worktree at run start, with one `## <key>` section per input. The agent reads that file to find the task and any context.
 
-- `.kilroy/TASK.md` — comes from `KILROY_INPUT_PROMPT` (required).
-- `.kilroy/CONTEXT.md` — optional. Either:
-  - `context_file`: absolute path to an existing file; the stage script copies it in.
-  - `context`: an inline string; written verbatim.
+Two ways to pass the task (pick one):
 
-Pass them as JSON to `--input`:
-
+**Short tasks — inline JSON:**
 ```bash
---input '{"prompt":"Investigate X and summarize findings","context_file":"/abs/path/to/briefing.md"}'
+--input '{"prompt":"Investigate X and summarize findings"}'
 ```
 
-If the task is short and self-contained, you can skip the context entirely — the agent only reads `CONTEXT.md` if it exists.
+**Longer or multi-line tasks — write the prompt to a file and use `--prompt-file`:**
+```bash
+--prompt-file /abs/path/to/request.md
+```
+This reads the file contents verbatim into the `prompt` input. No JSON escaping, no quoting nightmares. **Strongly prefer this when the task is more than ~100 words or contains anything that would be painful to inline: multi-paragraph briefings, code blocks, markdown tables, lists with embedded quotes.** The extra step of writing a file is worth it the moment you reach for `\n` escapes.
+
+Optional extras (pass alongside either form via `--input '{"...":"..."}`):
+
+- `context_file` — absolute path to a file for background context. The agent reads it from its original location; no copy happens. Use when the context is a document that already exists on disk (briefing, design doc, log file). Example: `--input '{"context_file":"/abs/path/briefing.md"}'` combined with `--prompt-file`.
+- `context` — an inline string for background context. Use when the context is short enough to inline but you want to keep it separate from the task description.
+
+If the task is short and self-contained (a few sentences), skip the context entirely.
 
 ## Step 3: Launch
 
@@ -59,35 +66,50 @@ From the user's current working directory (which should be a git repo — see St
 ```bash
 kilroy attractor run --detach --tmux \
   --package ~/.local/share/kilroy/workflows/quick-launch \
-  --no-cxdb --skip-cli-headless-warning \
   --label task=<SHORT_SLUG> \
-  --input '{"prompt":"<TASK_DESCRIPTION>","context_file":"<ABS_PATH_OR_OMIT>"}'
+  --prompt-file <PROMPT_FILE_PATH>
 ```
 
-That is the whole invocation. No `--config` needed — when no run.yaml is supplied, kilroy auto-builds a default config for cwd and auto-detects installed provider CLIs (claude, codex, gemini). The `workflow=quick-launch` label is added automatically by the package's `workflow.toml`.
+Or the inline-JSON form for a short prompt:
+```bash
+kilroy attractor run --detach --tmux \
+  --package ~/.local/share/kilroy/workflows/quick-launch \
+  --label task=<SHORT_SLUG> \
+  --input '{"prompt":"<SHORT_TASK>"}'
+```
+
+That is the whole invocation. No `--config` needed — when no run.yaml is supplied, kilroy auto-builds a default config for cwd and auto-detects installed provider CLIs. No `--no-cxdb` or `--skip-cli-headless-warning` needed either — those are applied automatically when there's no config and stdin isn't interactive. The `workflow=quick-launch` label is added automatically by the package's `workflow.toml`.
 
 Optional additions:
 - `--graph ~/.local/share/kilroy/workflows/quick-launch/graph.codex.dot` to pick codex. Swap `.gemini.dot` for gemini. Omit for claude.
-- Additional `--label KEY=VALUE` flags to tag owner, ticket id, run group, etc. The `task=` tag is the minimum — use a specific slug so `runs list --label task=<slug>` finds exactly this run later.
+- Additional `--label KEY=VALUE` flags to tag owner, ticket id, run group, etc. The `task=` tag is the minimum — use a specific slug so `runs show --latest --label task=<slug>` finds exactly this run later.
 - `--workspace <dir>` to run against a different directory than cwd. Use this when the user wants the run to operate against a repo they're not currently in.
 
-On success the command prints `run_id=<ulid>` and `logs_root=...` and returns immediately. The run continues in a detached tmux session. Print the `run_id` and the `runs show` command to the user so they can follow up.
+On success the command prints `run_id=<ulid>` and `logs_root=...` and returns immediately. The run continues in a detached tmux session. Print the `run_id` (or the `--latest --label task=<slug>` form) to the user so they can follow up.
 
-## Step 4: Check status
+## Step 4: Wait for the run
 
-List tagged runs:
+The fastest way — block until the run reaches a terminal state, then return:
+
+```bash
+kilroy attractor runs wait --latest --label task=<SHORT_SLUG> --timeout 10m
+```
+
+`runs wait` polls the run DB every ~2s (configurable with `--interval`), prints each status transition to stderr, and exits 0 on `success` / 1 on `fail`/`canceled` / 2 on `--timeout` expiry. Use this whenever you want synchronous behavior on top of the detached run.
+
+If you don't want to block, check status on demand instead:
+
+```bash
+kilroy attractor runs show --latest --label task=<SHORT_SLUG>
+```
+
+or list all runs matching a tag:
 
 ```bash
 kilroy attractor runs list --label task=<SHORT_SLUG>
 ```
 
-Show full detail (status, timing, paths, declared outputs) by run id or unique prefix:
-
-```bash
-kilroy attractor runs show 01KP646Y
-```
-
-Add `--json` for machine-readable output. The interesting fields for a caller are:
+Show output accepts `--json` for machine-readable detail. Interesting fields for a caller:
 - `status` — `running`, `success`, `fail`, `canceled`
 - `worktree_dir` — where the agent worked; still on disk with the final git state
 - `outputs[].path` — absolute path to each collected output file (e.g. `result.md`)
@@ -97,10 +119,10 @@ Add `--json` for machine-readable output. The interesting fields for a caller ar
 Once status is `success`:
 
 ```bash
-kilroy attractor runs show 01KP646Y --print result.md
+kilroy attractor runs show --latest --label task=<SHORT_SLUG> --print result.md
 ```
 
-That streams the file straight to stdout. You can pipe it, redirect it, or read it directly into your current conversation.
+(or use a run id / prefix instead of `--latest`). That streams the file straight to stdout — pipe it, redirect it, or read it into your current conversation.
 
 If the agent wrote additional files you care about, list them:
 
@@ -110,9 +132,9 @@ kilroy attractor runs show 01KP646Y --outputs
 
 …and `--print <filename>` any of them. Only files declared in `outputs=` on the graph or the node are collected into `logs_root/outputs/` — everything else stays in the worktree (`worktree_dir` from `runs show`).
 
-## Minimal run.yaml
+## Minimal run.yaml (only if you need it)
 
-The quick-launch package does not include a run.yaml — callers provide one. A working minimum:
+You almost never need a run.yaml for quick-launch — the default behavior handles it. Supply one only when you need non-default settings: specific model selection beyond what the graph's stylesheet declares, a remote cxdb, custom runtime policy, or a non-cwd workspace via config instead of `--workspace`. A working minimum:
 
 ```yaml
 version: 1
@@ -140,8 +162,6 @@ runtime_policy:
   stall_check_interval_ms: 5000
   max_llm_retries: 2
 ```
-
-`repo.path` is the workspace the run operates against. If it's a git repo, the engine creates a dedicated run branch + worktree automatically — your source tree is never touched in-place. If it's not a git repo, the run uses it as a plain directory.
 
 ## Inspecting a finished run
 

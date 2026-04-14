@@ -23,6 +23,8 @@ func attractorRuns(args []string) {
 		attractorRunsList(args[1:])
 	case "show":
 		attractorRunsShow(args[1:])
+	case "wait":
+		attractorRunsWait(args[1:])
 	case "prune":
 		attractorRunsPrune(args[1:])
 	default:
@@ -34,7 +36,8 @@ func attractorRuns(args []string) {
 func runsUsage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor runs list [--json] [--label KEY=VALUE] [--status STATUS] [--graph PATTERN] [--limit N]")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor runs show <id-or-prefix> [--json] [--outputs] [--print <file>]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs show (<id-or-prefix> | --latest [--label KEY=VALUE]) [--json] [--outputs] [--print <file>]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs wait (<id-or-prefix> | --latest [--label KEY=VALUE]) [--timeout <duration>] [--interval <duration>] [--json]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor runs prune [--before YYYY-MM-DD] [--graph PATTERN] [--label KEY=VALUE] [--orphans] [--dry-run | --yes]")
 }
 
@@ -577,6 +580,8 @@ func attractorRunsShow(args []string) {
 	var asJSON bool
 	var printFile string
 	var listOutputs bool
+	var latest bool
+	labelFilters := map[string]string{}
 
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -584,6 +589,20 @@ func attractorRunsShow(args []string) {
 			asJSON = true
 		case "--outputs":
 			listOutputs = true
+		case "--latest":
+			latest = true
+		case "--label":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--label requires KEY=VALUE")
+				os.Exit(1)
+			}
+			parts := strings.SplitN(args[i], "=", 2)
+			if len(parts) != 2 {
+				fmt.Fprintf(os.Stderr, "--label %q: expected KEY=VALUE\n", args[i])
+				os.Exit(1)
+			}
+			labelFilters[parts[0]] = parts[1]
 		case "--print":
 			i++
 			if i >= len(args) {
@@ -604,9 +623,13 @@ func attractorRunsShow(args []string) {
 			runArg = args[i]
 		}
 	}
-	if runArg == "" {
-		fmt.Fprintln(os.Stderr, "runs show requires a run id or prefix")
+	if runArg == "" && !latest {
+		fmt.Fprintln(os.Stderr, "runs show requires a run id or prefix (or --latest with optional --label filters)")
 		runsUsage()
+		os.Exit(1)
+	}
+	if runArg != "" && latest {
+		fmt.Fprintln(os.Stderr, "runs show: --latest and a run id are mutually exclusive")
 		os.Exit(1)
 	}
 
@@ -617,14 +640,32 @@ func attractorRunsShow(args []string) {
 	}
 	defer db.Close()
 
-	run, err := db.GetRun(runArg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "lookup run %q: %v\n", runArg, err)
-		os.Exit(1)
-	}
-	if run == nil {
-		fmt.Fprintf(os.Stderr, "no run matching %q\n", runArg)
-		os.Exit(1)
+	var run *rundb.RunSummary
+	if latest {
+		matches, err := db.ListRuns(rundb.ListFilter{Labels: labelFilters, Limit: 1})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "list runs: %v\n", err)
+			os.Exit(1)
+		}
+		if len(matches) == 0 {
+			if len(labelFilters) == 0 {
+				fmt.Fprintln(os.Stderr, "no runs in database")
+			} else {
+				fmt.Fprintf(os.Stderr, "no runs matching label filters %v\n", labelFilters)
+			}
+			os.Exit(1)
+		}
+		run = &matches[0]
+	} else {
+		run, err = db.GetRun(runArg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "lookup run %q: %v\n", runArg, err)
+			os.Exit(1)
+		}
+		if run == nil {
+			fmt.Fprintf(os.Stderr, "no run matching %q\n", runArg)
+			os.Exit(1)
+		}
 	}
 
 	// --print short-circuits: dump a single output file to stdout.
@@ -793,4 +834,188 @@ func gatherOutputRefs(run *rundb.RunSummary) []runShowOutputRef {
 		}
 	}
 	return nil
+}
+
+// --- wait ---
+
+// runStatusIsTerminal reports whether a run's status is final (no more
+// updates expected). Keep in sync with rundb write paths that set status.
+func runStatusIsTerminal(status string) bool {
+	switch status {
+	case "success", "fail", "canceled", "cancelled", "error", "timeout":
+		return true
+	}
+	return false
+}
+
+func attractorRunsWait(args []string) {
+	var runArg string
+	var latest bool
+	var asJSON bool
+	labelFilters := map[string]string{}
+	timeout := time.Duration(0)           // 0 = no timeout
+	interval := 2 * time.Second
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			asJSON = true
+		case "--latest":
+			latest = true
+		case "--label":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--label requires KEY=VALUE")
+				os.Exit(1)
+			}
+			parts := strings.SplitN(args[i], "=", 2)
+			if len(parts) != 2 {
+				fmt.Fprintf(os.Stderr, "--label %q: expected KEY=VALUE\n", args[i])
+				os.Exit(1)
+			}
+			labelFilters[parts[0]] = parts[1]
+		case "--timeout":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--timeout requires a duration (e.g. 5m, 30s)")
+				os.Exit(1)
+			}
+			d, err := time.ParseDuration(args[i])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "--timeout %q: %v\n", args[i], err)
+				os.Exit(1)
+			}
+			timeout = d
+		case "--interval":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--interval requires a duration (e.g. 2s)")
+				os.Exit(1)
+			}
+			d, err := time.ParseDuration(args[i])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "--interval %q: %v\n", args[i], err)
+				os.Exit(1)
+			}
+			if d < 500*time.Millisecond {
+				d = 500 * time.Millisecond
+			}
+			interval = d
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(os.Stderr, "unknown arg: %s\n", args[i])
+				runsUsage()
+				os.Exit(1)
+			}
+			if runArg != "" {
+				fmt.Fprintln(os.Stderr, "runs wait takes exactly one run id or prefix")
+				os.Exit(1)
+			}
+			runArg = args[i]
+		}
+	}
+	if runArg == "" && !latest {
+		fmt.Fprintln(os.Stderr, "runs wait requires a run id or prefix (or --latest with optional --label filters)")
+		runsUsage()
+		os.Exit(1)
+	}
+	if runArg != "" && latest {
+		fmt.Fprintln(os.Stderr, "runs wait: --latest and a run id are mutually exclusive")
+		os.Exit(1)
+	}
+
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open run database: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	// Resolve the target run id up-front. For --latest we capture the newest
+	// matching run at the time of invocation; later polling re-looks-up by
+	// that exact id so the target can't shift under us if a new run lands.
+	var targetID string
+	if latest {
+		matches, err := db.ListRuns(rundb.ListFilter{Labels: labelFilters, Limit: 1})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "list runs: %v\n", err)
+			os.Exit(1)
+		}
+		if len(matches) == 0 {
+			if len(labelFilters) == 0 {
+				fmt.Fprintln(os.Stderr, "no runs in database")
+			} else {
+				fmt.Fprintf(os.Stderr, "no runs matching label filters %v\n", labelFilters)
+			}
+			os.Exit(1)
+		}
+		targetID = matches[0].RunID
+	} else {
+		run, err := db.GetRun(runArg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "lookup run %q: %v\n", runArg, err)
+			os.Exit(1)
+		}
+		if run == nil {
+			fmt.Fprintf(os.Stderr, "no run matching %q\n", runArg)
+			os.Exit(1)
+		}
+		targetID = run.RunID
+	}
+
+	deadline := time.Time{}
+	if timeout > 0 {
+		deadline = time.Now().Add(timeout)
+	}
+
+	var lastStatus string
+	for {
+		run, err := db.GetRun(targetID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "lookup run %s: %v\n", targetID, err)
+			os.Exit(1)
+		}
+		if run == nil {
+			// Shouldn't happen given we resolved targetID above, but bail out
+			// cleanly rather than spinning on a missing row.
+			fmt.Fprintf(os.Stderr, "run %s disappeared from database\n", targetID)
+			os.Exit(1)
+		}
+		if run.Status != lastStatus && !asJSON {
+			fmt.Fprintf(os.Stderr, "%s: %s\n", run.RunID, run.Status)
+			lastStatus = run.Status
+		}
+		if runStatusIsTerminal(run.Status) {
+			if asJSON {
+				enc := json.NewEncoder(os.Stdout)
+				enc.SetIndent("", "  ")
+				_ = enc.Encode(map[string]any{
+					"run_id":         run.RunID,
+					"status":         run.Status,
+					"duration_ms":    run.DurationMS,
+					"failure_reason": run.FailureReason,
+					"worktree_dir":   run.WorktreeDir,
+					"logs_root":      run.LogsRoot,
+				})
+			} else {
+				fmt.Printf("%s %s", run.RunID, run.Status)
+				if run.DurationMS != nil {
+					fmt.Printf(" (%dms)", *run.DurationMS)
+				}
+				fmt.Println()
+				if run.FailureReason != "" {
+					fmt.Printf("  failure: %s\n", run.FailureReason)
+				}
+			}
+			if run.Status == "success" {
+				return
+			}
+			os.Exit(1)
+		}
+		if !deadline.IsZero() && time.Now().After(deadline) {
+			fmt.Fprintf(os.Stderr, "timeout waiting for run %s (last status: %s)\n", targetID, run.Status)
+			os.Exit(2)
+		}
+		time.Sleep(interval)
+	}
 }

@@ -13,7 +13,7 @@ Key reminders from the skill (do not skip):
 
 - Use the invocation template in Step 3 verbatim. Every flag is load-bearing.
 - The workflow package lives at `~/.local/share/kilroy/workflows/quick-launch`.
-- Tag the run with at least one specific `--label` so you can find it later.
-- Pass the task via `--input '{"prompt":"..."}'`. If the user references a file as context, pass it via `"context_file":"<abs-path>"` in the same JSON.
-- After launching, print the `run_id` so the user can follow up.
-- Do not wait for the run synchronously — it is detached on purpose.
+- Tag the run with at least one specific `--label task=<slug>` so you can find it later with `--latest --label task=<slug>`.
+- For any task longer than ~100 words or anything that would need `\n` escaping in JSON, write the prompt to a file first and use `--prompt-file <path>` instead of `--input '{"prompt":"..."}'`. This is the default, not the exception.
+- After launching, print the `run_id` (and the `runs wait --latest --label` command) so the user can follow up.
+- If the user asked you to wait for the result, use `kilroy attractor runs wait --latest --label task=<slug> --timeout <reasonable>` — don't poll by hand.

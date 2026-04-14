@@ -23,6 +23,8 @@ import (
 	"github.com/danshapiro/kilroy/internal/dotenv"
 	"github.com/danshapiro/kilroy/internal/providerspec"
 	"github.com/danshapiro/kilroy/internal/version"
+
+	"github.com/mattn/go-isatty"
 )
 
 const (
@@ -222,6 +224,7 @@ func attractorRun(args []string) {
 	var skipCLIHeadlessWarning bool
 	var forceModelSpecs []string
 	var inputPath string
+	var promptFile string
 	var workspace string
 	var labelSpecs []string
 	var useTmux bool
@@ -286,6 +289,13 @@ func attractorRun(args []string) {
 				os.Exit(1)
 			}
 			inputPath = args[i]
+		case "--prompt-file":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--prompt-file requires a file path")
+				os.Exit(1)
+			}
+			promptFile = args[i]
 		case "--workspace":
 			i++
 			if i >= len(args) {
@@ -392,6 +402,19 @@ func attractorRun(args []string) {
 			os.Exit(1)
 		}
 	}
+	// --prompt-file reads a file verbatim and assigns its contents to the
+	// "prompt" input key. Overrides any prompt already set via --input.
+	if promptFile != "" {
+		data, err := os.ReadFile(promptFile)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading --prompt-file %q: %v\n", promptFile, err)
+			os.Exit(1)
+		}
+		if inputs == nil {
+			inputs = map[string]any{}
+		}
+		inputs["prompt"] = string(data)
+	}
 
 	// Git integration: auto-detect based on workspace/cwd.
 	// If the workspace (or cwd) is a git repo, enable git worktrees and commits.
@@ -404,6 +427,21 @@ func attractorRun(args []string) {
 	gitHook := &workflows.GitHook{}
 	if gitHook.ValidateRepo(gitDetectDir, false) == nil {
 		gitOps = gitHook
+	}
+
+	// Skip the interactive CLI-backend warning automatically when stdin isn't
+	// a terminal (detached runs, pipes, agent-driven invocations). There's
+	// nobody to answer y/n so the prompt is pointless and the warning has
+	// already been surfaced out-of-band by whatever started the process.
+	if !skipCLIHeadlessWarning && !stdinIsTerminal() {
+		skipCLIHeadlessWarning = true
+	}
+	// Default to --no-cxdb when the caller didn't supply a run config. The
+	// auto-built default config doesn't populate cxdb addresses, so requiring
+	// cxdb would just fail later. Callers that genuinely want cxdb should
+	// pass --config with cxdb.binary_addr set.
+	if configPath == "" && !noCXDB {
+		noCXDB = true
 	}
 
 	if detach {
@@ -470,6 +508,22 @@ func attractorRun(args []string) {
 			childArgs = append(childArgs, "--input", inputPath)
 		} else if inputPath != "" {
 			childArgs = append(childArgs, "--input", inputPath)
+		}
+		if promptFile != "" {
+			if abs, err := filepath.Abs(promptFile); err == nil {
+				promptFile = abs
+			}
+			childArgs = append(childArgs, "--prompt-file", promptFile)
+		}
+		// Always forward an explicit --workspace to the child. If the caller
+		// didn't pass one, use the parent's cwd — otherwise the detach child
+		// (which launches with cwd = logs_root) would mistake the logs dir
+		// for its workspace and run in plain-directory mode instead of the
+		// user's actual git repo.
+		if workspace == "" {
+			if cwd, err := os.Getwd(); err == nil {
+				workspace = cwd
+			}
 		}
 		if workspace != "" {
 			if abs, err := filepath.Abs(workspace); err == nil {
@@ -720,6 +774,16 @@ func runConfigUsesCLIProviders(cfg *engine.RunConfigFile) bool {
 		}
 	}
 	return false
+}
+
+// stdinIsTerminal reports whether os.Stdin is attached to an interactive
+// terminal. When it isn't (detached runs, pipes, redirected input, /dev/null,
+// subprocess invocation), there's nobody to answer a y/n prompt so callers
+// should skip interactive confirmations entirely. We use go-isatty rather
+// than a Mode&CharDevice check because /dev/null is also a char device on
+// darwin/linux and would fool the simpler test.
+func stdinIsTerminal() bool {
+	return isatty.IsTerminal(os.Stdin.Fd()) || isatty.IsCygwinTerminal(os.Stdin.Fd())
 }
 
 func confirmCLIHeadlessWarning(in io.Reader, out io.Writer) bool {

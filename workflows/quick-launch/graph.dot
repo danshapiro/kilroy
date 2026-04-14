@@ -1,10 +1,16 @@
-// Quick-launch: stage prompt + optional context, then run a single agent.
+// Quick-launch: run a single agent against an inline prompt (plus optional
+// context file) and collect result.md.
+//
 // Inputs: prompt (required), context_file or context (optional).
-// Output: result.md at worktree root.
+// Output: result.md at the worktree root.
+//
+// All inputs land in .kilroy/INPUT.md which the engine writes once at run
+// start from the structured --input map. The agent reads that file directly;
+// no prepare/stage step is needed because --input values are already sectioned
+// as "## prompt", "## context_file", etc.
 //
 // Default agent: claude. For codex/gemini, use --graph graph.codex.dot or
-// graph.gemini.dot. All three variants share the same scripts/stage.sh so
-// swapping the agent doesn't require touching the prepare logic.
+// graph.gemini.dot.
 
 digraph quick_launch {
     graph [
@@ -18,28 +24,17 @@ digraph quick_launch {
     start [shape=Mdiamond, label="Start"]
     done  [shape=Msquare,  label="Done"]
 
-    // Tool: write TASK.md and (optionally) CONTEXT.md into .kilroy/ so the
-    // agent has a stable place to read its instructions from, regardless of
-    // how the prompt and context were passed in on the command line.
-    stage [
-        shape=parallelogram,
-        label="Stage task + context",
-        tool_command="sh .kilroy/package/scripts/stage.sh"
-    ]
-
-    // Agent: read TASK.md (+ CONTEXT.md if present), do the work, write
-    // result.md to the worktree root. Keep the prompt agent-agnostic so the
-    // codex/gemini variants can reuse this block verbatim.
+    // Agent: read .kilroy/INPUT.md (which holds the user's prompt + any
+    // context_file path or inline context), do the work, write result.md
+    // to the worktree root.
     agent [
         shape=box,
         label="Run agent",
         agent_tool="claude",
-        prompt="Read .kilroy/TASK.md for your assignment. If .kilroy/CONTEXT.md exists, read it for background context. Complete the task and write your findings to result.md at the workspace root. Keep result.md self-contained (the caller will read it directly). When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
+        prompt="Read .kilroy/INPUT.md for the user's request. The '## prompt' section is your assignment. If a '## context_file' section exists, read the file at that path for background context. If a '## context' section exists instead, use it as inline context. Complete the task and write your findings to result.md at the workspace root. Keep result.md self-contained — the caller will read it directly. When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
         outputs="result.md"
     ]
 
-    start -> stage
-    stage -> agent [condition="outcome=success"]
-    stage -> done
+    start -> agent
     agent -> done
 }
