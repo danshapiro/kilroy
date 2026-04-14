@@ -1,0 +1,45 @@
+// Quick-launch: stage prompt + optional context, then run a single agent.
+// Inputs: prompt (required), context_file or context (optional).
+// Output: result.md at worktree root.
+//
+// Default agent: claude. For codex/gemini, use --graph graph.codex.dot or
+// graph.gemini.dot. All three variants share the same scripts/stage.sh so
+// swapping the agent doesn't require touching the prepare logic.
+
+digraph quick_launch {
+    graph [
+        inputs="prompt",
+        outputs="result.md",
+        model_stylesheet="
+            * { llm_provider: anthropic; llm_model: claude-sonnet-4.6; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    done  [shape=Msquare,  label="Done"]
+
+    // Tool: write TASK.md and (optionally) CONTEXT.md into .kilroy/ so the
+    // agent has a stable place to read its instructions from, regardless of
+    // how the prompt and context were passed in on the command line.
+    stage [
+        shape=parallelogram,
+        label="Stage task + context",
+        tool_command="sh .kilroy/package/scripts/stage.sh"
+    ]
+
+    // Agent: read TASK.md (+ CONTEXT.md if present), do the work, write
+    // result.md to the worktree root. Keep the prompt agent-agnostic so the
+    // codex/gemini variants can reuse this block verbatim.
+    agent [
+        shape=box,
+        label="Run agent",
+        agent_tool="claude",
+        prompt="Read .kilroy/TASK.md for your assignment. If .kilroy/CONTEXT.md exists, read it for background context. Complete the task and write your findings to result.md at the workspace root. Keep result.md self-contained (the caller will read it directly). When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
+        outputs="result.md"
+    ]
+
+    start -> stage
+    stage -> agent [condition="outcome=success"]
+    stage -> done
+    agent -> done
+}

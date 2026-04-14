@@ -21,6 +21,8 @@ func attractorRuns(args []string) {
 	switch args[0] {
 	case "list":
 		attractorRunsList(args[1:])
+	case "show":
+		attractorRunsShow(args[1:])
 	case "prune":
 		attractorRunsPrune(args[1:])
 	default:
@@ -32,6 +34,7 @@ func attractorRuns(args []string) {
 func runsUsage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor runs list [--json] [--label KEY=VALUE] [--status STATUS] [--graph PATTERN] [--limit N]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs show <id-or-prefix> [--json] [--outputs] [--print <file>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor runs prune [--before YYYY-MM-DD] [--graph PATTERN] [--label KEY=VALUE] [--orphans] [--dry-run | --yes]")
 }
 
@@ -48,14 +51,17 @@ type runManifest struct {
 
 // runRecord is a fully resolved run entry (manifest + final status).
 type runRecord struct {
-	RunID       string
-	GraphName   string
-	Goal        string
-	StartedAt   time.Time
-	LogsRoot    string
-	Labels      map[string]string
-	FinalStatus string
-	Duration    string
+	RunID       string            `json:"run_id"`
+	GraphName   string            `json:"graph_name"`
+	Goal        string            `json:"goal,omitempty"`
+	StartedAt   time.Time         `json:"started_at"`
+	LogsRoot    string            `json:"logs_root,omitempty"`
+	WorktreeDir string            `json:"worktree_dir,omitempty"`
+	RunBranch   string            `json:"run_branch,omitempty"`
+	RepoPath    string            `json:"repo_path,omitempty"`
+	Labels      map[string]string `json:"labels,omitempty"`
+	FinalStatus string            `json:"status"`
+	Duration    string            `json:"duration,omitempty"`
 }
 
 func loadRunRecords(baseDir string) ([]runRecord, error) {
@@ -231,6 +237,9 @@ func listRunsFromDB(filter rundb.ListFilter) []runRecord {
 			Goal:        r.Goal,
 			StartedAt:   r.StartedAt,
 			LogsRoot:    r.LogsRoot,
+			WorktreeDir: r.WorktreeDir,
+			RunBranch:   r.RunBranch,
+			RepoPath:    r.RepoPath,
 			Labels:      r.Labels,
 			FinalStatus: r.Status,
 			Duration:    dur,
@@ -529,4 +538,259 @@ func pruneFromDB(beforeTime time.Time, graphPattern, labelKey, labelVal string, 
 	}
 	fmt.Printf("%d run(s) pruned from database.\n", n)
 	return true
+}
+
+// --- show ---
+
+// runShowDetail is the JSON payload for `runs show --json`.
+type runShowDetail struct {
+	RunID         string             `json:"run_id"`
+	GraphName     string             `json:"graph_name"`
+	Goal          string             `json:"goal,omitempty"`
+	Status        string             `json:"status"`
+	StartedAt     time.Time          `json:"started_at"`
+	CompletedAt   *time.Time         `json:"completed_at,omitempty"`
+	DurationMS    *int64             `json:"duration_ms,omitempty"`
+	LogsRoot      string             `json:"logs_root,omitempty"`
+	WorktreeDir   string             `json:"worktree_dir,omitempty"`
+	RepoPath      string             `json:"repo_path,omitempty"`
+	RunBranch     string             `json:"run_branch,omitempty"`
+	FinalSHA      string             `json:"final_sha,omitempty"`
+	FailureReason string             `json:"failure_reason,omitempty"`
+	Labels        map[string]string  `json:"labels,omitempty"`
+	Inputs        map[string]any     `json:"inputs,omitempty"`
+	Invocation    []string           `json:"invocation,omitempty"`
+	Outputs       []runShowOutputRef `json:"outputs,omitempty"`
+}
+
+// runShowOutputRef points at a declared output file on disk.
+type runShowOutputRef struct {
+	Name       string `json:"name"`
+	Path       string `json:"path,omitempty"`
+	SizeBytes  int64  `json:"size_bytes,omitempty"`
+	Found      bool   `json:"found"`
+	Source     string `json:"source,omitempty"` // "collected" or "worktree"
+}
+
+func attractorRunsShow(args []string) {
+	var runArg string
+	var asJSON bool
+	var printFile string
+	var listOutputs bool
+
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--json":
+			asJSON = true
+		case "--outputs":
+			listOutputs = true
+		case "--print":
+			i++
+			if i >= len(args) {
+				fmt.Fprintln(os.Stderr, "--print requires a filename (e.g. result.md)")
+				os.Exit(1)
+			}
+			printFile = args[i]
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(os.Stderr, "unknown arg: %s\n", args[i])
+				runsUsage()
+				os.Exit(1)
+			}
+			if runArg != "" {
+				fmt.Fprintln(os.Stderr, "runs show takes exactly one run id or prefix")
+				os.Exit(1)
+			}
+			runArg = args[i]
+		}
+	}
+	if runArg == "" {
+		fmt.Fprintln(os.Stderr, "runs show requires a run id or prefix")
+		runsUsage()
+		os.Exit(1)
+	}
+
+	db, err := rundb.Open(rundb.DefaultPath())
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "open run database: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	run, err := db.GetRun(runArg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lookup run %q: %v\n", runArg, err)
+		os.Exit(1)
+	}
+	if run == nil {
+		fmt.Fprintf(os.Stderr, "no run matching %q\n", runArg)
+		os.Exit(1)
+	}
+
+	// --print short-circuits: dump a single output file to stdout.
+	if printFile != "" {
+		path, ok := locateOutputFile(run, printFile)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "output %q not found in run %s (looked in outputs/ and worktree)\n", printFile, run.RunID)
+			os.Exit(1)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "read %s: %v\n", path, err)
+			os.Exit(1)
+		}
+		os.Stdout.Write(data)
+		return
+	}
+
+	outputs := gatherOutputRefs(run)
+
+	if listOutputs {
+		for _, o := range outputs {
+			if o.Found {
+				fmt.Printf("%s\t%s\n", o.Name, o.Path)
+			} else {
+				fmt.Printf("%s\t(missing)\n", o.Name)
+			}
+		}
+		return
+	}
+
+	if asJSON {
+		detail := runShowDetail{
+			RunID:         run.RunID,
+			GraphName:     run.GraphName,
+			Goal:          run.Goal,
+			Status:        run.Status,
+			StartedAt:     run.StartedAt,
+			CompletedAt:   run.CompletedAt,
+			DurationMS:    run.DurationMS,
+			LogsRoot:      run.LogsRoot,
+			WorktreeDir:   run.WorktreeDir,
+			RepoPath:      run.RepoPath,
+			RunBranch:     run.RunBranch,
+			FinalSHA:      run.FinalSHA,
+			FailureReason: run.FailureReason,
+			Labels:        run.Labels,
+			Inputs:        run.Inputs,
+			Invocation:    run.Invocation,
+			Outputs:       outputs,
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		_ = enc.Encode(detail)
+		return
+	}
+
+	// Human-readable format.
+	fmt.Printf("run_id:       %s\n", run.RunID)
+	fmt.Printf("graph:        %s\n", run.GraphName)
+	if run.Goal != "" {
+		fmt.Printf("goal:         %s\n", run.Goal)
+	}
+	fmt.Printf("status:       %s\n", run.Status)
+	fmt.Printf("started:      %s\n", run.StartedAt.Local().Format("2006-01-02 15:04:05"))
+	if run.CompletedAt != nil {
+		fmt.Printf("completed:    %s\n", run.CompletedAt.Local().Format("2006-01-02 15:04:05"))
+	}
+	if run.DurationMS != nil {
+		fmt.Printf("duration:     %dms\n", *run.DurationMS)
+	}
+	if run.FailureReason != "" {
+		fmt.Printf("failure:      %s\n", run.FailureReason)
+	}
+	if len(run.Labels) > 0 {
+		fmt.Printf("labels:       %s\n", formatLabels(run.Labels))
+	}
+	if run.WorktreeDir != "" {
+		fmt.Printf("worktree:     %s\n", run.WorktreeDir)
+	}
+	if run.RepoPath != "" {
+		fmt.Printf("repo_path:    %s\n", run.RepoPath)
+	}
+	if run.RunBranch != "" {
+		fmt.Printf("run_branch:   %s\n", run.RunBranch)
+	}
+	if run.LogsRoot != "" {
+		fmt.Printf("logs_root:    %s\n", run.LogsRoot)
+	}
+	if run.FinalSHA != "" {
+		fmt.Printf("final_sha:    %s\n", run.FinalSHA)
+	}
+	if len(outputs) > 0 {
+		fmt.Println("outputs:")
+		for _, o := range outputs {
+			if o.Found {
+				fmt.Printf("  %s -> %s (%d bytes)\n", o.Name, o.Path, o.SizeBytes)
+			} else {
+				fmt.Printf("  %s (missing)\n", o.Name)
+			}
+		}
+	}
+}
+
+// locateOutputFile looks up a named output file by checking the post-run
+// collection directory first and then the live worktree as a fallback.
+func locateOutputFile(run *rundb.RunSummary, name string) (string, bool) {
+	if run.LogsRoot != "" {
+		collected := filepath.Join(run.LogsRoot, "outputs", name)
+		if st, err := os.Stat(collected); err == nil && !st.IsDir() {
+			return collected, true
+		}
+	}
+	if run.WorktreeDir != "" {
+		live := filepath.Join(run.WorktreeDir, name)
+		if st, err := os.Stat(live); err == nil && !st.IsDir() {
+			return live, true
+		}
+	}
+	return "", false
+}
+
+// gatherOutputRefs reads outputs.json from the run's logs_root if present,
+// and falls back to scanning the worktree for known names otherwise.
+func gatherOutputRefs(run *rundb.RunSummary) []runShowOutputRef {
+	if run == nil {
+		return nil
+	}
+	// Preferred: outputs.json written by the engine after collection.
+	if run.LogsRoot != "" {
+		raw, err := os.ReadFile(filepath.Join(run.LogsRoot, "outputs.json"))
+		if err == nil {
+			var results []struct {
+				Name      string `json:"name"`
+				Found     bool   `json:"found"`
+				Path      string `json:"path,omitempty"`
+				SizeBytes int64  `json:"size_bytes,omitempty"`
+			}
+			if json.Unmarshal(raw, &results) == nil {
+				refs := make([]runShowOutputRef, 0, len(results))
+				for _, r := range results {
+					ref := runShowOutputRef{
+						Name:      r.Name,
+						Found:     r.Found,
+						Path:      r.Path,
+						SizeBytes: r.SizeBytes,
+						Source:    "collected",
+					}
+					// If the collected copy is gone (e.g. pruned logs), fall
+					// back to checking the live worktree.
+					if !ref.Found || ref.Path == "" {
+						if run.WorktreeDir != "" {
+							live := filepath.Join(run.WorktreeDir, r.Name)
+							if st, err := os.Stat(live); err == nil {
+								ref.Found = true
+								ref.Path = live
+								ref.SizeBytes = st.Size()
+								ref.Source = "worktree"
+							}
+						}
+					}
+					refs = append(refs, ref)
+				}
+				return refs
+			}
+		}
+	}
+	return nil
 }

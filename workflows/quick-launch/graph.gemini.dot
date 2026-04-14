@@ -1,0 +1,35 @@
+// Quick-launch variant: same workflow, gemini agent.
+// See graph.dot for the canonical version and docs.
+
+digraph quick_launch_gemini {
+    graph [
+        inputs="prompt",
+        outputs="result.md",
+        model_stylesheet="
+            * { llm_provider: google; llm_model: gemini-2.5-pro; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    done  [shape=Msquare,  label="Done"]
+
+    stage [
+        shape=parallelogram,
+        label="Stage task + context",
+        tool_command="sh .kilroy/package/scripts/stage.sh"
+    ]
+
+    agent [
+        shape=box,
+        label="Run agent",
+        agent_tool="gemini",
+        llm_provider="google",
+        prompt="Read .kilroy/TASK.md for your assignment. If .kilroy/CONTEXT.md exists, read it for background context. Complete the task and write your findings to result.md at the workspace root. Keep result.md self-contained (the caller will read it directly). When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
+        outputs="result.md"
+    ]
+
+    start -> stage
+    stage -> agent [condition="outcome=success"]
+    stage -> done
+    agent -> done
+}
