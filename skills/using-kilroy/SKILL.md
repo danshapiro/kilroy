@@ -12,21 +12,36 @@ Kilroy is a local-first Attractor runner:
 3. Run in an isolated git worktree with checkpoint commits.
 4. Resume interrupted runs from logs, CXDB, or run branch.
 
+> **If you only need to delegate a one-shot task to a single agent** (investigation, research, a small code change you don't need to supervise live), use `skills/quick-launch/` instead — it's the fire-and-forget workflow built on top of this command surface and handles tagging, detached launch, and result retrieval with one command each.
+
 ## Command Surface
 
 Use these exact command forms:
 
 ```text
-kilroy attractor run [--preflight|--test-run] [--detach] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> --config <run.yaml> [--run-id <id>] [--logs-root <dir>]
+kilroy attractor run [--preflight|--test-run] [--detach] [--tmux] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--skip-cli-headless-warning] [--force-model <provider=model>] [--graph <file.dot>] [--package <dir>] [--config <run.yaml>] [--run-id <id>] [--logs-root <dir>] [--workspace <dir>] [--input <json-or-path>] [--label KEY=VALUE]
 kilroy attractor resume --logs-root <dir>
 kilroy attractor resume --cxdb <http_base_url> --context-id <id>
 kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]
 kilroy attractor status [--logs-root <dir> | --latest] [--json] [--follow|-f] [--cxdb] [--raw] [--watch] [--interval <sec>]
 kilroy attractor stop --logs-root <dir> [--grace-ms <ms>] [--force]
+kilroy attractor runs list [--json] [--label KEY=VALUE] [--status STATUS] [--graph PATTERN] [--limit N]
+kilroy attractor runs show <id-or-prefix> [--json] [--outputs] [--print <file>]
+kilroy attractor runs prune [--before YYYY-MM-DD] [--older-than DURATION] [--graph PATTERN] [--label KEY=VALUE] [--orphans] [--dry-run | --yes]
 kilroy attractor validate --graph <file.dot>
 kilroy attractor ingest [--output <file.dot>] [--model <model>] [--skill <skill.md>] [--repo <path>] [--max-turns <n>] [--no-validate] <requirements>
 kilroy attractor serve [--addr <host:port>]
 ```
+
+### Run flags you may not have seen before
+
+- `--package <dir>` — load a workflow package (a directory with `workflow.toml`, `graph.dot`, `scripts/`, `prompts/`). Applies label defaults, validates inputs, materializes scripts into the worktree. Prefer packages over bare graphs for anything reusable.
+- `--tmux` — execute each agent CLI invocation inside a detached tmux session. Required for headless runs that use the Claude/Codex/Gemini CLIs. Combine with `--detach` for fire-and-forget operation.
+- `--input <json-or-path>` — structured inputs for the graph. Pass a JSON literal (`--input '{"key":"value"}'`) or a path to a JSON/YAML file. Values become `KILROY_INPUT_KEY` env vars for tool nodes and `$input.key` placeholders in agent prompts. Required inputs are declared via the graph's `inputs="key1,key2"` attribute.
+- `--label KEY=VALUE` — attach a label to the run. Repeatable. Labels are stored in the run DB and used by `runs list --label` and `runs prune --label`. Always tag detached runs so you can find them later.
+- `--workspace <dir>` — override the workspace dir (default: cwd). If it's a git repo, the engine creates a dedicated run branch + worktree; otherwise it runs in plain-directory mode.
+- `--skip-cli-headless-warning` — bypass the interactive CLI-backend confirmation prompt. Safe for detached runs where stdin isn't a TTY.
+- `--no-cxdb` — skip the content-addressed event store entirely. Useful for standalone runs and development; omit in production.
 
 ## Workflow
 
@@ -81,6 +96,37 @@ tail -f <logs_root>/progress.ndjson
 ```bash
 ./kilroy attractor stop --logs-root <logs_root> --grace-ms 30000 --force
 ```
+
+## Runs: listing, inspecting, cleaning up
+
+Every run (detached or foreground) is recorded in a local SQLite run database. Query it via `kilroy attractor runs`:
+
+```bash
+# All runs, newest first
+kilroy attractor runs list
+
+# Filter by label (repeatable tags on launch come back here)
+kilroy attractor runs list --label task=investigate-gadfly
+
+# Machine-readable
+kilroy attractor runs list --json --status running --limit 10
+
+# Full detail for one run (accepts unique prefix)
+kilroy attractor runs show 01KP646Y
+kilroy attractor runs show 01KP646Y --json
+
+# List just the declared output files
+kilroy attractor runs show 01KP646Y --outputs
+
+# Stream a specific output file to stdout
+kilroy attractor runs show 01KP646Y --print result.md
+
+# Clean up old runs (dry-run by default; add --yes to actually delete)
+kilroy attractor runs prune --older-than 7d
+kilroy attractor runs prune --label experiment=true --yes
+```
+
+`runs show` output includes `worktree_dir`, `repo_path`, `run_branch`, and `logs_root` — use these to `cd` back into a finished run's workspace or feed them to other commands.
 
 ## Ingest Details
 
