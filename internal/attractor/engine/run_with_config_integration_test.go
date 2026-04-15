@@ -504,7 +504,12 @@ digraph G {
 		t.Fatalf("state_root missing: %#v", inv)
 	}
 	assertExists(t, filepath.Join(stateRoot, "auth.json"))
-	assertExists(t, filepath.Join(stateRoot, "config.toml"))
+	// Kilroy deliberately does not seed config.toml into the isolated codex
+	// home — run configuration must come from kilroy and the graph, not
+	// from the user's shell profile. See buildCodexIsolatedEnv.
+	if _, err := os.Stat(filepath.Join(stateRoot, "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("config.toml should not be seeded into isolated codex home (got err=%v)", err)
+	}
 	if strings.HasPrefix(stateRoot, filepath.Clean(res.LogsRoot)+string(filepath.Separator)) || stateRoot == filepath.Clean(res.LogsRoot) {
 		t.Fatalf("state_root should be outside logs root: logs_root=%q state_root=%q", res.LogsRoot, stateRoot)
 	}

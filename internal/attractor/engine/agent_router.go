@@ -1626,20 +1626,45 @@ func buildCodexIsolatedEnvWithName(stageDir string, homeDirName string, baseEnv 
 
 	seeded := []string{}
 	seedErrors := []string{}
-	// Seed codex config from the ORIGINAL home (before isolation).
-	// Prefer HOME, then Windows home vars, then os.UserHomeDir().
-	srcHome := codexSourceHome(baseEnv)
-	if srcHome != "" {
-		for _, name := range []string{"auth.json", "config.toml"} {
-			src := filepath.Join(srcHome, ".codex", name)
-			dst := filepath.Join(codexStateRoot, name)
-			copied, err := copyIfExists(src, dst)
+	// Auth setup for the isolated codex home. Kilroy runs use API-key auth
+	// for codex whenever OPENAI_API_KEY is available, because gpt-5-codex and
+	// other exec-mode models aren't accessible under ChatGPT subscription
+	// auth. Writing a fresh auth.json here forces apikey mode and matches
+	// what tmux_handler.go + templates/codex.go does for non-probe runs, so
+	// probe results are consistent with what the real run will see.
+	//
+	// We deliberately do NOT copy config.toml from the user's real ~/.codex/.
+	// Kilroy's guiding principle: a run's configuration comes from kilroy
+	// and the .dot graph, not by accident from whatever shell or user
+	// preferences happen to be in the environment. Leaking the user's
+	// config.toml would smuggle settings like model_reasoning_effort into
+	// kilroy runs, which can break specific models upstream (e.g. the
+	// xhigh-rejects-gpt-5-codex case).
+	apiKey := envValueFromBase(baseEnv, "OPENAI_API_KEY")
+	authDst := filepath.Join(codexStateRoot, "auth.json")
+	if apiKey != "" {
+		auth := map[string]string{"auth_mode": "apikey", "OPENAI_API_KEY": apiKey}
+		data, err := json.Marshal(auth)
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal isolated codex auth.json: %w", err)
+		}
+		if err := os.WriteFile(authDst, data, 0o600); err != nil {
+			return nil, nil, fmt.Errorf("write isolated codex auth.json: %w", err)
+		}
+		seeded = append(seeded, authDst)
+	} else {
+		// No API key available — fall back to copying the original auth.json
+		// (subscription auth). Probes under this path cannot exercise
+		// gpt-5-codex and similar apikey-only models, but we still want the
+		// rest of codex preflight to run against something plausible.
+		srcHome := codexSourceHome(baseEnv)
+		if srcHome != "" {
+			src := filepath.Join(srcHome, ".codex", "auth.json")
+			copied, err := copyIfExists(src, authDst)
 			if err != nil {
-				seedErrors = append(seedErrors, fmt.Sprintf("%s: %v", name, err))
-				continue
-			}
-			if copied {
-				seeded = append(seeded, dst)
+				seedErrors = append(seedErrors, fmt.Sprintf("auth.json: %v", err))
+			} else if copied {
+				seeded = append(seeded, authDst)
 			}
 		}
 	}
@@ -1800,6 +1825,20 @@ func envHasKey(env []string, key string) bool {
 		}
 	}
 	return false
+}
+
+// envValueFromBase extracts a single KEY=VALUE from a []string environment
+// slice, returning the value (or empty string if not present). Falls back to
+// os.Getenv so callers can find values that live in the parent process's
+// environment but haven't been placed in baseEnv yet.
+func envValueFromBase(env []string, key string) string {
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix)
+		}
+	}
+	return os.Getenv(key)
 }
 
 // conflictingProviderEnvKeys returns env var names that must be stripped when
