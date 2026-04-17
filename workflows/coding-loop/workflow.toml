@@ -1,0 +1,19 @@
+# Coding-loop workflow: iterative LLM coding agent with reviewer feedback and done-gate.
+# Runs up to 8 choose→implement→review→gate iterations against a user-supplied spec.
+# Usage: kilroy attractor run --package workflows/coding-loop/ \
+#          --workspace <target-repo-dir> \
+#          --input '{"spec":"/abs/path/to/spec.md"}'
+
+name = "coding-loop"
+description = "Iterative coding workflow: a task chooser selects sub-tasks, an implementer codes them, a reviewer scores each iteration, and a done-gate decides when the spec is complete."
+version = "0.1.0"
+
+outputs = ["result.md"]
+
+[[inputs]]
+name = "spec"
+description = "Absolute path to the feature/task spec file that defines what to build."
+required = true
+
+[defaults]
+labels = { workflow = "coding-loop" }

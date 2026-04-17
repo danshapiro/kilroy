@@ -69,20 +69,7 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 	sessionName := buildSessionName(runID, node.ID)
 
 	// Build environment variables.
-	env := tmpl.BuildEnv()
-	if env == nil {
-		env = map[string]string{}
-	}
-	if runID != "" {
-		env["KILROY_RUN_ID"] = runID
-	}
-	env["KILROY_NODE_ID"] = node.ID
-	// Add input env vars if available.
-	if exec != nil && exec.Engine != nil {
-		for k, v := range engine.InputEnvVars(exec.Engine.Options.Inputs) {
-			env[k] = v
-		}
-	}
+	env := buildTmuxAgentEnv(tmpl, exec, node.ID)
 
 	// Resolve model from node attributes.
 	modelID := strings.TrimSpace(node.Attr("llm_model", ""))
@@ -346,6 +333,31 @@ func resolveToolName(node *model.Node) string {
 		}
 	}
 	return "claude" // default
+}
+
+// buildTmuxAgentEnv constructs the environment variables passed to a tmux-run
+// agent session. It consolidates the tool template's defaults with the engine
+// runtime invariants (run/node IDs, worktree/logs paths, input env) and the
+// stage status contract paths so the engine-injected status-contract preamble
+// is actionable from inside the session. Without the status contract env vars,
+// agents spend tool calls hunting for KILROY_STAGE_STATUS_PATH.
+func buildTmuxAgentEnv(tmpl *templates.Template, exec *engine.Execution, nodeID string) map[string]string {
+	var env map[string]string
+	if tmpl != nil {
+		env = tmpl.BuildEnv()
+	}
+	if env == nil {
+		env = map[string]string{}
+	}
+	for k, v := range engine.BuildStageRuntimeEnv(exec, nodeID) {
+		env[k] = v
+	}
+	if exec != nil {
+		for k, v := range engine.BuildStageStatusContract(exec.WorktreeDir).EnvVars {
+			env[k] = v
+		}
+	}
+	return env
 }
 
 // buildSessionName creates a unique tmux session name for a node execution.
