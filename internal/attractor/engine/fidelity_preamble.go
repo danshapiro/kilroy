@@ -8,7 +8,7 @@ import (
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
 
-func buildFidelityPreamble(ctx *runtime.Context, runID string, goal string, fidelity string, prevNode string, completed []string) string {
+func BuildFidelityPreamble(ctx *runtime.Context, runID string, goal string, fidelity string, prevNode string, completed []string) string {
 	lines := []string{
 		"Kilroy Context",
 		fmt.Sprintf("RunID: %s", strings.TrimSpace(runID)),
@@ -52,7 +52,7 @@ func buildFidelityPreamble(ctx *runtime.Context, runID string, goal string, fide
 	return strings.Join(lines, "\n")
 }
 
-func decodeCompletedNodes(ctx *runtime.Context) []string {
+func DecodeCompletedNodes(ctx *runtime.Context) []string {
 	if ctx == nil {
 		return nil
 	}

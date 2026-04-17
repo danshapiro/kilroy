@@ -1,0 +1,12 @@
+digraph tool_only_test {
+  graph [goal="Test tool-only graph execution with L0 registry"]
+
+  start [shape=Mdiamond, label="Start"]
+  step1 [shape=parallelogram, label="Step 1: Create file", tool_command="echo hello > /tmp/kilroy-tool-test-output.txt"]
+  step2 [shape=parallelogram, label="Step 2: Read file", tool_command="cat /tmp/kilroy-tool-test-output.txt"]
+  done  [shape=Msquare, label="Done"]
+
+  start -> step1
+  step1 -> step2
+  step2 -> done
+}

@@ -1,0 +1,73 @@
+// PR review workflow: setup, build/test, code review, holistic review, report.
+// Inputs: pr_repo (owner/repo), pr_number. Output: review-report.md.
+
+digraph pr_review {
+    graph [
+        inputs="pr_repo,pr_number",
+        outputs="review-report.md",
+        model_stylesheet="
+            * { llm_model: claude-sonnet-4.6; llm_provider: anthropic; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    done  [shape=Msquare,  label="Done"]
+
+    // Tool: checkout PR branch, fetch metadata, merge base
+    setup [
+        shape=parallelogram,
+        label="Setup PR",
+        tool_command="sh .kilroy/package/scripts/setup-pr.sh"
+    ]
+
+    // Tool: detect build system, run build and tests
+    build_test [
+        shape=parallelogram,
+        label="Build & Test",
+        tool_command="sh .kilroy/package/scripts/build-test.sh",
+        timeout="600s"
+    ]
+
+    // Tool: write a failure report when build/test failed
+    fail_report [
+        shape=parallelogram,
+        label="Write Failure Report",
+        tool_command="sh .kilroy/package/scripts/write-fail-report.sh"
+    ]
+
+    // Tool: collect the PR diff for review agents
+    collect_diff [
+        shape=parallelogram,
+        label="Collect Diff",
+        tool_command="sh .kilroy/package/scripts/collect-diff.sh"
+    ]
+
+    // Agent: review the diff for code quality, bugs, test coverage
+    code_review [
+        shape=box,
+        label="Code Review",
+        agent_tool="claude",
+        prompt="You are reviewing a GitHub PR. Read .ai/pr-data/pr-view.txt, pr-meta.json, pr-diff.patch, changed-files.txt, and build-report.json. Read the actual changed source files for context. Assess correctness, security, error handling, test coverage, naming, and scope. Write findings to .ai/pr-data/code-review-findings.md with sections: Critical Issues, Warnings, Positive Observations, File-by-File Notes. Be specific with file:line citations. Then write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
+        outputs=".ai/pr-data/code-review-findings.md"
+    ]
+
+    // Agent: holistic assessment and final report
+    holistic_review [
+        shape=box,
+        label="Holistic Review",
+        agent_tool="claude",
+        prompt="You are making a final PR assessment. Read .ai/pr-data/code-review-findings.md, pr-view.txt, pr-meta.json, build-report.json, and skim pr-diff.patch. Assess net value, completeness, risk, and make a decision: MERGE, MERGE-FIX, FIX-MERGE, or REJECT. Write review-report.md in the workspace root with: Decision, Rationale, Build & Test Results, Critical Issues, Warnings, Positive Observations, Next Actions. Keep under 50 lines. Bias toward landing contributions. Then write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
+        outputs="review-report.md"
+    ]
+
+    start         -> setup
+    setup         -> build_test       [condition="outcome=success"]
+    setup         -> done
+    build_test    -> collect_diff     [condition="outcome=success"]
+    build_test    -> fail_report
+    fail_report   -> done
+    collect_diff  -> code_review      [condition="outcome=success"]
+    collect_diff  -> done
+    code_review   -> holistic_review
+    holistic_review -> done
+}

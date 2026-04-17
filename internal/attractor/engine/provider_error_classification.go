@@ -203,14 +203,14 @@ func firstNonEmptyLine(s string) string {
 	return ""
 }
 
-// classifyAPIError classifies an error from the API backend into a failure class
+// ClassifyAPIError classifies an error from the API backend into a failure class
 // and signature. It uses the typed llm.Error interface when available and falls
 // back to string-matching heuristics (the same hints used by classifyFailureClass).
 //
 // Context errors (context.Canceled, context.DeadlineExceeded) are already
 // converted to AbortError / RequestTimeoutError by llm.WrapContextError before
 // reaching this function, so they are classified correctly through the typed path.
-func classifyAPIError(err error) (failureClass string, failureSignature string) {
+func ClassifyAPIError(err error) (failureClass string, failureSignature string) {
 	if err == nil {
 		return failureClassDeterministic, "api_error|unknown|nil"
 	}

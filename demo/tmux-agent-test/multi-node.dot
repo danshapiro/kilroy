@@ -1,0 +1,20 @@
+digraph tmux_multi_node {
+  graph [goal="Test multi-node graph with tmux agent and tool nodes"]
+
+  start [shape=Mdiamond, label="Start"]
+
+  write_code [shape=box, label="Write Code", agent_tool="claude", llm_provider="anthropic", llm_model="claude-sonnet-4-20250514", auto_status="true", prompt="Create a file called calc.sh with this content:\n#!/bin/bash\necho $((21 * 2))\nMake the file executable with chmod +x calc.sh. Do nothing else."]
+
+  run_code [shape=parallelogram, label="Run Code", tool_command="./calc.sh"]
+
+  check_output [shape=diamond, label="Check Result"]
+
+  done [shape=Msquare, label="Done"]
+  fail [shape=Msquare, label="Fail"]
+
+  start -> write_code
+  write_code -> run_code
+  run_code -> check_output
+  check_output -> done [label="success"]
+  check_output -> fail [label="fail"]
+}

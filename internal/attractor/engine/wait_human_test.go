@@ -48,16 +48,18 @@ digraph G {
 		t.Fatalf("applyDefaults: %v", err)
 	}
 
+	reg := NewDefaultRegistry()
+	reg.Register("wait.human", &WaitHumanHandler{})
 	eng := &Engine{
-		Graph:           g,
-		Options:         opts,
-		DotSource:       append([]byte{}, dot...),
-		LogsRoot:        opts.LogsRoot,
-		WorktreeDir:     opts.WorktreeDir,
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &QueueInterviewer{Answers: []Answer{{Value: "F"}}},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		Graph:        g,
+		Options:      opts,
+		DotSource:    append([]byte{}, dot...),
+		LogsRoot:     opts.LogsRoot,
+		WorktreeDir:  opts.WorktreeDir,
+		Context:      runtime.NewContext(),
+		Registry:     reg,
+		Interviewer:  &QueueInterviewer{Answers: []Answer{{Value: "F"}}},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.RunBranch = fmt.Sprintf("%s/%s", opts.RunBranchPrefix, opts.RunID)
 

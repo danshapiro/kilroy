@@ -1,0 +1,1975 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kilroy</title>
+  <script src="viz.js"></script>
+  <script src="viz-render.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: ui-monospace, 'SF Mono', 'Cascadia Code', 'Fira Code', monospace;
+      background: #0a0a0f;
+      color: #d1d5db;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    a { color: #60a5fa; text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    /* ── Layout ─────────────────────────────────────── */
+    .app { display: flex; flex-direction: column; height: 100vh; }
+    .header {
+      display: flex; align-items: center; gap: 12px;
+      padding: 8px 16px;
+      border-bottom: 1px solid #1e1e2e;
+      background: #0f0f18;
+      flex-shrink: 0;
+    }
+    .header-title { font-size: 14px; font-weight: 600; color: #e5e7eb; }
+    .header-nav { font-size: 12px; color: #6b7280; }
+    .header-status {
+      margin-left: auto;
+      display: flex; align-items: center; gap: 6px;
+      font-size: 11px; color: #6b7280;
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; display: inline-block; }
+    .dot-ok { background: #22c55e; }
+    .dot-err { background: #ef4444; }
+    .dot-unknown { background: #6b7280; }
+
+    .main { flex: 1; overflow: auto; padding: 16px; }
+
+    /* ── Run List ───────────────────────────────────── */
+    .search-bar {
+      width: 100%; padding: 8px 12px;
+      background: #111118; border: 1px solid #1e1e2e; border-radius: 6px;
+      color: #d1d5db; font-family: inherit; font-size: 12px;
+      outline: none; margin-bottom: 12px;
+    }
+    .search-bar:focus { border-color: #374151; }
+    .search-bar::placeholder { color: #4b5563; }
+
+    .run-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+    .run-card {
+      display: flex; align-items: flex-start; gap: 8px;
+      padding: 8px 10px;
+      background: #111118; border: 1px solid #1e1e2e; border-radius: 6px;
+      cursor: pointer; transition: background 0.1s, border-color 0.1s;
+    }
+    .run-card:hover { background: #16161f; border-color: #2a2a3a; }
+    .run-outputs { display: flex; gap: 4px; margin-top: 3px; flex-wrap: wrap; }
+    .run-output-link {
+      font-size: 10px; color: #60a5fa; text-decoration: none;
+      padding: 1px 5px; background: #60a5fa15; border-radius: 3px;
+    }
+    .run-output-link:hover { background: #60a5fa30; }
+
+    .status-dot { margin-top: 5px; flex-shrink: 0; }
+    .status-running { color: #f59e0b; }
+    .status-success { color: #22c55e; }
+    .status-fail { color: #ef4444; }
+    .status-interrupted { color: #f97316; }
+    .status-canceled { color: #6b7280; }
+
+    .run-info { flex: 1; min-width: 0; }
+    .run-top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+    .run-graph { font-size: 13px; font-weight: 500; color: #e5e7eb; }
+    .run-id { font-size: 10px; color: #4b5563; }
+    .run-goal { font-size: 11px; color: #6b7280; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .run-meta { font-size: 10px; color: #4b5563; margin-top: 2px; }
+    .run-time { font-size: 11px; color: #4b5563; margin-left: auto; flex-shrink: 0; }
+    .run-labels { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 4px; }
+    .label-tag {
+      font-size: 10px; padding: 1px 6px; border-radius: 3px;
+      background: #1e1e2e; color: #9ca3af;
+    }
+
+    .empty-state { text-align: center; color: #4b5563; padding: 40px; font-size: 12px; }
+
+    /* ── Run Detail ─────────────────────────────────── */
+    .detail-layout { display: flex; height: 100%; gap: 0; }
+    .detail-sidebar {
+      width: 240px; flex-shrink: 0;
+      border-right: 1px solid #1e1e2e;
+      overflow-y: auto;
+      display: flex; flex-direction: column;
+    }
+    .sidebar-nodes { flex: 1; overflow-y: auto; padding: 8px; }
+    .sidebar-info {
+      border-top: 1px solid #1e1e2e;
+      padding: 8px; font-size: 11px;
+      max-height: 200px; overflow-y: auto;
+    }
+    .detail-center { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
+    .detail-panel {
+      width: 380px; flex-shrink: 0;
+      border-left: 1px solid #1e1e2e;
+      overflow-y: auto; padding: 12px;
+      display: flex; flex-direction: column;
+      position: relative;
+    }
+    .panel-resize-handle {
+      position: absolute; left: -3px; top: 0; bottom: 0; width: 6px;
+      cursor: col-resize; z-index: 10;
+    }
+    .panel-resize-handle:hover, .panel-resize-handle.dragging { background: #60a5fa40; }
+    #panel-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; }
+
+    .badge {
+      display: inline-flex; align-items: center;
+      padding: 2px 8px; border-radius: 4px;
+      font-size: 11px; font-weight: 600;
+    }
+    .badge-running { background: #f59e0b20; color: #f59e0b; }
+    .badge-success { background: #22c55e20; color: #22c55e; }
+    .badge-fail { background: #ef444420; color: #ef4444; }
+    .badge-interrupted { background: #f9731620; color: #f97316; }
+
+    /* ── Node list (sidebar) ────────────────────────── */
+    .node-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 8px; border-radius: 4px;
+      cursor: pointer; transition: background 0.1s;
+    }
+    .node-item:hover { background: #16161f; }
+    .node-item.selected { background: #1e1e2e; }
+    .node-icon { width: 14px; text-align: center; font-size: 11px; flex-shrink: 0; }
+    .node-name { font-size: 12px; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .node-duration { font-size: 10px; color: #4b5563; flex-shrink: 0; font-variant-numeric: tabular-nums; }
+
+    /* ── Graph area ─────────────────────────────────── */
+    .graph-area {
+      flex: 1; overflow: auto;
+      display: flex; align-items: center; justify-content: center;
+      background: #0a0a0f;
+      position: relative;
+    }
+    .graph-area svg {
+      max-width: 100%; max-height: 100%;
+      cursor: grab;
+    }
+    .graph-area svg:active { cursor: grabbing; }
+    /* Graphviz SVG node styling overrides */
+    .graph-area .node { cursor: pointer; }
+    .graph-area .node:hover polygon,
+    .graph-area .node:hover ellipse,
+    .graph-area .node:hover path { stroke-width: 2px; }
+    .graph-placeholder {
+      color: #374151; font-size: 12px; text-align: center; padding: 20px;
+    }
+
+    /* ── Node detail panel ──────────────────────────── */
+    .panel-header {
+      display: flex; align-items: center; gap: 8px;
+      padding-bottom: 8px; margin-bottom: 8px;
+      border-bottom: 1px solid #1e1e2e;
+    }
+    .panel-close {
+      margin-left: auto; cursor: pointer; color: #6b7280;
+      background: none; border: none; font-size: 14px; padding: 2px 6px;
+    }
+    .panel-close:hover { color: #d1d5db; }
+    .panel-section { margin-bottom: 12px; }
+    .panel-label { font-size: 10px; color: #6b7280; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+    .panel-value { font-size: 12px; color: #d1d5db; }
+    .panel-error { font-size: 12px; color: #ef4444; }
+
+    /* ── Panel tabs ─────────────────────────────────── */
+    .panel-tabs {
+      display: flex; gap: 0; border-bottom: 1px solid #1e1e2e; margin-bottom: 10px;
+    }
+    .panel-tab {
+      padding: 6px 12px; font-size: 11px; color: #6b7280;
+      cursor: pointer; border-bottom: 2px solid transparent;
+      background: none; border-top: none; border-left: none; border-right: none;
+      font-family: inherit;
+    }
+    .panel-tab:hover { color: #d1d5db; }
+    .panel-tab.active { color: #e5e7eb; border-bottom-color: #60a5fa; }
+
+    /* ── Turns viewer ───────────────────────────────── */
+    .turn { margin-bottom: 12px; }
+    .turn-role {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.05em; margin-bottom: 4px;
+    }
+    .turn-role-user { color: #60a5fa; }
+    .turn-role-assistant { color: #a78bfa; }
+    .turn-text { font-size: 12px; color: #d1d5db; white-space: pre-wrap; }
+    .turn-tool {
+      margin: 4px 0; padding: 6px 8px;
+      background: #111118; border-radius: 4px; border: 1px solid #1e1e2e;
+      font-size: 11px;
+    }
+    .turn-tool-name { color: #f59e0b; font-weight: 600; }
+    .turn-tool-output { color: #6b7280; margin-top: 4px; max-height: 150px; overflow-y: auto; white-space: pre-wrap; }
+    .turn-thinking { color: #4b5563; font-style: italic; font-size: 11px; }
+
+    /* ── Outputs ─────────────────────────────────────── */
+    .output-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 6px 8px; border-radius: 4px;
+      background: #111118; border: 1px solid #1e1e2e;
+      margin-bottom: 4px; font-size: 12px;
+      cursor: pointer; transition: background 0.1s;
+    }
+    .output-item:hover { background: #16161f; }
+    .output-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .output-size { color: #4b5563; font-size: 10px; flex-shrink: 0; }
+    .output-found { color: #22c55e; }
+    .output-missing { color: #ef4444; }
+    .output-preview {
+      margin-top: 8px; padding: 10px; border-radius: 4px;
+      background: #111118; border: 1px solid #1e1e2e;
+      font-size: 12px; color: #d1d5db;
+      white-space: pre-wrap; overflow-y: auto;
+      max-height: 400px; line-height: 1.6;
+    }
+
+    /* ── SSE / animations ───────────────────────────── */
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+    .pulse { animation: pulse 2s ease-in-out infinite; }
+    @keyframes node-glow {
+      0%, 100% { filter: drop-shadow(0 0 2px #f59e0b66); }
+      50% { filter: drop-shadow(0 0 8px #f59e0bcc); }
+    }
+    @keyframes dash-march { to { stroke-dashoffset: -16; } }
+    .node-running { animation: node-glow 1.5s ease-in-out infinite; }
+    .node-running polygon, .node-running ellipse, .node-running path:not([fill="none"]) {
+      stroke-dasharray: 6 4;
+      animation: dash-march 0.6s linear infinite;
+    }
+
+    .loading { text-align: center; color: #6b7280; padding: 40px; }
+    .error-banner {
+      padding: 8px 16px; background: #ef444420; color: #ef4444;
+      font-size: 12px; border-bottom: 1px solid #ef444440;
+    }
+
+    /* ── Buttons ─────────────────────────────────────── */
+    .btn {
+      padding: 5px 12px; border-radius: 4px; border: 1px solid;
+      font-family: inherit; font-size: 11px; cursor: pointer;
+      transition: background 0.1s;
+    }
+    .btn-cancel {
+      background: #ef444420; color: #ef4444; border-color: #ef444440;
+    }
+    .btn-cancel:hover { background: #ef444440; }
+    .btn-primary {
+      background: #60a5fa20; color: #60a5fa; border-color: #60a5fa40;
+    }
+    .btn-primary:hover { background: #60a5fa40; }
+    .btn-primary:disabled { opacity: 0.4; cursor: not-allowed; }
+
+    /* ── Launch form ─────────────────────────────────── */
+    .launch-overlay {
+      position: fixed; inset: 0; background: #0a0a0fcc; z-index: 100;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .launch-form {
+      background: #111118; border: 1px solid #1e1e2e; border-radius: 8px;
+      padding: 20px; width: 480px; max-height: 80vh; overflow-y: auto;
+    }
+    .launch-form h2 { font-size: 14px; font-weight: 600; color: #e5e7eb; margin-bottom: 16px; }
+    .form-group { margin-bottom: 12px; }
+    .form-label { display: block; font-size: 11px; color: #6b7280; margin-bottom: 4px; }
+    .form-input, .form-select {
+      width: 100%; padding: 6px 10px;
+      background: #0a0a0f; border: 1px solid #1e1e2e; border-radius: 4px;
+      color: #d1d5db; font-family: inherit; font-size: 12px;
+      outline: none;
+    }
+    .form-input:focus, .form-select:focus { border-color: #374151; }
+    .form-hint { font-size: 10px; color: #4b5563; margin-top: 2px; }
+    .form-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
+    .form-error { color: #ef4444; font-size: 11px; margin-top: 8px; }
+
+    /* ── Diff viewer ─────────────────────────────────── */
+    .diff-summary {
+      display: flex; gap: 12px; font-size: 11px;
+      padding: 6px 0; margin-bottom: 8px; color: #9ca3af;
+    }
+    .diff-stat-add { color: #22c55e; }
+    .diff-stat-del { color: #ef4444; }
+    .diff-file {
+      display: flex; align-items: center; gap: 6px;
+      padding: 3px 0; font-size: 11px;
+    }
+    .diff-file-status {
+      font-size: 9px; font-weight: 600; padding: 1px 4px; border-radius: 2px;
+    }
+    .diff-file-added { background: #22c55e20; color: #22c55e; }
+    .diff-file-modified { background: #f59e0b20; color: #f59e0b; }
+    .diff-file-deleted { background: #ef444420; color: #ef4444; }
+    .diff-content {
+      font-size: 11px; line-height: 1.4;
+      background: #0a0a0f; border: 1px solid #1e1e2e; border-radius: 4px;
+      padding: 8px; overflow-x: auto; white-space: pre;
+      max-height: 400px; overflow-y: auto; margin-top: 8px;
+    }
+    .diff-add { color: #22c55e; }
+    .diff-del { color: #ef4444; }
+    .diff-hunk { color: #60a5fa; }
+
+    /* ── File browser ────────────────────────────────── */
+    .file-breadcrumb {
+      display: flex; gap: 4px; align-items: center;
+      font-size: 11px; color: #6b7280; margin-bottom: 8px; flex-wrap: wrap;
+    }
+    .file-breadcrumb a { cursor: pointer; color: #60a5fa; }
+    .file-breadcrumb a:hover { text-decoration: underline; }
+    .file-entry {
+      display: flex; align-items: center; gap: 8px;
+      padding: 4px 6px; border-radius: 4px; cursor: pointer;
+      font-size: 12px; transition: background 0.1s;
+    }
+    .file-entry:hover { background: #16161f; }
+    .file-icon { width: 16px; text-align: center; font-size: 11px; color: #6b7280; flex-shrink: 0; }
+    .file-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+    .file-size { font-size: 10px; color: #4b5563; flex-shrink: 0; }
+    .file-content {
+      font-size: 11px; line-height: 1.4;
+      background: #0a0a0f; border: 1px solid #1e1e2e; border-radius: 4px;
+      padding: 8px; overflow: auto; white-space: pre-wrap;
+      max-height: 500px; color: #d1d5db;
+    }
+
+    /* ── Log viewer ──────────────────────────────────── */
+    .log-entry {
+      display: flex; gap: 6px; padding: 3px 0;
+      font-size: 11px; line-height: 1.4;
+      border-bottom: 1px solid #0f0f18;
+    }
+    .log-entry:hover { background: #111118; }
+    .log-ts { color: #4b5563; flex-shrink: 0; width: 95px; font-variant-numeric: tabular-nums; }
+    .log-event { flex-shrink: 0; width: 110px; overflow: hidden; text-overflow: ellipsis; }
+    .log-event-engine { color: #60a5fa; }
+    .log-event-tool { color: #f59e0b; }
+    .log-event-agent { color: #a78bfa; }
+    .log-event-git { color: #f472b6; }
+    .log-node { color: #22c55e; flex-shrink: 0; width: 80px; overflow: hidden; text-overflow: ellipsis; }
+    .log-msg { color: #d1d5db; flex: 1; min-width: 0; word-break: break-word; max-height: 3.6em; overflow: hidden; cursor: pointer; }
+    .log-msg.expanded { max-height: none; }
+    .log-msg-warn { color: #f59e0b; }
+    .log-msg-error { color: #ef4444; }
+    .log-filters {
+      display: flex; gap: 6px; padding: 6px 0; margin-bottom: 6px;
+      border-bottom: 1px solid #1e1e2e; flex-wrap: wrap; align-items: center;
+    }
+    .log-filter-btn {
+      padding: 2px 8px; border-radius: 3px; border: 1px solid #1e1e2e;
+      background: #111118; color: #6b7280; font-size: 10px; cursor: pointer;
+      font-family: inherit; transition: all 0.1s;
+    }
+    .log-filter-btn:hover { border-color: #374151; color: #d1d5db; }
+    .log-filter-btn.active { background: #60a5fa20; color: #60a5fa; border-color: #60a5fa40; }
+  </style>
+</head>
+<body>
+  <div id="app" class="app"></div>
+
+  <script>
+    // ── Kilroy Dashboard — single-file SPA ────────────────────
+
+    // Base path for resolving relative URLs (works through freshell's proxy)
+    const BASE_PATH = window.location.pathname.replace(/\/$/, '')
+
+    const API = (function () {
+      function apiUrl(path) { return path }
+
+      return {
+        async getRuns(params) {
+          const qs = new URLSearchParams(params || {}).toString()
+          const res = await fetch(apiUrl('/runs') + (qs ? '?' + qs : ''))
+          if (!res.ok) throw new Error('Failed to fetch runs: ' + res.status)
+          const data = await res.json()
+          return { runs: data.runs || [], count: data.count }
+        },
+        async getRun(id) {
+          const res = await fetch(apiUrl('/runs/' + encodeURIComponent(id)))
+          if (!res.ok) throw new Error('Failed to fetch run: ' + res.status)
+          return res.json()
+        },
+        async getOutputs(id) {
+          try {
+            const res = await fetch(apiUrl('/runs/' + encodeURIComponent(id) + '/outputs'))
+            if (!res.ok) return null
+            return res.json()
+          } catch { return null }
+        },
+        async getOutputContent(runId, name) {
+          try {
+            const res = await fetch(apiUrl('/runs/' + encodeURIComponent(runId) + '/outputs/' + encodeURIComponent(name)))
+            if (!res.ok) return null
+            return res.text()
+          } catch { return null }
+        },
+        outputUrl(runId, name) {
+          return apiUrl('/runs/' + encodeURIComponent(runId) + '/outputs/' + encodeURIComponent(name))
+        },
+        async getTurns(runId, nodeId, attempt) {
+          try {
+            const url = apiUrl('/runs/' + encodeURIComponent(runId) + '/nodes/' + encodeURIComponent(nodeId) + '/turns') +
+              (attempt ? '?attempt=' + attempt : '')
+            const res = await fetch(url)
+            if (!res.ok) return null
+            return res.json()
+          } catch { return null }
+        },
+        async getNodeAttempts(runId, nodeId) {
+          try {
+            const res = await fetch(apiUrl('/runs/' + encodeURIComponent(runId) + '/nodes/' + encodeURIComponent(nodeId) + '/attempts'))
+            if (!res.ok) return null
+            return res.json()
+          } catch { return null }
+        },
+        subscribeEvents(id, onEvent, onError) {
+          const url = apiUrl('/runs/' + encodeURIComponent(id) + '/events')
+          const es = new EventSource(url)
+          es.onmessage = (e) => { try { onEvent(JSON.parse(e.data)) } catch {} }
+          es.onerror = () => { if (onError) onError() }
+          return es
+        },
+        async getLog(runId, params) {
+          try {
+            const qs = new URLSearchParams(params || {}).toString()
+            const res = await fetch(apiUrl('/runs/' + encodeURIComponent(runId) + '/log' + (qs ? '?' + qs : '')))
+            if (!res.ok) return null
+            return res.json()
+          } catch { return null }
+        },
+        async getNodeDiff(runId, nodeId, attempt) {
+          try {
+            const url = apiUrl('/runs/' + encodeURIComponent(runId) + '/nodes/' + encodeURIComponent(nodeId) + '/diff') +
+              (attempt ? '?attempt=' + attempt : '')
+            const res = await fetch(url)
+            if (!res.ok) return null
+            return res.json()
+          } catch { return null }
+        },
+        async listFiles(runId, path) {
+          try {
+            const p = path ? '/' + path.replace(/^\//, '') : '/'
+            const res = await fetch(apiUrl('/runs/' + encodeURIComponent(runId) + '/files' + p))
+            if (!res.ok) return null
+            const text = await res.text()
+            try {
+              const json = JSON.parse(text)
+              // Directory listings have a 'files' array; raw file content doesn't
+              if (json.files !== undefined) return json
+              return { content: JSON.stringify(json, null, 2), isFile: true }
+            } catch {
+              return { content: text, isFile: true }
+            }
+          } catch { return null }
+        },
+        async listWorkspace(runId, path) {
+          try {
+            const p = path ? '/' + path.replace(/^\//, '') : '/'
+            const res = await fetch(apiUrl('/runs/' + encodeURIComponent(runId) + '/workspace' + p))
+            if (!res.ok) return null
+            const text = await res.text()
+            try {
+              const json = JSON.parse(text)
+              if (json.files !== undefined) return json
+              return { content: JSON.stringify(json, null, 2), isFile: true }
+            } catch {
+              return { content: text, isFile: true }
+            }
+          } catch { return null }
+        },
+        async cancelRun(id) {
+          const res = await fetch(apiUrl('/runs/' + encodeURIComponent(id) + '/cancel'), { method: 'POST' })
+          return res.json()
+        },
+        async getWorkflows() {
+          const res = await fetch(apiUrl('/workflows'))
+          if (!res.ok) throw new Error('Failed to fetch workflows: ' + res.status)
+          return res.json()
+        },
+        async startRun(body) {
+          const res = await fetch(apiUrl('/runs'), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+          })
+          if (!res.ok) {
+            const err = await res.json().catch(() => ({}))
+            throw new Error(err.error || 'Failed to start run: ' + res.status)
+          }
+          return res.json()
+        },
+        async health() {
+          try { const res = await fetch(apiUrl('/health')); return res.ok } catch { return false }
+        }
+      }
+    })()
+
+    // ── Utility functions ────────────────────────────────────
+
+    function timeAgo(iso) {
+      if (!iso) return ''
+      const ms = Date.now() - new Date(iso).getTime()
+      const secs = Math.floor(ms / 1000)
+      if (secs < 60) return secs + 's ago'
+      const mins = Math.floor(secs / 60)
+      if (mins < 60) return mins + 'm ago'
+      const hrs = Math.floor(mins / 60)
+      if (hrs < 24) return hrs + 'h ago'
+      return Math.floor(hrs / 24) + 'd ago'
+    }
+
+    function formatDuration(ms) {
+      if (!ms) return ''
+      const secs = Math.floor(ms / 1000)
+      if (secs < 60) return secs + 's'
+      const mins = Math.floor(secs / 60)
+      const remSecs = secs % 60
+      if (mins < 60) return mins + 'm ' + remSecs + 's'
+      const hrs = Math.floor(mins / 60)
+      return hrs + 'h ' + (mins % 60) + 'm'
+    }
+
+    function formatBytes(b) {
+      if (b < 1024) return b + ' B'
+      if (b < 1048576) return (b / 1024).toFixed(1) + ' KB'
+      return (b / 1048576).toFixed(1) + ' MB'
+    }
+
+    function statusClass(status) {
+      if (status === 'running' || status === 'executing') return 'running'
+      if (status === 'success' || status === 'completed') return 'success'
+      if (status === 'fail' || status === 'failed') return 'fail'
+      if (status === 'interrupted') return 'interrupted'
+      return 'canceled'
+    }
+
+    function statusIcon(status) {
+      const cls = statusClass(status)
+      if (cls === 'running') return '<span class="status-running pulse">●</span>'
+      if (cls === 'success') return '<span class="status-success">✓</span>'
+      if (cls === 'fail') return '<span class="status-fail">✗</span>'
+      if (cls === 'interrupted') return '<span class="status-interrupted">~</span>'
+      return '<span class="status-canceled">○</span>'
+    }
+
+    function esc(s) {
+      if (!s) return ''
+      const d = document.createElement('div')
+      d.textContent = s
+      return d.innerHTML
+    }
+
+    // ── DOT Graph Renderer ───────────────────────────────────
+
+    const GraphRenderer = {
+      viz: null,
+
+      async init() {
+        if (this.viz) return
+        this.viz = new Viz({ workerURL: BASE_PATH + '/viz-render.js' })
+      },
+
+      async render(dotSource, nodeStatuses, selectedNodeId, onNodeClick) {
+        await this.init()
+        try {
+          const svgElement = await this.viz.renderSVGElement(dotSource)
+          this.applyTheme(svgElement, nodeStatuses, selectedNodeId, onNodeClick)
+          return svgElement
+        } catch (err) {
+          // viz.js becomes unusable after a parse error — create a fresh instance
+          this.viz = new Viz({ workerURL: BASE_PATH + '/viz-render.js' })
+          const el = document.createElement('div')
+          el.className = 'graph-placeholder'
+          el.textContent = 'Failed to render graph: ' + err.message
+          return el
+        }
+      },
+
+      applyTheme(svg, nodeStatuses, selectedNodeId, onNodeClick) {
+        // Dark theme: transparent background, light text/edges
+        svg.style.background = 'transparent'
+        svg.removeAttribute('width')
+        svg.removeAttribute('height')
+        svg.style.maxWidth = '100%'
+        svg.style.maxHeight = '100%'
+        svg.style.padding = '16px'
+
+        // Style graph background
+        const bgPolygons = svg.querySelectorAll('.graph > polygon')
+        bgPolygons.forEach(p => { p.setAttribute('fill', 'transparent'); p.setAttribute('stroke', 'transparent') })
+
+        // Style edges
+        svg.querySelectorAll('.edge path').forEach(p => {
+          p.setAttribute('stroke', '#374151')
+        })
+        svg.querySelectorAll('.edge polygon').forEach(p => {
+          p.setAttribute('stroke', '#374151')
+          p.setAttribute('fill', '#374151')
+        })
+        svg.querySelectorAll('.edge text').forEach(t => {
+          t.setAttribute('fill', '#6b7280')
+        })
+
+        // Style nodes based on execution status
+        const STATUS_COLORS = {
+          success:     { fill: '#052e16', stroke: '#22c55e', text: '#86efac' },
+          fail:        { fill: '#350a0a', stroke: '#ef4444', text: '#fca5a5' },
+          running:     { fill: '#1c1a05', stroke: '#f59e0b', text: '#fcd34d' },
+          interrupted: { fill: '#1c0f05', stroke: '#f97316', text: '#fdba74' },
+          pending:     { fill: '#111118', stroke: '#374151', text: '#9ca3af' },
+          selected:    { stroke: '#60a5fa', strokeWidth: '3' },
+        }
+
+        svg.querySelectorAll('.node').forEach(nodeGroup => {
+          const titleEl = nodeGroup.querySelector('title')
+          if (!titleEl) return
+          const nodeId = titleEl.textContent.trim()
+
+          const status = nodeStatuses[nodeId] || 'pending'
+          const cls = statusClass(status)
+          const colors = STATUS_COLORS[cls] || STATUS_COLORS.pending
+          const isSelected = nodeId === selectedNodeId
+
+          // Animate running nodes
+          if (cls === 'running') nodeGroup.classList.add('node-running')
+
+          // Apply fill/stroke to shapes (polygon, ellipse, path)
+          nodeGroup.querySelectorAll('polygon, ellipse, path').forEach(shape => {
+            if (shape.closest('.edge')) return
+            shape.setAttribute('fill', colors.fill)
+            shape.setAttribute('stroke', isSelected ? STATUS_COLORS.selected.stroke : colors.stroke)
+            if (isSelected) shape.setAttribute('stroke-width', STATUS_COLORS.selected.strokeWidth)
+          })
+
+          // Text color
+          nodeGroup.querySelectorAll('text').forEach(t => {
+            t.setAttribute('fill', colors.text)
+          })
+
+          // Click handler
+          nodeGroup.style.cursor = 'pointer'
+          nodeGroup.addEventListener('click', (e) => {
+            e.stopPropagation()
+            if (onNodeClick) onNodeClick(nodeId)
+          })
+        })
+      }
+    }
+
+    // ── Router ───────────────────────────────────────────────
+
+    const Router = {
+      current: null,
+      init() {
+        window.addEventListener('hashchange', () => this.route())
+        this.route()
+      },
+      route() {
+        const hash = window.location.hash.slice(1) || '/'
+        if (hash.startsWith('/run/')) {
+          this.show('detail', decodeURIComponent(hash.slice(5)))
+        } else {
+          this.show('list')
+        }
+      },
+      show(view, param) {
+        if (this.current && this.current.destroy) this.current.destroy()
+        const app = document.getElementById('app')
+        if (view === 'list') this.current = RunListView(app)
+        else this.current = RunDetailView(app, param)
+      },
+      navigate(hash) { window.location.hash = hash }
+    }
+
+    // ── Run List View ────────────────────────────────────────
+
+    function RunListView(container) {
+      let runs = []
+      let query = ''
+      let destroyed = false
+
+      container.innerHTML = `
+        <div class="header">
+          <span class="header-title">Kilroy</span>
+          <button class="btn btn-primary" id="launch-btn">+ New Run</button>
+          <span class="header-status">
+            <span class="dot dot-unknown" id="health-dot"></span>
+            <span id="health-text">checking…</span>
+          </span>
+        </div>
+        <div class="main">
+          <input type="text" class="search-bar" id="search" placeholder="Filter by ID, graph, goal, labels…">
+          <div id="run-list" class="run-list"><div class="loading">Loading runs…</div></div>
+        </div>
+        <div id="launch-overlay"></div>
+      `
+
+      const searchEl = document.getElementById('search')
+      searchEl.addEventListener('input', () => { query = searchEl.value; render() })
+
+      document.getElementById('launch-btn').addEventListener('click', () => showLaunchForm())
+
+      const outputsCache = {}
+      const runStatusCache = {} // track status per run to detect changes
+
+      async function load() {
+        try {
+          const data = await API.getRuns()
+          runs = (data.runs || []).sort((a, b) => {
+            if (a.started_at && b.started_at) return new Date(b.started_at) - new Date(a.started_at)
+            return (b.run_id || '') > (a.run_id || '') ? 1 : -1
+          })
+        } catch (e) {
+          runs = []
+          document.getElementById('run-list').innerHTML =
+            '<div class="empty-state">Cannot reach Kilroy API<br><span style="font-size:10px;color:#374151">' + esc(e.message) + '</span></div>'
+          return
+        }
+        render()
+      }
+
+      function buildCardHtml(r) {
+        const repoShort = r.repo_path ? r.repo_path.split('/').filter(Boolean).slice(-2).join('/') : ''
+        const isComplete = ['success', 'fail', 'completed', 'failed'].includes(r.status || r.state || '')
+        const cachedOutputs = isComplete && outputsCache[r.run_id] ? outputsCache[r.run_id] : ''
+        return `
+          <div class="run-card" data-id="${esc(r.run_id)}" data-status="${esc(r.status || r.state || '')}">
+            <div class="status-dot">${statusIcon(r.status)}</div>
+            <div class="run-info">
+              <div class="run-top">
+                ${r.graph_name ? '<span class="run-graph">' + esc(r.graph_name) + '</span>' : ''}
+                ${repoShort ? '<span class="run-meta" style="margin:0">' + esc(repoShort) + '</span>' : ''}
+              </div>
+              <div style="display:flex;align-items:baseline;gap:6px;margin-top:1px">
+                <span class="run-id">${esc(r.run_id)}</span>
+                <span class="run-time">${r.started_at ? timeAgo(r.started_at) : ''}${r.duration_ms ? ' · ' + formatDuration(r.duration_ms) : ''}</span>
+              </div>
+              ${r.goal ? '<div class="run-goal">' + esc(r.goal) + '</div>' : ''}
+              ${r.labels && Object.keys(r.labels).length ? '<div class="run-labels">' +
+                Object.entries(r.labels).map(([k,v]) => '<span class="label-tag">' + esc(k) + '=' + esc(v) + '</span>').join('') +
+                '</div>' : ''}
+              ${isComplete ? '<div class="run-outputs" id="outputs-' + esc(r.run_id) + '">' + cachedOutputs + '</div>' : ''}
+            </div>
+          </div>`
+      }
+
+      function attachCardClick(card) {
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('.run-output-link')) return
+          Router.navigate('/run/' + encodeURIComponent(card.dataset.id))
+        })
+      }
+
+      function render() {
+        if (destroyed) return
+        const filtered = runs.filter(r => {
+          if (!query.trim()) return true
+          const s = [r.run_id, r.graph_name, r.goal, r.status, r.repo_path,
+            JSON.stringify(r.labels || {}), JSON.stringify(r.inputs || {})]
+            .filter(Boolean).join(' ').toLowerCase()
+          return query.toLowerCase().split(/\s+/).every(w => s.includes(w))
+        })
+
+        const listEl = document.getElementById('run-list')
+        if (!filtered.length) {
+          listEl.innerHTML = runs.length ? '<div class="empty-state">No runs match filter</div>'
+            : '<div class="empty-state">No runs found</div>'
+          return
+        }
+
+        // Diff-based update: match existing cards by data-id
+        const existingCards = new Map()
+        listEl.querySelectorAll('.run-card[data-id]').forEach(c => existingCards.set(c.dataset.id, c))
+        const newIds = new Set(filtered.map(r => r.run_id))
+
+        // Remove cards no longer in the list
+        existingCards.forEach((card, id) => { if (!newIds.has(id)) card.remove() })
+
+        // Update or insert cards in order
+        let prevCard = null
+        filtered.forEach(r => {
+          const existing = existingCards.get(r.run_id)
+          const status = r.status || r.state || ''
+          if (existing) {
+            // Only rebuild if status changed
+            if (existing.dataset.status !== status) {
+              const tmp = document.createElement('div')
+              tmp.innerHTML = buildCardHtml(r)
+              const newCard = tmp.firstElementChild
+              existing.replaceWith(newCard)
+              attachCardClick(newCard)
+              prevCard = newCard
+            } else {
+              prevCard = existing
+            }
+          } else {
+            // New card
+            const tmp = document.createElement('div')
+            tmp.innerHTML = buildCardHtml(r)
+            const newCard = tmp.firstElementChild
+            if (prevCard && prevCard.nextSibling) {
+              listEl.insertBefore(newCard, prevCard.nextSibling)
+            } else if (prevCard) {
+              listEl.appendChild(newCard)
+            } else {
+              listEl.prepend(newCard)
+            }
+            attachCardClick(newCard)
+            prevCard = newCard
+          }
+        })
+
+        // Fetch outputs for completed runs missing from cache
+        filtered.filter(r => ['success', 'fail', 'completed', 'failed'].includes(r.status || r.state || '') && outputsCache[r.run_id] === undefined).forEach(async r => {
+          const data = await API.getOutputs(r.run_id)
+          if (!data?.outputs?.length) { outputsCache[r.run_id] = null; return }
+          const html = data.outputs.map(o => {
+            const url = esc(API.outputUrl(r.run_id, o.name))
+            const tip = esc(o.name) + ' (' + formatBytes(o.size_bytes || 0) + ')'
+            return '<a class="run-output-link" href="' + url + '" target="_blank" title="View ' + tip + '">⬡ ' + esc(o.name) + '</a>' +
+              '<a class="run-output-link" href="' + url + '" download="' + esc(o.name.replace(/(\.[^.]+)$/, '-' + r.run_id.slice(0, 12) + '$1')) + '" title="Download ' + tip + '">↓</a>'
+          }).join('')
+          outputsCache[r.run_id] = html
+          const el = document.getElementById('outputs-' + r.run_id)
+          if (el && !el.innerHTML) el.innerHTML = html
+        })
+      }
+
+      async function checkHealth() {
+        const ok = await API.health()
+        if (destroyed) return
+        const dot = document.getElementById('health-dot')
+        const text = document.getElementById('health-text')
+        if (dot) { dot.className = 'dot ' + (ok ? 'dot-ok' : 'dot-err'); text.textContent = ok ? 'connected' : 'disconnected' }
+      }
+
+      // ── Launch form ──
+
+      async function showLaunchForm() {
+        const overlay = document.getElementById('launch-overlay')
+        overlay.className = 'launch-overlay'
+        overlay.innerHTML = '<div class="launch-form"><div class="loading">Loading workflows…</div></div>'
+
+        let workflows = []
+        try {
+          const data = await API.getWorkflows()
+          workflows = data.workflows || []
+        } catch (e) {
+          overlay.querySelector('.launch-form').innerHTML =
+            '<div class="form-error">Failed to load workflows: ' + esc(e.message) + '</div>' +
+            '<div class="form-actions"><button class="btn btn-cancel" id="launch-close">Close</button></div>'
+          document.getElementById('launch-close').addEventListener('click', () => { overlay.className = ''; overlay.innerHTML = '' })
+          return
+        }
+
+        if (!workflows.length) {
+          overlay.querySelector('.launch-form').innerHTML =
+            '<div style="color:#6b7280;font-size:12px">No workflows available</div>' +
+            '<div class="form-actions"><button class="btn btn-cancel" id="launch-close">Close</button></div>'
+          document.getElementById('launch-close').addEventListener('click', () => { overlay.className = ''; overlay.innerHTML = '' })
+          return
+        }
+
+        function renderForm() {
+          const selected = workflows.find(w => w.name === (selectedWorkflow || workflows[0].name)) || workflows[0]
+          const inputFields = (selected.inputs || []).map(inp => `
+            <div class="form-group">
+              <label class="form-label">${esc(inp.name)}${inp.required ? ' *' : ''}</label>
+              <input type="text" class="form-input" data-input="${esc(inp.name)}" placeholder="${esc(inp.description || '')}">
+              ${inp.description ? '<div class="form-hint">' + esc(inp.description) + '</div>' : ''}
+            </div>
+          `).join('')
+
+          overlay.querySelector('.launch-form').innerHTML = `
+            <h2>Start Run</h2>
+            <div class="form-group">
+              <label class="form-label">Workflow</label>
+              <select class="form-select" id="workflow-select">
+                ${workflows.map(w => '<option value="' + esc(w.name) + '"' +
+                  (w.name === selected.name ? ' selected' : '') + '>' +
+                  esc(w.name) + ' — ' + esc(w.description || '') + '</option>').join('')}
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Workspace path *</label>
+              <input type="text" class="form-input" id="workspace-input" placeholder="/path/to/target/repo">
+            </div>
+            <div id="input-fields">${inputFields}</div>
+            <div class="form-group">
+              <label class="form-label">Labels (key=value, comma-separated)</label>
+              <input type="text" class="form-input" id="labels-input" placeholder="team=infra, env=dev">
+            </div>
+            <div id="launch-error" class="form-error" style="display:none"></div>
+            <div class="form-actions">
+              <button class="btn btn-cancel" id="launch-close">Cancel</button>
+              <button class="btn btn-primary" id="launch-submit">Start Run</button>
+            </div>
+          `
+
+          document.getElementById('launch-close').addEventListener('click', () => { overlay.className = ''; overlay.innerHTML = '' })
+          document.getElementById('workflow-select').addEventListener('change', (e) => { selectedWorkflow = e.target.value; renderForm() })
+          document.getElementById('launch-submit').addEventListener('click', submitRun)
+        }
+
+        let selectedWorkflow = workflows[0].name
+        renderForm()
+
+        async function submitRun() {
+          const btn = document.getElementById('launch-submit')
+          const errEl = document.getElementById('launch-error')
+          errEl.style.display = 'none'
+          btn.disabled = true
+          btn.textContent = 'Starting…'
+
+          const workspace = document.getElementById('workspace-input').value.trim()
+          if (!workspace) { errEl.textContent = 'Workspace path is required'; errEl.style.display = 'block'; btn.disabled = false; btn.textContent = 'Start Run'; return }
+
+          const inputs = {}
+          document.querySelectorAll('#input-fields [data-input]').forEach(el => {
+            const v = el.value.trim()
+            if (v) inputs[el.dataset.input] = v
+          })
+
+          const labels = {}
+          const labelsStr = document.getElementById('labels-input').value.trim()
+          if (labelsStr) {
+            labelsStr.split(',').forEach(pair => {
+              const [k, ...rest] = pair.split('=')
+              if (k.trim() && rest.length) labels[k.trim()] = rest.join('=').trim()
+            })
+          }
+
+          try {
+            const result = await API.startRun({
+              workflow: selectedWorkflow,
+              workspace,
+              inputs: Object.keys(inputs).length ? inputs : undefined,
+              labels: Object.keys(labels).length ? labels : undefined,
+              tmux: true
+            })
+            overlay.className = ''
+            overlay.innerHTML = ''
+            // Navigate to the new run
+            if (result.run_id) {
+              Router.navigate('/run/' + encodeURIComponent(result.run_id))
+            } else {
+              load() // refresh the list
+            }
+          } catch (e) {
+            errEl.textContent = e.message
+            errEl.style.display = 'block'
+            btn.disabled = false
+            btn.textContent = 'Start Run'
+          }
+        }
+      }
+
+      // Close overlay on Escape
+      function onKeyDown(e) { if (e.key === 'Escape') { const o = document.getElementById('launch-overlay'); if (o) { o.className = ''; o.innerHTML = '' } } }
+      document.addEventListener('keydown', onKeyDown)
+
+      load(); checkHealth()
+      const t1 = setInterval(() => { if (!destroyed) load() }, 10000)
+      const t2 = setInterval(() => { if (!destroyed) checkHealth() }, 30000)
+      return { destroy() { destroyed = true; clearInterval(t1); clearInterval(t2); document.removeEventListener('keydown', onKeyDown) } }
+    }
+
+    // ── Run Detail View ──────────────────────────────────────
+
+    function RunDetailView(container, runId) {
+      let run = null
+      let nodes = []
+      let outputs = null
+      let selectedNode = null
+      let panelTab = 'info'
+      let turnsCache = {}
+      let eventSource = null
+      let destroyed = false
+
+      container.innerHTML = `
+        <div class="header">
+          <a href="#/" class="header-nav">← all runs</a>
+          <span class="header-title" id="run-title">${esc(runId)}</span>
+          <span id="run-badge"></span>
+          <span class="header-status">
+            <span class="dot dot-unknown" id="sse-dot"></span>
+            <span id="sse-text">loading…</span>
+          </span>
+        </div>
+        <div id="error-banner" class="error-banner" style="display:none"></div>
+        <div class="detail-layout" style="flex:1;min-height:0">
+          <div class="detail-sidebar">
+            <div class="sidebar-nodes" id="sidebar"><div class="loading">Loading…</div></div>
+            <div class="sidebar-info" id="sidebar-info"></div>
+          </div>
+          <div class="detail-center">
+            <div class="graph-area" id="graph-area">
+              <div class="graph-placeholder">Loading graph…</div>
+            </div>
+          </div>
+          <div class="detail-panel" id="detail-panel" style="display:none"></div>
+        </div>
+      `
+
+      const isTerminal = (s) => ['success', 'fail', 'canceled', 'interrupted'].includes(s)
+
+      // ── Data loading ──
+
+      async function loadRun() {
+        try {
+          run = await API.getRun(runId)
+          // Server may resolve a short prefix to the full ID — canonicalize
+          if (run.run_id && run.run_id !== runId) {
+            runId = run.run_id
+            history.replaceState(null, '', '#/run/' + encodeURIComponent(runId))
+          }
+          if (run.nodes) nodes = run.nodes
+          renderHeader()
+          renderSidebar()
+          renderSidebarInfo()
+          renderGraph()
+          loadOutputs()
+          if (!isTerminal(runStatus())) {
+            connectSSE()
+            startPolling() // fallback polling for CLI-launched runs without SSE
+          } else {
+            updateSSEStatus('done')
+          }
+        } catch (e) {
+          document.getElementById('error-banner').style.display = 'block'
+          document.getElementById('error-banner').textContent = 'Failed to load run: ' + e.message
+          updateSSEStatus('error')
+        }
+      }
+
+      async function loadOutputs() {
+        outputs = await API.getOutputs(runId)
+      }
+
+      async function loadTurns(nodeId, attempt) {
+        const cacheKey = nodeId + (attempt ? '#' + attempt : '')
+        if (turnsCache[cacheKey] !== undefined) return turnsCache[cacheKey]
+        const data = await API.getTurns(runId, nodeId, attempt)
+        turnsCache[cacheKey] = data
+        return data
+      }
+
+      // ── SSE ──
+
+      function connectSSE() {
+        eventSource = API.subscribeEvents(runId,
+          (ev) => { handleEvent(ev); updateSSEStatus('live') },
+          () => updateSSEStatus('error')
+        )
+        eventSource.onopen = () => updateSSEStatus('live')
+      }
+
+      function updateSSEStatus(state) {
+        if (destroyed) return
+        const dot = document.getElementById('sse-dot')
+        const text = document.getElementById('sse-text')
+        if (!dot) return
+        if (state === 'live') { dot.className = 'dot dot-ok'; text.textContent = 'live' }
+        else if (state === 'done') { dot.className = 'dot dot-ok'; text.textContent = 'completed' }
+        else { dot.className = 'dot dot-err'; text.textContent = 'disconnected' }
+      }
+
+      function handleEvent(ev) {
+        if (ev.event === 'node.started' || ev.event === 'node.completed' || ev.event === 'node.failed') {
+          renderSidebar()
+          renderGraph()
+        }
+        if (ev.event === 'run.completed' || ev.event === 'run.failed') {
+          API.getRun(runId).then(d => {
+            run = d; nodes = d.nodes || []
+            renderHeader(); renderSidebar(); renderSidebarInfo(); renderGraph()
+            loadOutputs()
+          }).catch(() => {})
+          if (eventSource) { eventSource.close(); eventSource = null }
+          updateSSEStatus('done')
+        }
+      }
+
+      // ── Header ──
+
+      function runStatus() { return run?.status || run?.state || 'unknown' }
+
+      // Resolve effective node status — a node with started_at but no completed_at is running
+      function nodeStatus(n) {
+        if (n.status) return n.status
+        if (n.started_at && !n.completed_at) return 'running'
+        return n.status || ''
+      }
+
+      function renderHeader() {
+        if (!run || destroyed) return
+        document.getElementById('run-title').textContent = run.graph_name || run.run_id || runId
+        const badge = document.getElementById('run-badge')
+        const status = runStatus()
+        const cls = statusClass(status)
+        let badgeHtml = '<span class="badge badge-' + cls + '">' + esc(status) + '</span>'
+        if (!isTerminal(status)) {
+          badgeHtml += ' <button class="btn btn-cancel" id="cancel-btn">Cancel</button>'
+        }
+        if (run.failure_reason) {
+          badgeHtml += ' <span style="color:#ef4444;font-size:11px;margin-left:8px">' + esc(run.failure_reason) + '</span>'
+        }
+        badge.innerHTML = badgeHtml
+
+        const cancelBtn = document.getElementById('cancel-btn')
+        if (cancelBtn) {
+          cancelBtn.addEventListener('click', async () => {
+            cancelBtn.disabled = true
+            cancelBtn.textContent = 'Canceling…'
+            try {
+              await API.cancelRun(runId)
+              // Re-fetch to get updated status
+              setTimeout(async () => {
+                run = await API.getRun(runId)
+                nodes = run.nodes || []
+                renderHeader(); renderSidebar(); renderGraph()
+              }, 1000)
+            } catch (e) {
+              cancelBtn.textContent = 'Failed'
+            }
+          })
+        }
+      }
+
+      // ── Sidebar: nodes ──
+
+      function renderSidebar() {
+        if (destroyed) return
+        const sidebar = document.getElementById('sidebar')
+        const nodeList = run?.nodes || nodes
+        if (!nodeList.length) {
+          sidebar.innerHTML = '<div style="color:#4b5563;font-size:11px;padding:8px">No node data yet</div>'
+          return
+        }
+        // Count occurrences of each node_id so we can label loop iterations
+        // (iter 1 of 3, iter 2 of 3, ...).
+        const counts = {}
+        for (const n of nodeList) counts[n.node_id] = (counts[n.node_id] || 0) + 1
+        const seen = {}
+        sidebar.innerHTML = nodeList.map((n, i) => {
+          const dur = n.duration_ms ? formatDuration(n.duration_ms) : ''
+          seen[n.node_id] = (seen[n.node_id] || 0) + 1
+          const total = counts[n.node_id]
+          const iterBadge = total > 1
+            ? `<span class="node-iter" style="color:#a78bfa;font-size:10px;margin-left:4px">↻${seen[n.node_id]}/${total}</span>`
+            : ''
+          return `
+            <div class="node-item ${selectedNode === i ? 'selected' : ''}" data-index="${i}">
+              <span class="node-icon">${statusIcon(nodeStatus(n))}</span>
+              <span class="node-name">${esc(n.node_id || ('Node ' + i))}${iterBadge}</span>
+              <span class="node-duration">${dur}</span>
+            </div>`
+        }).join('') +
+        '<div style="border-top:1px solid #1e1e2e;margin-top:8px;padding-top:8px">' +
+          '<div class="node-item ' + (selectedNode === -1 ? 'selected' : '') + '" id="run-log-btn">' +
+            '<span class="node-icon" style="color:#60a5fa">≡</span>' +
+            '<span class="node-name" style="color:#6b7280">Run Log</span>' +
+          '</div>' +
+        '</div>'
+
+        sidebar.querySelectorAll('.node-item[data-index]').forEach(item => {
+          item.addEventListener('click', () => selectNode(parseInt(item.dataset.index)))
+        })
+        document.getElementById('run-log-btn')?.addEventListener('click', () => showRunLog())
+      }
+
+      // ── Sidebar: run info (compact) ──
+
+      function renderSidebarInfo() {
+        if (!run || destroyed) return
+        const el = document.getElementById('sidebar-info')
+        let html = '<div style="color:#6b7280;display:flex;flex-direction:column;gap:4px;font-size:11px">'
+
+        if (run.repo_path) {
+          const short = run.repo_path.split('/').filter(Boolean).slice(-2).join('/')
+          html += '<div title="' + esc(run.repo_path) + '">' + esc(short) + '</div>'
+        }
+        html += '<div>' + (run.started_at ? timeAgo(run.started_at) : '') +
+          (run.duration_ms ? ' · ' + formatDuration(run.duration_ms) : '') + '</div>'
+
+        // Inputs
+        if (run.inputs && Object.keys(run.inputs).length) {
+          html += '<div style="margin-top:2px"><span style="color:#4b5563;font-size:10px">INPUTS</span>'
+          html += '<div style="display:flex;flex-direction:column;gap:1px;margin-top:1px">'
+          Object.entries(run.inputs).forEach(([k, v]) => {
+            html += '<div><span style="color:#9ca3af">' + esc(k) + '</span>=<span style="color:#d1d5db">' + esc(String(v)) + '</span></div>'
+          })
+          html += '</div></div>'
+        }
+
+        // Labels
+        if (run.labels && Object.keys(run.labels).length) {
+          html += '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:2px">'
+          html += Object.entries(run.labels).map(([k, v]) =>
+            '<span class="label-tag">' + esc(k) + '=' + esc(v) + '</span>').join('')
+          html += '</div>'
+        }
+
+        // Invocation (startup command)
+        if (run.invocation_json) {
+          const inv = Array.isArray(run.invocation_json) ? run.invocation_json : []
+          if (inv.length) {
+            html += '<div style="margin-top:2px"><span style="color:#4b5563;font-size:10px">INVOCATION</span>'
+            html += '<div style="color:#9ca3af;font-family:monospace;font-size:10px;word-break:break-all;margin-top:1px">' + esc(inv.join(' ')) + '</div></div>'
+          }
+        }
+
+        // Config
+        if (run.config_json) {
+          const cfg = typeof run.config_json === 'string' ? run.config_json : JSON.stringify(run.config_json, null, 2)
+          html += '<details style="margin-top:2px"><summary style="color:#4b5563;font-size:10px;cursor:pointer">CONFIG</summary>'
+          html += '<pre style="color:#9ca3af;font-size:10px;white-space:pre-wrap;word-break:break-all;margin:2px 0 0;max-height:200px;overflow-y:auto">' + esc(cfg) + '</pre></details>'
+        }
+
+        html += '</div>'
+        el.innerHTML = html
+      }
+
+      // ── Center: DOT graph ──
+
+      async function renderGraph() {
+        if (!run || destroyed) return
+        const area = document.getElementById('graph-area')
+
+        if (!run.dot_source) {
+          area.innerHTML = '<div class="graph-placeholder">No DOT graph available</div>'
+          return
+        }
+
+        // Build node status map from execution data
+        const nodeStatuses = {}
+        const nodeList = run.nodes || nodes
+        nodeList.forEach(n => { if (n.node_id) nodeStatuses[n.node_id] = nodeStatus(n) })
+
+        const selectedNodeId = selectedNode !== null && nodeList[selectedNode]
+          ? nodeList[selectedNode].node_id : null
+
+        const svgEl = await GraphRenderer.render(
+          run.dot_source, nodeStatuses, selectedNodeId,
+          (nodeId) => {
+            // Find the node index by node_id
+            let idx = nodeList.findIndex(n => n.node_id === nodeId)
+            if (idx < 0) {
+              // Unexecuted node — add a synthetic entry so the panel can display it
+              nodeList.push({ node_id: nodeId, status: 'unexecuted', handler_type: '', synthetic: true })
+              idx = nodeList.length - 1
+            }
+            selectNode(idx)
+          }
+        )
+
+        area.innerHTML = ''
+        area.appendChild(svgEl)
+      }
+
+      // ── Node selection ──
+
+      function renderRunLogEntries(events) {
+        return events.map(e => {
+          const ts = e.ts ? new Date(e.ts).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 }) : ''
+          const srcCls = e.source === 'tool' ? 'log-event-tool' : e.source === 'agent' ? 'log-event-agent' : e.source === 'git' ? 'log-event-git' : 'log-event-engine'
+          const msgCls = e.level === 'error' ? 'log-msg-error' : e.level === 'warn' ? 'log-msg-warn' : ''
+          return '<div class="log-entry">' +
+            '<span class="log-ts">' + esc(ts) + '</span>' +
+            '<span class="log-event ' + srcCls + '">' + esc(e.event || '') + '</span>' +
+            (e.node ? '<span class="log-node">' + esc(e.node) + '</span>' : '<span class="log-node"></span>') +
+            '<span class="log-msg ' + msgCls + '" title="' + esc(e.msg || '') + '">' + esc(e.msg || '') + '</span>' +
+            '</div>'
+        }).join('')
+      }
+
+      let runLogCount = 0
+
+      async function showRunLog() {
+        stopLogPoll()
+        selectedNode = -1
+        renderSidebar()
+        renderGraph()
+        const panel = document.getElementById('detail-panel')
+        panel.style.display = 'block'
+        panel.innerHTML = '<div class="panel-resize-handle" id="panel-resize"></div>' +
+          '<div class="panel-header"><span style="font-weight:600;font-size:13px">Run Log</span>' +
+          '<button class="panel-close" id="close-panel">×</button></div>' +
+          '<div id="panel-body"><div class="loading" style="padding:12px">Loading…</div></div>'
+
+        // Resize handle drag
+        const resizeHandle = document.getElementById('panel-resize')
+        resizeHandle.addEventListener('mousedown', (e) => {
+          e.preventDefault()
+          resizeHandle.classList.add('dragging')
+          const startX = e.clientX
+          const startWidth = panel.offsetWidth
+          const onMove = (ev) => {
+            const newWidth = Math.max(280, Math.min(800, startWidth + (startX - ev.clientX)))
+            panel.style.width = newWidth + 'px'
+          }
+          const onUp = () => {
+            resizeHandle.classList.remove('dragging')
+            document.removeEventListener('mousemove', onMove)
+            document.removeEventListener('mouseup', onUp)
+          }
+          document.addEventListener('mousemove', onMove)
+          document.addEventListener('mouseup', onUp)
+        })
+
+        document.getElementById('close-panel').addEventListener('click', () => {
+          stopLogPoll(); selectedNode = null; renderSidebar(); panel.style.display = 'none'
+        })
+
+        const params = logFilter.source ? { source: logFilter.source } : {}
+        const data = await API.getLog(runId, params)
+        const body = document.getElementById('panel-body')
+
+        if (!data || !data.events || !data.events.length) {
+          body.innerHTML = '<div style="color:#4b5563;font-size:11px;padding:8px">No log data available</div>'
+          if (!isTerminal(runStatus())) {
+            logPollTimer = setInterval(() => showRunLog(), 3000)
+          }
+          return
+        }
+
+        runLogCount = data.count
+
+        const sources = [...new Set(data.events.map(e => e.source).filter(Boolean))]
+        let html = '<div class="log-filters">'
+        html += '<span style="font-size:10px;color:#4b5563" id="log-count">' + data.count + ' events</span>'
+        html += '<button class="log-filter-btn ' + (!logFilter.source ? 'active' : '') + '" data-source="">All</button>'
+        sources.forEach(s => {
+          html += '<button class="log-filter-btn ' + (logFilter.source === s ? 'active' : '') + '" data-source="' + esc(s) + '">' + esc(s) + '</button>'
+        })
+        html += '</div><div id="log-scroll" style="flex:1;min-height:0;overflow-y:auto">'
+        html += renderRunLogEntries(data.events)
+        html += '</div>'
+        body.innerHTML = html
+
+        body.querySelectorAll('.log-filter-btn').forEach(btn => {
+          btn.addEventListener('click', () => { logFilter.source = btn.dataset.source || null; showRunLog() })
+        })
+        body.querySelectorAll('.log-msg').forEach(el => {
+          el.addEventListener('click', () => el.classList.toggle('expanded'))
+        })
+
+        const scroll = document.getElementById('log-scroll')
+        if (scroll) scroll.scrollTop = scroll.scrollHeight
+
+        // Poll for new events on running runs
+        if (!isTerminal(runStatus())) {
+          logPollTimer = setInterval(async () => {
+            const fresh = await API.getLog(runId, params)
+            if (!fresh || fresh.count <= runLogCount) return
+            const newEvents = fresh.events.slice(runLogCount)
+            runLogCount = fresh.count
+            const countEl = document.getElementById('log-count')
+            if (countEl) countEl.textContent = fresh.count + ' events'
+            const scrollEl = document.getElementById('log-scroll')
+            if (scrollEl && newEvents.length) {
+              const wasAtBottom = scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 20
+              scrollEl.insertAdjacentHTML('beforeend', renderRunLogEntries(newEvents))
+              scrollEl.querySelectorAll('.log-msg:not([data-click])').forEach(el => {
+                el.setAttribute('data-click', '1')
+                el.addEventListener('click', () => el.classList.toggle('expanded'))
+              })
+              if (wasAtBottom) scrollEl.scrollTop = scrollEl.scrollHeight
+            }
+          }, 3000)
+        }
+      }
+
+      function selectNode(idx) {
+        stopLogPoll()
+        selectedNode = idx
+        panelTab = 'info'
+        fileBrowsePath = ''
+        logFilter.source = null
+        renderSidebar()
+        renderGraph()
+        renderPanel()
+      }
+
+      // ── Right panel: node detail ──
+
+      function renderPanel() {
+        const panel = document.getElementById('detail-panel')
+        const nodeList = run?.nodes || nodes
+
+        if (selectedNode === null || !nodeList[selectedNode]) {
+          panel.style.display = 'none'
+          return
+        }
+
+        panel.style.display = 'block'
+        const n = nodeList[selectedNode]
+        const isAgent = n.handler_type === 'agent'
+        const showDetail = n.handler_type && n.handler_type !== 'start'
+
+        // Tabs: Info, Detail, Diff, Log, Files, Outputs
+        const tabs = ['info']
+        if (n.synthetic) {
+          // Unexecuted nodes only show Info
+        } else {
+          if (showDetail) tabs.push('detail')
+          tabs.push('diff')
+          tabs.push('log')
+          tabs.push('files')
+          if (outputs?.outputs?.length) tabs.push('outputs')
+        }
+
+        let html = `
+          <div class="panel-header">
+            <span style="font-weight:600;font-size:13px">${esc(n.node_id)}</span>
+            <button class="panel-close" id="close-panel">×</button>
+          </div>`
+
+        if (tabs.length > 1) {
+          html += '<div class="panel-tabs">' + tabs.map(t =>
+            '<button class="panel-tab ' + (panelTab === t ? 'active' : '') + '" data-tab="' + t + '">' +
+            t.charAt(0).toUpperCase() + t.slice(1) + '</button>'
+          ).join('') + '</div>'
+        }
+
+        html += '<div id="panel-body"></div>'
+        panel.innerHTML = '<div class="panel-resize-handle" id="panel-resize"></div>' + html
+
+        // Resize handle drag
+        const resizeHandle = document.getElementById('panel-resize')
+        resizeHandle.addEventListener('mousedown', (e) => {
+          e.preventDefault()
+          resizeHandle.classList.add('dragging')
+          const startX = e.clientX
+          const startWidth = panel.offsetWidth
+          const onMove = (ev) => {
+            const newWidth = Math.max(280, Math.min(800, startWidth + (startX - ev.clientX)))
+            panel.style.width = newWidth + 'px'
+          }
+          const onUp = () => {
+            resizeHandle.classList.remove('dragging')
+            document.removeEventListener('mousemove', onMove)
+            document.removeEventListener('mouseup', onUp)
+          }
+          document.addEventListener('mousemove', onMove)
+          document.addEventListener('mouseup', onUp)
+        })
+
+        document.getElementById('close-panel').addEventListener('click', () => {
+          stopLogPoll(); selectedNode = null; renderSidebar(); renderGraph(); panel.style.display = 'none'
+        })
+
+        panel.querySelectorAll('.panel-tab').forEach(tab => {
+          tab.addEventListener('click', () => { panelTab = tab.dataset.tab; renderPanel() })
+        })
+
+        if (panelTab === 'info') renderPanelInfo(n)
+        else if (panelTab === 'detail') renderPanelTurns(n)
+        else if (panelTab === 'diff') renderPanelDiff(n)
+        else if (panelTab === 'log') renderPanelLog(n)
+        else if (panelTab === 'files') renderPanelFiles(n)
+        else if (panelTab === 'outputs') renderPanelOutputs()
+      }
+
+      // Parse edges from DOT source for nodes not in the API edges array
+      function parseDotEdges(nodeId) {
+        const dot = run?.dot_source || ''
+        const edges = []
+        const re = /^\s*(\w+)\s*->\s*(\w+)(?:\s*\[([^\]]*)\])?/gm
+        let m
+        while ((m = re.exec(dot)) !== null) {
+          if (m[1] === nodeId || m[2] === nodeId) {
+            const attrs = m[3] || ''
+            const condMatch = attrs.match(/condition="([^"]*)"/)
+            edges.push({ from_node: m[1], to_node: m[2], condition: condMatch ? condMatch[1] : '' })
+          }
+        }
+        return edges
+      }
+
+      function renderPanelInfo(n) {
+        const body = document.getElementById('panel-body')
+
+        // Find edges involving this node — use API edges, fall back to DOT parsing
+        const apiEdges = run?.edges || []
+        let inEdge = apiEdges.find(e => e.to_node === n.node_id)
+        let outEdge = apiEdges.find(e => e.from_node === n.node_id)
+
+        if (!inEdge || !outEdge) {
+          const dotEdges = parseDotEdges(n.node_id)
+          if (!inEdge) inEdge = dotEdges.find(e => e.to_node === n.node_id && e.condition)
+            || dotEdges.find(e => e.to_node === n.node_id)
+          if (!outEdge) outEdge = dotEdges.find(e => e.from_node === n.node_id && e.condition)
+            || dotEdges.find(e => e.from_node === n.node_id)
+        }
+
+        let edgeHtml = ''
+        const isUnexecuted = n.synthetic || n.status === 'unexecuted'
+        if (inEdge) {
+          if (inEdge.condition) {
+            const label = isUnexecuted ? 'Reachable when' : 'Routed by'
+            edgeHtml += `<div class="panel-section"><div class="panel-label">${label}</div><div class="panel-value" style="color:#60a5fa">${esc(inEdge.condition)} <span style="color:#4b5563">from ${esc(inEdge.from_node)}</span></div></div>`
+          } else {
+            edgeHtml += `<div class="panel-section"><div class="panel-label">Follows</div><div class="panel-value">${esc(inEdge.from_node)}</div></div>`
+          }
+        }
+        if (outEdge) {
+          let routeText = esc(outEdge.to_node)
+          if (outEdge.condition) routeText += ' <span style="color:#60a5fa">(' + esc(outEdge.condition) + ')</span>'
+          if (outEdge.reason && outEdge.reason !== 'only_edge') routeText += ' <span style="color:#4b5563">[' + esc(outEdge.reason) + ']</span>'
+          edgeHtml += `<div class="panel-section"><div class="panel-label">${isUnexecuted ? 'Routes to' : 'Routed to'}</div><div class="panel-value">${routeText}</div></div>`
+        }
+
+        body.innerHTML = `
+          <div class="panel-section">
+            <div class="panel-label">Status</div>
+            <div class="panel-value">${statusIcon(nodeStatus(n))} ${esc(nodeStatus(n))}</div>
+          </div>
+          ${n.handler_type ? `<div class="panel-section"><div class="panel-label">Type</div><div class="panel-value">${esc(n.handler_type)}</div></div>` : ''}
+          ${n.started_at ? `<div class="panel-section"><div class="panel-label">Started</div><div class="panel-value">${esc(new Date(n.started_at).toLocaleString())}</div></div>` : ''}
+          ${n.completed_at ? `<div class="panel-section"><div class="panel-label">Completed</div><div class="panel-value">${esc(new Date(n.completed_at).toLocaleString())}</div></div>` : ''}
+          ${n.duration_ms ? `<div class="panel-section"><div class="panel-label">Duration</div><div class="panel-value">${formatDuration(n.duration_ms)}</div></div>` : ''}
+          ${n.attempt > 1 ? `<div class="panel-section"><div class="panel-label">Attempt</div><div class="panel-value">${n.attempt}</div></div>` : ''}
+          ${edgeHtml}
+          ${n.failure_reason ? `<div class="panel-section"><div class="panel-label">Failure</div><div class="panel-error">${esc(n.failure_reason)}</div></div>` : ''}
+          ${n.failure_class ? `<div class="panel-section"><div class="panel-label">Failure Class</div><div class="panel-value">${esc(n.failure_class)}</div></div>` : ''}
+          ${n.notes ? `<div class="panel-section"><div class="panel-label">Notes</div><div class="panel-value">${esc(n.notes)}</div></div>` : ''}
+        `
+      }
+
+      async function renderPanelTurns(n) {
+        const body = document.getElementById('panel-body')
+        body.innerHTML = '<div class="loading" style="padding:12px">Loading…</div>'
+        const data = await loadTurns(n.node_id, n.attempt)
+
+        if (!data) {
+          body.innerHTML = '<div style="color:#4b5563;font-size:11px;padding:8px">No data available for this node</div>'
+          return
+        }
+
+        let html = ''
+        // Iteration badge at the top when this node has multiple attempts.
+        const nodeList = run?.nodes || nodes
+        const attempts = nodeList.filter(x => x.node_id === n.node_id)
+        if (attempts.length > 1) {
+          html += '<div style="margin-bottom:12px;padding:6px 8px;background:#111118;border:1px solid #1e1e2e;border-radius:4px;font-size:11px;color:#a78bfa">'
+          html += '↻ Iteration ' + (n.attempt || 1) + ' of ' + attempts.length
+          html += '</div>'
+        }
+
+        // Agent nodes: prompt + response
+        if (data.prompt) {
+          html += '<div class="turn"><div class="turn-role turn-role-user">Prompt</div>' +
+            '<div class="turn-text">' + esc(data.prompt) + '</div></div>'
+        }
+        if (data.response) {
+          html += '<div class="turn"><div class="turn-role turn-role-assistant">Response</div>' +
+            '<div class="turn-text">' + esc(data.response) + '</div></div>'
+        }
+
+        // Tool invocation: show the command that ran.
+        if (data.tool_invocation && data.tool_invocation.command) {
+          html += '<div class="turn"><div class="turn-role" style="color:#f59e0b">command</div>' +
+            '<div class="turn-tool"><div class="turn-tool-output" style="max-height:200px;color:#d1d5db">' +
+            esc(data.tool_invocation.command) + '</div></div></div>'
+        }
+        // Captured tool scripts (files referenced by the command).
+        if (Array.isArray(data.scripts) && data.scripts.length > 0) {
+          for (const script of data.scripts) {
+            html += '<div class="turn"><div class="turn-role" style="color:#a78bfa">script: ' + esc(script.name) + '</div>' +
+              '<div class="turn-tool"><div class="turn-tool-output" style="max-height:300px;color:#d1d5db">' +
+              esc(script.content) + '</div></div></div>'
+          }
+        }
+
+        // Tool nodes: stdout + stderr
+        if (data.stdout) {
+          html += '<div class="turn"><div class="turn-role" style="color:#22c55e">stdout</div>' +
+            '<div class="turn-tool"><div class="turn-tool-output" style="max-height:300px">' + esc(data.stdout) + '</div></div></div>'
+        }
+        if (data.stderr) {
+          html += '<div class="turn"><div class="turn-role" style="color:#ef4444">stderr</div>' +
+            '<div class="turn-tool"><div class="turn-tool-output" style="max-height:300px">' + esc(data.stderr) + '</div></div></div>'
+        }
+
+        // Status block (context_updates, outcome, etc.)
+        if (data.status && typeof data.status === 'object') {
+          const s = data.status
+          const statusParts = []
+          if (s.outcome) statusParts.push('<div><span class="panel-label">Outcome</span><div class="panel-value">' + esc(s.outcome) + '</div></div>')
+          if (s.exit_code !== undefined && s.exit_code !== null) statusParts.push('<div><span class="panel-label">Exit Code</span><div class="panel-value">' + s.exit_code + '</div></div>')
+          if (s.context_updates && Object.keys(s.context_updates).length) {
+            const filtered = Object.entries(s.context_updates).filter(([k]) => k !== 'tool.output')
+            if (filtered.length) {
+              statusParts.push('<div><span class="panel-label">Context Updates</span>' +
+                '<div style="font-size:11px;margin-top:4px">' +
+                filtered.map(([k, v]) => '<div style="color:#9ca3af;padding:1px 0"><span style="color:#60a5fa">' +
+                  esc(k) + '</span> = ' + esc(String(v).slice(0, 200)) + '</div>').join('') +
+                '</div></div>')
+            }
+          }
+          if (statusParts.length) {
+            html += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #1e1e2e">' + statusParts.join('') + '</div>'
+          }
+        }
+
+        // Timing
+        if (data.timing) {
+          html += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid #1e1e2e;font-size:10px;color:#4b5563">'
+          if (data.timing.wall_ms) html += 'Wall: ' + formatDuration(data.timing.wall_ms) + ' '
+          if (data.timing.user_ms) html += '· User: ' + formatDuration(data.timing.user_ms) + ' '
+          if (data.timing.sys_ms) html += '· Sys: ' + formatDuration(data.timing.sys_ms)
+          html += '</div>'
+        }
+
+        if (!html) {
+          html = '<div style="color:#4b5563;font-size:11px;padding:8px">No turns data recorded for this node</div>'
+        }
+
+        body.innerHTML = html
+      }
+
+      // ── Diff tab ──
+
+      async function renderPanelDiff(n) {
+        const body = document.getElementById('panel-body')
+        body.innerHTML = '<div class="loading" style="padding:12px">Loading diff…</div>'
+        const data = await API.getNodeDiff(runId, n.node_id)
+
+        if (!data || data.error) {
+          body.innerHTML = '<div style="color:#4b5563;font-size:11px;padding:8px">' +
+            (data?.error || 'No diff data for this node') + '</div>'
+          return
+        }
+
+        let html = ''
+
+        // Summary
+        if (data.summary) {
+          const s = data.summary
+          html += '<div class="diff-summary">' +
+            '<span>' + (s.files_changed || 0) + ' file' + (s.files_changed !== 1 ? 's' : '') + '</span>' +
+            '<span class="diff-stat-add">+' + (s.insertions || 0) + '</span>' +
+            '<span class="diff-stat-del">-' + (s.deletions || 0) + '</span>' +
+            '</div>'
+        }
+
+        // Per-file list
+        if (data.files && data.files.length) {
+          html += '<div style="margin-bottom:8px">'
+          data.files.forEach(f => {
+            const statusCls = f.status === 'added' ? 'diff-file-added' :
+              f.status === 'deleted' ? 'diff-file-deleted' : 'diff-file-modified'
+            html += '<div class="diff-file">' +
+              '<span class="diff-file-status ' + statusCls + '">' + esc(f.status) + '</span>' +
+              '<span style="color:#d1d5db">' + esc(f.path) + '</span>' +
+              '<span style="margin-left:auto;font-size:10px;color:#4b5563">' +
+                (f.insertions ? '<span class="diff-stat-add">+' + f.insertions + '</span> ' : '') +
+                (f.deletions ? '<span class="diff-stat-del">-' + f.deletions + '</span>' : '') +
+              '</span></div>'
+          })
+          html += '</div>'
+        }
+
+        // Unified diff with syntax highlighting
+        if (data.diff) {
+          html += '<div class="diff-content">'
+          data.diff.split('\n').forEach(line => {
+            if (line.startsWith('+++') || line.startsWith('---')) {
+              html += '<span style="color:#6b7280">' + esc(line) + '</span>\n'
+            } else if (line.startsWith('@@')) {
+              html += '<span class="diff-hunk">' + esc(line) + '</span>\n'
+            } else if (line.startsWith('+')) {
+              html += '<span class="diff-add">' + esc(line) + '</span>\n'
+            } else if (line.startsWith('-')) {
+              html += '<span class="diff-del">' + esc(line) + '</span>\n'
+            } else if (line.startsWith('diff ')) {
+              html += '<span style="color:#60a5fa;font-weight:600">' + esc(line) + '</span>\n'
+            } else {
+              html += esc(line) + '\n'
+            }
+          })
+          html += '</div>'
+        }
+
+        // SHAs
+        if (data.before_sha || data.after_sha) {
+          html += '<div style="margin-top:8px;font-size:10px;color:#4b5563">'
+          if (data.before_sha) html += 'Before: ' + esc(data.before_sha.slice(0, 8)) + ' '
+          if (data.after_sha) html += 'After: ' + esc(data.after_sha.slice(0, 8))
+          html += '</div>'
+        }
+
+        const noChanges = data.summary && (data.summary.files_changed || 0) === 0 && (!data.files || data.files.length === 0)
+        if (noChanges) {
+          body.innerHTML = '<div style="color:#4b5563;font-size:11px;padding:8px">No tracked file changes' +
+            '<br><span style="font-size:10px">Writes to .kilroy/ are gitignored</span></div>'
+        } else {
+          body.innerHTML = html || '<div style="color:#4b5563;font-size:11px;padding:8px">No changes</div>'
+        }
+      }
+
+      // ── Log tab ──
+
+      let logFilter = { source: null }
+      let logPollTimer = null
+
+      function stopLogPoll() {
+        if (logPollTimer) { clearInterval(logPollTimer); logPollTimer = null }
+      }
+
+      function renderLogEntries(events) {
+        return events.map(e => {
+          const ts = e.ts ? new Date(e.ts).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit', fractionalSecondDigits: 3 }) : ''
+          const srcCls = e.source === 'tool' ? 'log-event-tool' : e.source === 'agent' ? 'log-event-agent' : e.source === 'git' ? 'log-event-git' : 'log-event-engine'
+          const msgCls = e.level === 'error' ? 'log-msg-error' : e.level === 'warn' ? 'log-msg-warn' : ''
+          const event = e.event || ''
+          return '<div class="log-entry">' +
+            '<span class="log-ts">' + esc(ts) + '</span>' +
+            '<span class="log-event ' + srcCls + '">' + esc(event) + '</span>' +
+            '<span class="log-msg ' + msgCls + '" title="' + esc(e.msg || '') + '">' + esc(e.msg || '') + '</span>' +
+            '</div>'
+        }).join('')
+      }
+
+      let panelLogCount = 0
+
+      async function renderPanelLog(n) {
+        stopLogPoll()
+        const body = document.getElementById('panel-body')
+
+        const params = { node: n.node_id }
+        if (logFilter.source) params.source = logFilter.source
+        const data = await API.getLog(runId, params)
+
+        if (!data || !data.events || !data.events.length) {
+          body.innerHTML = '<div style="color:#4b5563;font-size:11px;padding:8px">' +
+            (data === null ? 'Log endpoint not available' : 'No log events for this node') + '</div>'
+          // Still poll if running — events may arrive later
+          if (!isTerminal(runStatus())) {
+            logPollTimer = setInterval(() => renderPanelLog(n), 3000)
+          }
+          return
+        }
+
+        panelLogCount = data.count
+
+        // Filters
+        const sources = [...new Set(data.events.map(e => e.source).filter(Boolean))]
+        let html = '<div class="log-filters">'
+        html += '<span style="font-size:10px;color:#4b5563" id="log-count">' + data.count + ' events</span>'
+        html += '<button class="log-filter-btn ' + (!logFilter.source ? 'active' : '') + '" data-source="">All</button>'
+        sources.forEach(s => {
+          html += '<button class="log-filter-btn ' + (logFilter.source === s ? 'active' : '') + '" data-source="' + esc(s) + '">' + esc(s) + '</button>'
+        })
+        html += '</div>'
+
+        html += '<div id="log-scroll" style="flex:1;min-height:0;overflow-y:auto">'
+        html += renderLogEntries(data.events)
+        html += '</div>'
+
+        body.innerHTML = html
+
+        body.querySelectorAll('.log-filter-btn').forEach(btn => {
+          btn.addEventListener('click', () => {
+            logFilter.source = btn.dataset.source || null
+            renderPanelLog(n)
+          })
+        })
+        body.querySelectorAll('.log-msg').forEach(el => {
+          el.addEventListener('click', () => el.classList.toggle('expanded'))
+        })
+
+        // Auto-scroll to bottom
+        const scroll = document.getElementById('log-scroll')
+        if (scroll) scroll.scrollTop = scroll.scrollHeight
+
+        // Poll for new events on running runs
+        if (!isTerminal(runStatus())) {
+          logPollTimer = setInterval(async () => {
+            const fresh = await API.getLog(runId, params)
+            if (!fresh || fresh.count <= panelLogCount) return
+            // Append only new events
+            const newEvents = fresh.events.slice(panelLogCount)
+            panelLogCount = fresh.count
+            const countEl = document.getElementById('log-count')
+            if (countEl) countEl.textContent = fresh.count + ' events'
+            const scrollEl = document.getElementById('log-scroll')
+            if (scrollEl && newEvents.length) {
+              const wasAtBottom = scrollEl.scrollTop + scrollEl.clientHeight >= scrollEl.scrollHeight - 20
+              scrollEl.insertAdjacentHTML('beforeend', renderLogEntries(newEvents))
+              scrollEl.querySelectorAll('.log-msg:not([data-click])').forEach(el => {
+                el.setAttribute('data-click', '1')
+                el.addEventListener('click', () => el.classList.toggle('expanded'))
+              })
+              if (wasAtBottom) scrollEl.scrollTop = scrollEl.scrollHeight
+            }
+          }, 3000)
+        }
+      }
+
+      // ── Files tab ──
+
+      let fileBrowsePath = ''
+
+      async function renderPanelFiles(n) {
+        const body = document.getElementById('panel-body')
+        const basePath = n.node_id
+        const fullPath = fileBrowsePath ? basePath + '/' + fileBrowsePath : basePath
+
+        body.innerHTML = '<div class="loading" style="padding:12px">Loading…</div>'
+        const data = await API.listFiles(runId, fullPath)
+
+        if (!data) {
+          body.innerHTML = '<div style="color:#4b5563;font-size:11px;padding:8px">Unable to browse files</div>'
+          return
+        }
+
+        // If it's a file, show content
+        if (data.isFile) {
+          renderFileContent(body, data.content, fileBrowsePath)
+          return
+        }
+
+        let html = ''
+
+        // Breadcrumb
+        const parts = fileBrowsePath.split('/').filter(Boolean)
+        html += '<div class="file-breadcrumb">'
+        html += '<a data-browse="">/' + esc(n.node_id) + '</a>'
+        parts.forEach((p, i) => {
+          const subPath = parts.slice(0, i + 1).join('/')
+          html += ' / <a data-browse="' + esc(subPath) + '">' + esc(p) + '</a>'
+        })
+        html += '</div>'
+
+        // File listing
+        const files = data.files || []
+        if (!files.length) {
+          html += '<div style="color:#4b5563;font-size:11px">Empty directory</div>'
+        } else {
+          // Directories first, then files
+          const dirs = files.filter(f => f.is_dir).sort((a, b) => a.name.localeCompare(b.name))
+          const regular = files.filter(f => !f.is_dir).sort((a, b) => a.name.localeCompare(b.name))
+          ;[...dirs, ...regular].forEach(f => {
+            const subPath = fileBrowsePath ? fileBrowsePath + '/' + f.name : f.name
+            html += '<div class="file-entry" data-browse="' + esc(subPath) + '">' +
+              '<span class="file-icon">' + (f.is_dir ? '📁' : '📄') + '</span>' +
+              '<span class="file-name">' + esc(f.name) + '</span>' +
+              (f.is_dir ? '' : '<span class="file-size">' + formatBytes(f.size) + '</span>') +
+              '</div>'
+          })
+        }
+
+        body.innerHTML = html
+        body.querySelectorAll('[data-browse]').forEach(el => {
+          el.addEventListener('click', () => {
+            fileBrowsePath = el.dataset.browse
+            renderPanelFiles(n)
+          })
+        })
+      }
+
+      function renderFileContent(body, content, filename) {
+        const ext = filename.split('.').pop()
+        body.innerHTML = '<div class="file-breadcrumb">' +
+          '<a id="file-back" style="cursor:pointer">← back</a>' +
+          ' <span style="color:#d1d5db">' + esc(filename) + '</span>' +
+          '</div>' +
+          '<div class="file-content">' + esc(content) + '</div>'
+        document.getElementById('file-back').addEventListener('click', () => {
+          // Go up one level
+          const parts = fileBrowsePath.split('/').filter(Boolean)
+          parts.pop()
+          fileBrowsePath = parts.join('/')
+          const nodeList = run?.nodes || nodes
+          if (nodeList[selectedNode]) renderPanelFiles(nodeList[selectedNode])
+        })
+      }
+
+      let previewingOutput = null
+
+      function renderPanelOutputs() {
+        const body = document.getElementById('panel-body')
+        if (!outputs?.outputs?.length) {
+          body.innerHTML = '<div style="color:#4b5563;font-size:11px;padding:8px">No outputs</div>'
+          return
+        }
+        body.innerHTML = outputs.outputs.map(o => `
+          <div class="output-item" data-name="${esc(o.name)}" data-found="${o.found}">
+            <span class="${o.found ? 'output-found' : 'output-missing'}">${o.found ? '●' : '○'}</span>
+            <span class="output-name">${esc(o.name)}</span>
+            ${o.size_bytes ? '<span class="output-size">' + formatBytes(o.size_bytes) + '</span>' : ''}
+          </div>
+        `).join('') + '<div id="output-preview-area"></div>'
+
+        body.querySelectorAll('.output-item[data-found="true"]').forEach(item => {
+          item.addEventListener('click', () => {
+            const name = item.dataset.name
+            if (previewingOutput === name) { previewingOutput = null; renderOutputPreview(); return }
+            previewingOutput = name
+            renderOutputPreview()
+          })
+        })
+
+        if (previewingOutput) renderOutputPreview()
+      }
+
+      async function renderOutputPreview() {
+        const area = document.getElementById('output-preview-area')
+        if (!area) return
+        if (!previewingOutput) { area.innerHTML = ''; return }
+        area.innerHTML = '<div class="loading" style="padding:8px;font-size:11px">Loading…</div>'
+        const content = await API.getOutputContent(runId, previewingOutput)
+        if (!content) { area.innerHTML = '<div style="color:#ef4444;font-size:11px;padding:8px">Failed to load</div>'; return }
+        area.innerHTML = '<div class="output-preview">' + esc(content) + '</div>'
+      }
+
+      // ── Polling refresh for non-terminal runs ──
+
+      let pollTimer = null
+
+      function startPolling() {
+        if (pollTimer) return
+        pollTimer = setInterval(async () => {
+          if (destroyed) return
+          try {
+            const updated = await API.getRun(runId)
+            run = updated
+            if (updated.nodes) nodes = updated.nodes
+            renderHeader()
+            renderSidebar()
+            renderGraph()
+            renderSidebarInfo()
+            if (isTerminal(runStatus())) {
+              clearInterval(pollTimer)
+              pollTimer = null
+              updateSSEStatus('done')
+              loadOutputs()
+            }
+          } catch {}
+        }, 5000)
+      }
+
+      // ── Boot ──
+
+      loadRun()
+
+      return {
+        destroy() {
+          destroyed = true
+          if (eventSource) { eventSource.close(); eventSource = null }
+          if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
+        }
+      }
+    }
+
+    // ── Boot ─────────────────────────────────────────────────
+    Router.init()
+  </script>
+</body>
+</html>

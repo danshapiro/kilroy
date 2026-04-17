@@ -190,6 +190,41 @@ architecture to even start. Most of this has one reasonable default.
 - Config file remains available for overriding any default
 - The test graph suite runs with zero config
 
+### 0.9 First-Run Friction Fixes
+
+**What:** A batch of quick fixes for sharp edges discovered during the first real PR review
+workflow run. These are all bugs, wrong defaults, or missing error context — not new features.
+
+**Context:** First attempt at running a real PR review graph exposed several issues that all
+stem from "the tool assumes you already know how it works." Each fix is small but together
+they dramatically improve the first-run experience.
+
+**Done when:**
+
+1. **Auto-detection fills gaps in partial configs** — if a config file is present but doesn't
+   declare providers, auto-detection should fill the gaps. Config file existence should not
+   disable auto-detection entirely. This is a fix to 0.7.
+
+2. **`require_clean` defaults to false** — the worktree isolates the run from the parent
+   repo state. Requiring a clean working directory is pointless friction. Default to false,
+   opt-in to true for strict setups.
+
+3. **KILROY_RUN_ID injected into tool nodes** — tool_command nodes don't receive the same
+   environment variables as agent nodes. This breaks the `.ai/runs/$KILROY_RUN_ID/` data
+   passing convention. Every node type must get the same core env vars.
+
+4. **CLI headless warning non-interactive** — the `claude` CLI's interactive Y/n prompt
+   about account suspension kills headless runs. Fix with one-time acknowledgment stored
+   in config, a `--accept-cli-risk` flag, or by using `yes |` in the invocation template.
+
+5. **Error messages suggest fixes** — "missing provider backend" should suggest "remove
+   --config to use auto-detection, or add llm.providers.X.backend". "File not found in
+   worktree" should suggest committing the file. Validation errors should name alternatives.
+
+6. **Worktree file-not-found context** — when a `tool_command` references a path that doesn't
+   exist in the worktree, the error should explain that worktrees only contain committed files,
+   and suggest `git add && git commit`.
+
 ---
 
 ## Phase 0.8: CLI-Only Agent Backend (Deprecate API)
@@ -693,6 +728,56 @@ keeps its context) and "fresh start" (new context with a summary of what happene
 - Thread management is handled by the agent handler, not the engine
 - Existing graphs with fidelity attributes still work (backward compat during transition)
 
+### 3.7 Run Input Contract
+
+**What:** A `--input` flag that accepts a file or directory of structured startup context.
+Contents are available to all nodes via variable expansion and the filesystem.
+
+**Context:** Currently the only way to pass runtime data into a graph is `$goal` or ambient
+environment variables. A PR review needs: repo, PR number, branch, review criteria. An
+exploration run needs: list of repos, search terms. The input contract is the bridge between
+whatever launches kilroy and the graph's execution.
+
+**Done when:**
+- `kilroy run --graph pr-review.dot --input run-input.yaml` loads structured context
+- Input values are available via variable expansion in prompts: `$input.pr_number`,
+  `$input.repo`, `$input.task`
+- Input files (in a directory) are available at `$INPUT_DIR` in tool_command nodes
+- The graph can declare required inputs and validation rejects missing ones
+- Works with both config-file and zero-config modes
+
+### 3.8 Run Output Contract
+
+**What:** A way for graphs to declare output artifacts and a known location for results.
+After a run, `kilroy status` should tell you where the outputs are.
+
+**Context:** Currently, outputs are scattered through the worktree and stage logs. Finding
+the PR review report requires spelunking through nested directories. The run should have a
+declared output location or manifest.
+
+**Done when:**
+- Nodes can declare `output_file="review-report.md"` or similar
+- Declared outputs are collected to a known location after the run
+- `kilroy status --run <id>` shows where outputs are
+- Alternatively: a convention like `$OUTPUT_DIR` that nodes write to, and the engine copies
+  to a discoverable location post-run
+
+### 3.9 Node Data Passing Conventions
+
+**What:** Document and enforce clear conventions for how nodes pass data to each other.
+Currently this is ad-hoc filesystem usage with no validation or documentation.
+
+**Context:** Nodes pass data by writing files to paths like `.ai/runs/$KILROY_RUN_ID/` and
+hoping subsequent nodes find them. This broke during the PR review workflow because tool
+nodes didn't get `KILROY_RUN_ID`. Even when it works, the convention is undiscoverable.
+
+**Done when:**
+- A clear, documented convention exists for inter-node data: where to write, how to name
+  files, how subsequent nodes find them
+- The engine validates that files referenced in prompts (via `$input_dir` or similar) exist
+- Context updates in outcomes can pass small structured data between nodes
+- The convention works for both tool_command nodes and agent nodes
+
 ---
 
 ## Phase 4: Clean Handler Interface
@@ -838,3 +923,12 @@ Writing DOT files by hand is error-prone. Future tooling could include: a graph 
 that shows the execution topology, a graph editor with validation feedback, graph templates
 for common patterns (linear+verify, fan-out consensus), and prompt scaffolding that generates
 the boilerplate for new nodes.
+
+### Iteration Patterns (Dynamic Loops Over Collections)
+
+Some workflows need to process a dynamic list: "review each changed file," "test each PR,"
+"chew through this task list until empty." The engine supports loops (edge back to earlier
+node) but not dynamic iteration over a collection where the loop count isn't known at graph
+authoring time. This is probably a pattern built on context variables (set a list, loop node
+pops items, exit condition checks if list is empty) rather than a new engine primitive.
+Worth investigating what patterns emerge from real usage.

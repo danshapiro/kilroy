@@ -810,7 +810,7 @@ func (e *Engine) materializeStageInputs(ctx context.Context, nodeID string) erro
 		return nil
 	}
 	// Stage materialization runs immediately before handler execution and updates
-	// the stage-local manifest path consumed by buildStageRuntimeEnv.
+	// the stage-local manifest path consumed by BuildStageRuntimeEnv.
 	roots := []string{e.WorktreeDir}
 	snapshot := inputSnapshotFilesRoot(e.LogsRoot)
 	if strings.TrimSpace(snapshot) != "" {

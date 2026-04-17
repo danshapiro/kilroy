@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
+
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 	"github.com/danshapiro/kilroy/internal/cxdb"
@@ -43,6 +43,7 @@ type manifest struct {
 type ResumeOverrides struct {
 	CXDBHTTPBaseURL string
 	CXDBContextID   string
+	GitOps          GitOps
 }
 
 // Resume continues an existing run from {logs_root}/checkpoint.json.
@@ -137,8 +138,8 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		return nil, fmt.Errorf("resume: stat run config %s: %w", cfgPath, err)
 	}
 
-	// If we have a run config, resume with the real codergen router and CXDB sink.
-	var backend CodergenBackend = &SimulatedCodergenBackend{}
+	// If we have a run config, resume with the real agent router and CXDB sink.
+	var backend AgentBackend = &SimulatedAgentBackend{}
 	var sink *CXDBSink
 	var catalog *modeldb.Catalog
 	var startup *CXDBStartupInfo
@@ -158,7 +159,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 			return nil, err
 		}
 		catalog = cat
-		backend, err = newResumeCodergenBackend(cfg, catalog)
+		backend, err = newResumeAgentBackend(cfg, catalog)
 		if err != nil {
 			return nil, err
 		}
@@ -224,6 +225,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		RunBranchPrefix: prefix,
 		RequireClean:    resolveRequireClean(cfg),
 		ForceModels:     normalizeForceModels(copyStringStringMap(m.ForceModels)),
+		GitOps:          ov.GitOps,
 	}
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err
@@ -240,7 +242,7 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 	eng = newBaseEngine(g, dotSource, opts)
 	eng.RunConfig = cfg
 	eng.ArtifactPolicy = resolvedArtifactPolicy
-	eng.CodergenBackend = backend
+	eng.AgentBackend = backend
 	eng.CXDB = sink
 	eng.ModelCatalogSHA = func() string {
 		if catalog == nil {
@@ -284,29 +286,18 @@ func resumeFromLogsRoot(ctx context.Context, logsRoot string, ov ResumeOverrides
 		}
 	}
 
-	if !gitutil.IsRepo(m.RepoPath) {
-		return nil, fmt.Errorf("not a git repo: %s", m.RepoPath)
-	}
-	clean, err := gitutil.IsClean(m.RepoPath)
-	if err != nil {
-		return nil, err
-	}
-	if !clean {
-		return nil, fmt.Errorf("repo has uncommitted changes (resume requires clean repo)")
-	}
-
-	// Recreate branch pointer and worktree at the last checkpoint commit.
-	// The run branch may currently be checked out by the existing worktree at logs_root/worktree.
-	// Remove it first so we can safely force-move the branch pointer.
-	_ = gitutil.RemoveWorktree(m.RepoPath, eng.WorktreeDir)
-	if err := gitutil.CreateBranchAt(m.RepoPath, eng.RunBranch, cp.GitCommitSHA); err != nil {
-		return nil, err
-	}
-	if err := gitutil.AddWorktree(m.RepoPath, eng.WorktreeDir, eng.RunBranch); err != nil {
-		return nil, err
-	}
-	if err := gitutil.ResetHard(eng.WorktreeDir, cp.GitCommitSHA); err != nil {
-		return nil, err
+	if eng.GitOps != nil {
+		if err := eng.GitOps.ValidateRepo(m.RepoPath, true); err != nil {
+			return nil, err
+		}
+		if err := eng.GitOps.ResumeWorkspace(m.RepoPath, eng.WorktreeDir, eng.RunBranch, cp.GitCommitSHA); err != nil {
+			return nil, err
+		}
+	} else {
+		// No-git mode: workspace dir should already exist from the prior run.
+		if err := os.MkdirAll(eng.WorktreeDir, 0o755); err != nil {
+			return nil, err
+		}
 	}
 
 	// Re-run setup commands (e.g., npm install) since the recreated worktree
@@ -482,14 +473,14 @@ func firstExistingPath(paths ...string) string {
 	return ""
 }
 
-func newResumeCodergenBackend(cfg *RunConfigFile, catalog *modeldb.Catalog) (CodergenBackend, error) {
+func newResumeAgentBackend(cfg *RunConfigFile, catalog *modeldb.Catalog) (AgentBackend, error) {
 	// Resume consumes snapshotted graph+config from a previously validated run,
 	// so we only need runtime materialization here (not full preflight validation).
 	runtimes, err := resolveProviderRuntimes(cfg)
 	if err != nil {
 		return nil, err
 	}
-	return NewCodergenRouterWithRuntimes(cfg, catalog, runtimes), nil
+	return NewAgentRouterWithRuntimes(cfg, catalog, runtimes), nil
 }
 
 func loadManifest(path string) (*manifest, error) {

@@ -1,0 +1,81 @@
+// Multi-tool exercise: 3 agents write about a topic, tool node combines output.
+// Exercises: input/output contracts, .kilroy/ files, agent_tool routing, edge conditions.
+
+digraph multi_tool_exercise {
+    graph [
+        inputs="topic",
+        outputs="combined-output.md",
+        model_stylesheet="
+            * { llm_provider: anthropic; llm_model: claude-sonnet-4.6; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    done  [shape=Msquare,  label="Done"]
+
+    // Tool: prepare input data and seed .kilroy/ convention files.
+    prepare [
+        shape=parallelogram,
+        label="Prepare Input",
+        tool_command="sh .kilroy/package/scripts/prepare-input.sh"
+    ]
+
+    // Agent: Claude Code writes a perspective on the topic.
+    claude_write [
+        shape=box,
+        label="Claude Perspective",
+        agent_tool="claude",
+        prompt="Read .kilroy/INPUT.md for the topic. Write a short unique perspective (2-3 paragraphs) on that topic. Save your writing to .kilroy/data/claude-perspective.md. Then write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
+        outputs=".kilroy/data/claude-perspective.md"
+    ]
+
+    // Agent: Codex writes a perspective on the topic.
+    codex_write [
+        shape=box,
+        label="Codex Perspective",
+        agent_tool="codex",
+        llm_provider="openai",
+        llm_model="gpt-5.4-nano",
+        prompt="Read .kilroy/INPUT.md for the topic. Write a short unique perspective (2-3 paragraphs) on that topic. Save your writing to .kilroy/data/codex-perspective.md. Then write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
+        outputs=".kilroy/data/codex-perspective.md"
+    ]
+
+    // Agent: OpenCode writes a perspective on the topic.
+    opencode_write [
+        shape=box,
+        label="OpenCode Perspective",
+        agent_tool="opencode",
+        prompt="Read .kilroy/INPUT.md for the topic. Write a short unique perspective (2-3 paragraphs) on that topic. Save your writing to .kilroy/data/opencode-perspective.md. Then write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails.",
+        outputs=".kilroy/data/opencode-perspective.md"
+    ]
+
+    // Tool: combine all perspectives into final output.
+    combine [
+        shape=parallelogram,
+        label="Combine Output",
+        tool_command="sh .kilroy/package/scripts/combine-output.sh",
+        outputs="combined-output.md"
+    ]
+
+    // Tool: validate the final output exists and has content.
+    validate [
+        shape=parallelogram,
+        label="Validate",
+        tool_command="sh .kilroy/package/scripts/validate-output.sh"
+    ]
+
+    check_validate [shape=diamond, label="Valid?"]
+
+    start           -> prepare
+    prepare         -> claude_write   [condition="outcome=success"]
+    prepare         -> done
+    claude_write    -> codex_write
+    codex_write     -> opencode_write
+    opencode_write  -> combine
+    combine         -> validate       [condition="outcome=success"]
+    combine         -> done
+    validate        -> check_validate
+    check_validate  -> done           [condition="outcome=success"]
+    check_validate  -> done           [condition="outcome=fail"]
+    check_validate  -> done
+}

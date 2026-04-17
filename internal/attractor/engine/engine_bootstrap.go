@@ -23,6 +23,12 @@ func newBaseEngine(g *model.Graph, dotSource []byte, opts RunOptions) *Engine {
 	if opts.Interviewer != nil {
 		e.Interviewer = opts.Interviewer
 	}
+	if opts.RunDB != nil {
+		e.RunDB = opts.RunDB
+	}
+	if opts.GitOps != nil {
+		e.GitOps = opts.GitOps
+	}
 	e.RunBranch = buildRunBranch(opts.RunBranchPrefix, opts.RunID)
 	return e
 }

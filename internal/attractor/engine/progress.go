@@ -20,6 +20,12 @@ func (e *Engine) appendProgress(ev map[string]any) {
 	e.appendProgressImpl(ev, true)
 }
 
+// AppendProgress writes a progress event visible to observers and the stall watchdog.
+// Exported for use by handler implementations in external packages.
+func (e *Engine) AppendProgress(ev map[string]any) {
+	e.appendProgress(ev)
+}
+
 // appendProgressLivenessOnly writes a progress event to progress.ndjson and
 // live.json for observability but does NOT reset the stall watchdog timer.
 // Use this for unconditional heartbeat emissions that should not mask true stalls.
@@ -37,6 +43,10 @@ func (e *Engine) appendProgressImpl(ev map[string]any, updateStallTimer bool) {
 		ev = map[string]any{}
 	}
 	now := time.Now().UTC()
+	// Canonical envelope fields: id, ts, run_id.
+	if _, ok := ev["id"]; !ok {
+		ev["id"] = newEventID()
+	}
 	if _, ok := ev["ts"]; !ok {
 		ev["ts"] = now.Format(time.RFC3339Nano)
 	}
@@ -75,6 +85,13 @@ func (e *Engine) appendProgressImpl(ev map[string]any, updateStallTimer bool) {
 	if sink != nil {
 		sink(sinkEvent)
 	}
+}
+
+// TickStallWatchdog resets the stall watchdog timer to now, indicating
+// the run is making progress. Called by handlers that produce output
+// through channels other than AppendProgress (e.g., agent log tailing).
+func (e *Engine) TickStallWatchdog() {
+	e.setLastProgressTime(time.Now().UTC())
 }
 
 func (e *Engine) setLastProgressTime(ts time.Time) {

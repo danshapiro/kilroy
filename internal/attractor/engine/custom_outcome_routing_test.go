@@ -11,7 +11,7 @@ import (
 )
 
 // TestRun_BoxNodeCustomOutcome_RoutesWithoutRetry verifies that a shape=box
-// (codergen) node returning a custom outcome (e.g. "needs_dod") routes via
+// (agent) node returning a custom outcome (e.g. "needs_dod") routes via
 // matching conditional edges instead of being retried as a failure.
 //
 // This is the canonical pattern from the reference dotfiles (consensus_task.dot,

@@ -88,7 +88,7 @@ func TestFormatCXDBTurn_StageStarted(t *testing.T) {
 		Payload: map[string]any{
 			"timestamp_ms": float64(1739163625000),
 			"node_id":      "implement_feature",
-			"handler_type": "codergen",
+			"handler_type": "agent",
 			"attempt":      "2",
 		},
 	}
@@ -99,7 +99,7 @@ func TestFormatCXDBTurn_StageStarted(t *testing.T) {
 	if !strings.Contains(got, "implement_feature") {
 		t.Fatalf("expected node_id: %s", got)
 	}
-	if !strings.Contains(got, "codergen") {
+	if !strings.Contains(got, "agent") {
 		t.Fatalf("expected handler_type: %s", got)
 	}
 	if !strings.Contains(got, "attempt 2") {

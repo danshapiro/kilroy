@@ -53,6 +53,7 @@ func TestGitPushIfConfigured_PushesToRemote(t *testing.T) {
 		Options:   RunOptions{RepoPath: repo},
 		RunBranch: "attractor/run/test-push",
 		RunConfig: &RunConfigFile{},
+		GitOps:    &testGitOps{},
 	}
 	eng.RunConfig.Git.PushRemote = "test-remote"
 
@@ -119,16 +120,16 @@ digraph G {
 	cfg.Git.PushRemote = "test-remote"
 
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-push-restart", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
-		RunConfig:       cfg,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-push-restart", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
+		RunConfig:    cfg,
 	}
 	eng.RunBranch = "attractor/run/test-push-restart"
 

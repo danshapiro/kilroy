@@ -10,6 +10,8 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/danshapiro/kilroy/internal/attractor/rundb"
 )
 
 // Config holds server configuration.
@@ -42,6 +44,34 @@ func New(cfg Config) *Server {
 
 	// Go 1.22+ method+pattern routing.
 	mux.HandleFunc("GET /health", s.handleHealth)
+
+	// Embedded dashboard UI.
+	ui := uiHandler()
+	mux.Handle("GET /ui/", ui)
+	mux.HandleFunc("GET /ui", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui/", http.StatusMovedPermanently)
+	})
+
+	// /runs endpoints (canonical names per platform-reframe plan).
+	mux.HandleFunc("POST /runs", s.handleSubmitPipeline)
+	mux.HandleFunc("GET /runs", s.handleListRuns)
+	mux.HandleFunc("GET /runs/{id}", s.handleGetPipeline)
+	mux.HandleFunc("GET /workflows", s.handleListWorkflows)
+	mux.HandleFunc("GET /runs/{id}/events", s.handlePipelineEvents)
+	mux.HandleFunc("POST /runs/{id}/cancel", s.handleCancelPipeline)
+	mux.HandleFunc("GET /runs/{id}/context", s.handleGetContext)
+	mux.HandleFunc("GET /runs/{id}/outputs", s.handleGetRunOutputs)
+	mux.HandleFunc("GET /runs/{id}/outputs/{name...}", s.handleDownloadOutput)
+	mux.HandleFunc("GET /runs/{id}/nodes/{nodeId}/turns", s.handleGetNodeTurns)
+	mux.HandleFunc("GET /runs/{id}/nodes/{nodeId}/attempts", s.handleGetNodeAttempts)
+	mux.HandleFunc("GET /runs/{id}/nodes/{nodeId}/diff", s.handleGetNodeDiff)
+	mux.HandleFunc("GET /runs/{id}/log", s.handleGetRunLog)
+	mux.HandleFunc("GET /runs/{id}/files/{path...}", s.handleBrowseFiles)
+	mux.HandleFunc("GET /runs/{id}/workspace/{path...}", s.handleBrowseWorkspace)
+	mux.HandleFunc("GET /runs/{id}/questions", s.handleGetQuestions)
+	mux.HandleFunc("POST /runs/{id}/questions/{qid}/answer", s.handleAnswerQuestion)
+
+	// /pipelines aliases for backward compatibility.
 	mux.HandleFunc("POST /pipelines", s.handleSubmitPipeline)
 	mux.HandleFunc("GET /pipelines/{id}", s.handleGetPipeline)
 	mux.HandleFunc("GET /pipelines/{id}/events", s.handlePipelineEvents)
@@ -71,6 +101,14 @@ func (s *Server) ListenAndServe() error {
 		s.logger.Printf("received %s, shutting down...", sig)
 		s.Shutdown()
 	}()
+
+	// Reconcile stale runs on startup.
+	if db, err := rundb.Open(rundb.DefaultPath()); err == nil {
+		if n, err := db.ReconcileStaleRuns(2 * time.Hour); err == nil && n > 0 {
+			s.logger.Printf("reconciled %d stale run(s) → interrupted", n)
+		}
+		db.Close()
+	}
 
 	s.logger.Printf("listening on %s", s.config.Addr)
 	s.httpSrv.Addr = s.config.Addr

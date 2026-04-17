@@ -9,7 +9,7 @@ import (
 func TestStageStatusContract_AbsolutePaths_FromRelativeWorktreeInput(t *testing.T) {
 	t.Setenv(runIDEnvKey, "test-run")
 	rel := filepath.Join("tmp", "wt")
-	c := buildStageStatusContract(rel)
+	c := BuildStageStatusContract(rel)
 
 	if !filepath.IsAbs(c.PrimaryPath) {
 		t.Fatalf("primary path must be absolute, got %q", c.PrimaryPath)
@@ -22,7 +22,7 @@ func TestStageStatusContract_AbsolutePaths_FromRelativeWorktreeInput(t *testing.
 func TestStageStatusContract_DefaultPaths(t *testing.T) {
 	wt := t.TempDir()
 	t.Setenv(runIDEnvKey, "test-run")
-	c := buildStageStatusContract(wt)
+	c := BuildStageStatusContract(wt)
 
 	if got, want := c.PrimaryPath, filepath.Join(wt, "status.json"); got != want {
 		t.Fatalf("primary path: got %q want %q", got, want)

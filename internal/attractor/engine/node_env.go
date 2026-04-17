@@ -13,6 +13,7 @@ const (
 	stageLogsDirEnvKey   = "KILROY_STAGE_LOGS_DIR"
 	worktreeDirEnvKey    = "KILROY_WORKTREE_DIR"
 	inputsManifestEnvKey = "KILROY_INPUTS_MANIFEST_PATH"
+	dataDirEnvKey        = "KILROY_DATA_DIR"
 )
 
 var baseNodeEnvStripKeys = []string{
@@ -25,6 +26,7 @@ var baseNodeEnvStripKeys = []string{
 	inputsManifestEnvKey,
 	stageStatusPathEnvKey,
 	stageStatusFallbackPathEnvKey,
+	dataDirEnvKey,
 }
 
 // buildBaseNodeEnv constructs the base environment for any node execution.
@@ -61,9 +63,9 @@ func stripEnvKey(env []string, key string) []string {
 	return out
 }
 
-// buildStageRuntimeEnv returns stable per-stage environment variables that
-// help codergen/tool nodes find their run-local state (logs, worktree, etc.).
-func buildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
+// BuildStageRuntimeEnv returns stable per-stage environment variables that
+// help agent/tool nodes find their run-local state (logs, worktree, etc.).
+func BuildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
 	out := map[string]string{}
 	if execCtx == nil {
 		return out
@@ -84,6 +86,13 @@ func buildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
 	}
 	if worktree := strings.TrimSpace(execCtx.WorktreeDir); worktree != "" {
 		out[worktreeDirEnvKey] = worktree
+		out[dataDirEnvKey] = filepath.Join(worktree, kilroyDir)
+	}
+	// Add structured input env vars (KILROY_INPUT_*).
+	if execCtx.Engine != nil {
+		for k, v := range InputEnvVars(execCtx.Engine.Options.Inputs) {
+			out[k] = v
+		}
 	}
 	if execCtx.Engine != nil && execCtx.Engine.inputMaterializationEnabled() {
 		manifestPath := strings.TrimSpace(execCtx.Engine.currentInputManifestPath)
@@ -116,13 +125,18 @@ func buildStageRuntimePreamble(execCtx *Execution, nodeID string) string {
 	if runID == "" && logsRoot == "" && stageDir == "" && worktree == "" && strings.TrimSpace(nodeID) == "" {
 		return ""
 	}
+	dataDir := ""
+	if worktree != "" {
+		dataDir = filepath.Join(worktree, kilroyDir)
+	}
 	return strings.TrimSpace(
 		"Execution context:\n" +
 			"- $" + runIDEnvKey + "=" + runID + "\n" +
 			"- $" + logsRootEnvKey + "=" + logsRoot + "\n" +
 			"- $" + stageLogsDirEnvKey + "=" + stageDir + "\n" +
 			"- $" + worktreeDirEnvKey + "=" + worktree + "\n" +
-			"- $" + nodeIDEnvKey + "=" + strings.TrimSpace(nodeID) + "\n",
+			"- $" + nodeIDEnvKey + "=" + strings.TrimSpace(nodeID) + "\n" +
+			"- $" + dataDirEnvKey + "=" + dataDir + "\n",
 	)
 }
 

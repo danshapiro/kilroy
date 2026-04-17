@@ -8,7 +8,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
 	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 )
@@ -271,9 +270,13 @@ func dispatchParallelBranchesStreaming(
 	}
 
 	msg := fmt.Sprintf("attractor(%s): %s (%s)", exec.Engine.Options.RunID, sourceNodeID, runtime.StatusSuccess)
-	baseSHA, err := gitutil.CommitAllowEmpty(exec.WorktreeDir, msg)
-	if err != nil {
-		return nil, "", err
+	var baseSHA string
+	if exec.Engine.GitOps != nil {
+		var err error
+		baseSHA, err = exec.Engine.GitOps.CheckpointSimple(exec.WorktreeDir, msg)
+		if err != nil {
+			return nil, "", err
+		}
 	}
 
 	passNum := exec.Engine.nextParallelPassCount(sourceNodeID)

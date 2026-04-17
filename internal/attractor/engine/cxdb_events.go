@@ -64,6 +64,11 @@ func (e *Engine) cxdbPrompt(ctx context.Context, nodeID, text string) {
 	})
 }
 
+// CXDBPrompt emits a prompt event to CXDB. Exported for handler packages.
+func (e *Engine) CXDBPrompt(ctx context.Context, nodeID, text string) {
+	e.cxdbPrompt(ctx, nodeID, text)
+}
+
 func (e *Engine) cxdbStageStarted(ctx context.Context, node *model.Node) {
 	if e == nil || e.CXDB == nil || node == nil {
 		return
@@ -276,6 +281,11 @@ func (e *Engine) cxdbParallelCompleted(ctx context.Context, nodeID string, succe
 	})
 }
 
+// CXDBInterviewStarted emits an InterviewStarted event (spec §9.6). Exported for handler packages.
+func (e *Engine) CXDBInterviewStarted(ctx context.Context, nodeID string, questionText string, questionType string) {
+	e.cxdbInterviewStarted(ctx, nodeID, questionText, questionType)
+}
+
 // cxdbInterviewStarted emits an InterviewStarted event (spec §9.6).
 func (e *Engine) cxdbInterviewStarted(ctx context.Context, nodeID string, questionText string, questionType string) {
 	if e == nil || e.CXDB == nil {
@@ -290,6 +300,11 @@ func (e *Engine) cxdbInterviewStarted(ctx context.Context, nodeID string, questi
 	})
 }
 
+// CXDBInterviewCompleted emits an InterviewCompleted event (spec §9.6). Exported for handler packages.
+func (e *Engine) CXDBInterviewCompleted(ctx context.Context, nodeID string, answerValue string, durationMS int64) {
+	e.cxdbInterviewCompleted(ctx, nodeID, answerValue, durationMS)
+}
+
 // cxdbInterviewCompleted emits an InterviewCompleted event (spec §9.6).
 func (e *Engine) cxdbInterviewCompleted(ctx context.Context, nodeID string, answerValue string, durationMS int64) {
 	if e == nil || e.CXDB == nil {
@@ -302,6 +317,11 @@ func (e *Engine) cxdbInterviewCompleted(ctx context.Context, nodeID string, answ
 		"answer_value": answerValue,
 		"duration_ms":  durationMS,
 	})
+}
+
+// CXDBInterviewTimeout emits an InterviewTimeout event (spec §9.6). Exported for handler packages.
+func (e *Engine) CXDBInterviewTimeout(ctx context.Context, nodeID string, questionText string, durationMS int64) {
+	e.cxdbInterviewTimeout(ctx, nodeID, questionText, durationMS)
 }
 
 // cxdbInterviewTimeout emits an InterviewTimeout event (spec §9.6).

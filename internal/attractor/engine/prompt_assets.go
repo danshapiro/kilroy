@@ -16,7 +16,7 @@ var (
 	//go:embed prompts/preflight_probe_agent_loop_system.txt
 	preflightPromptProbeAgentLoopSystemRaw string
 	//go:embed prompts/stage_status_contract_preamble.tmpl
-	stageStatusContractPromptPreambleTemplateRaw string
+	StageStatusContractPromptPreambleTemplateRaw string
 	//go:embed prompts/input_materialization_preamble.tmpl
 	inputMaterializationPromptPreambleTemplateRaw string
 	//go:embed prompts/failure_dossier_preamble.tmpl
@@ -27,8 +27,8 @@ var (
 	preflightPromptProbeText              = mustEmbeddedPromptText("preflight_probe_one_shot_user", preflightPromptProbeTextRaw)
 	preflightPromptProbeAgentLoopText     = mustEmbeddedPromptText("preflight_probe_agent_loop_user", preflightPromptProbeAgentLoopTextRaw)
 	preflightPromptProbeAgentLoopSystem   = mustEmbeddedPromptText("preflight_probe_agent_loop_system", preflightPromptProbeAgentLoopSystemRaw)
-	stageStatusContractPromptPreambleTmpl = template.Must(
-		template.New("stage_status_contract_preamble").Parse(stageStatusContractPromptPreambleTemplateRaw),
+	StageStatusContractPromptPreambleTmpl = template.Must(
+		template.New("stage_status_contract_preamble").Parse(StageStatusContractPromptPreambleTemplateRaw),
 	)
 	inputMaterializationPromptPreambleTmpl = template.Must(
 		template.New("input_materialization_preamble").Parse(inputMaterializationPromptPreambleTemplateRaw),
@@ -40,7 +40,7 @@ var (
 
 func mustRenderStageStatusContractPromptPreamble(primaryPath, fallbackPath string) string {
 	var buf bytes.Buffer
-	err := stageStatusContractPromptPreambleTmpl.Execute(&buf, map[string]string{
+	err := StageStatusContractPromptPreambleTmpl.Execute(&buf, map[string]string{
 		"StageStatusPathEnvKey":         stageStatusPathEnvKey,
 		"PrimaryPath":                   primaryPath,
 		"StageStatusFallbackPathEnvKey": stageStatusFallbackPathEnvKey,
@@ -64,7 +64,7 @@ func mustEmbeddedPromptText(name, raw string) string {
 	return text
 }
 
-func mustRenderInputMaterializationPromptPreamble(manifestPath string) string {
+func MustRenderInputMaterializationPromptPreamble(manifestPath string) string {
 	var buf bytes.Buffer
 	err := inputMaterializationPromptPreambleTmpl.Execute(&buf, map[string]string{
 		"InputsManifestPathEnvKey": inputsManifestEnvKey,
@@ -80,7 +80,7 @@ func mustRenderInputMaterializationPromptPreamble(manifestPath string) string {
 	return text + "\n"
 }
 
-func mustRenderFailureDossierPromptPreamble(worktreePath, logsPath string) string {
+func MustRenderFailureDossierPromptPreamble(worktreePath, logsPath string) string {
 	var buf bytes.Buffer
 	err := failureDossierPromptPreambleTmpl.Execute(&buf, map[string]string{
 		"WorktreePath": strings.TrimSpace(worktreePath),
