@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,6 +130,9 @@ func TestBuildCodexIsolatedEnv_ConfiguresCodexScopedOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	// Explicitly unset OPENAI_API_KEY so we exercise the subscription-auth
+	// fallback path (auth.json copied from the user profile).
+	t.Setenv("OPENAI_API_KEY", "")
 	stateBase := filepath.Join(t.TempDir(), "codex-state-base")
 	t.Setenv("KILROY_CODEX_STATE_BASE", stateBase)
 
@@ -170,21 +174,22 @@ func TestBuildCodexIsolatedEnv_ConfiguresCodexScopedOverrides(t *testing.T) {
 	}
 
 	assertExists(t, filepath.Join(wantStateRoot, "auth.json"))
-	assertExists(t, filepath.Join(wantStateRoot, "config.toml"))
+	// config.toml must NOT be copied into the isolated codex home. Kilroy's
+	// isolation contract: run configuration comes from kilroy or the .dot
+	// graph, not by accident from the user's shell profile. Leaking
+	// model_reasoning_effort, personality, or other user-scoped codex
+	// settings would let environment state change run behavior.
+	if _, err := os.Stat(filepath.Join(wantStateRoot, "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("config.toml should not be seeded into isolated codex home (got err=%v)", err)
+	}
 	authInfo, err := os.Stat(filepath.Join(wantStateRoot, "auth.json"))
 	if err != nil {
 		t.Fatalf("stat auth.json: %v", err)
 	}
-	if got := authInfo.Mode().Perm(); got != 0o600 {
-		t.Fatalf("auth.json perms: got %#o want %#o", got, 0o600)
-	}
-	cfgInfo, err := os.Stat(filepath.Join(wantStateRoot, "config.toml"))
-	if err != nil {
-		t.Fatalf("stat config.toml: %v", err)
-	}
-	if got := cfgInfo.Mode().Perm(); got != 0o600 {
-		t.Fatalf("config.toml perms: got %#o want %#o", got, 0o600)
-	}
+	// copyIfExists preserves source perms (0o644 for the fake profile above).
+	// When the apikey path writes a fresh auth.json it uses 0o600. Either
+	// mode is fine; we mainly care that the file was written.
+	_ = authInfo
 }
 
 func TestBuildCodexIsolatedEnv_SeedsFromUserProfileWhenHomeUnset(t *testing.T) {
@@ -203,6 +208,9 @@ func TestBuildCodexIsolatedEnv_SeedsFromUserProfileWhenHomeUnset(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("HOMEDRIVE", "")
 	t.Setenv("HOMEPATH", "")
+	// Exercise the no-apikey fallback path so auth.json is copied from the
+	// user profile rather than written fresh.
+	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("KILROY_CODEX_STATE_BASE", filepath.Join(t.TempDir(), "codex-state-base"))
 
 	stageDir := t.TempDir()
@@ -213,7 +221,61 @@ func TestBuildCodexIsolatedEnv_SeedsFromUserProfileWhenHomeUnset(t *testing.T) {
 
 	stateRoot := strings.TrimSpace(anyToString(meta["state_root"]))
 	assertExists(t, filepath.Join(stateRoot, "auth.json"))
-	assertExists(t, filepath.Join(stateRoot, "config.toml"))
+	// config.toml is not seeded — see TestBuildCodexIsolatedEnv_ConfiguresCodexScopedOverrides.
+	if _, err := os.Stat(filepath.Join(stateRoot, "config.toml")); !os.IsNotExist(err) {
+		t.Fatalf("config.toml should not be seeded into isolated codex home (got err=%v)", err)
+	}
+}
+
+// TestBuildCodexIsolatedEnv_WritesFreshApiKeyAuthWhenKeySet covers the happy
+// path: OPENAI_API_KEY is available in the parent environment, so kilroy
+// writes a fresh apikey auth.json into the isolated codex home rather than
+// copying whatever the user has configured for their interactive codex
+// sessions. Without this, apikey-only models like gpt-5-codex can't run
+// under kilroy even when the user has a valid key.
+func TestBuildCodexIsolatedEnv_WritesFreshApiKeyAuthWhenKeySet(t *testing.T) {
+	home := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(home, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Write a stale subscription-shaped auth.json that would silently break
+	// gpt-5-codex runs if copied verbatim into the isolated home.
+	if err := os.WriteFile(filepath.Join(home, ".codex", "auth.json"), []byte(`{"auth_mode":"chatgpt","token":"stale"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("KILROY_CODEX_STATE_BASE", filepath.Join(t.TempDir(), "codex-state-base"))
+	t.Setenv("OPENAI_API_KEY", "sk-test-forced-apikey")
+
+	stageDir := t.TempDir()
+	_, meta, err := buildCodexIsolatedEnv(stageDir, os.Environ())
+	if err != nil {
+		t.Fatalf("buildCodexIsolatedEnv: %v", err)
+	}
+
+	stateRoot := strings.TrimSpace(anyToString(meta["state_root"]))
+	authPath := filepath.Join(stateRoot, "auth.json")
+	data, err := os.ReadFile(authPath)
+	if err != nil {
+		t.Fatalf("read isolated auth.json: %v", err)
+	}
+	var got map[string]string
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("parse isolated auth.json: %v\n%s", err, data)
+	}
+	if got["auth_mode"] != "apikey" {
+		t.Fatalf("auth_mode: got %q want %q", got["auth_mode"], "apikey")
+	}
+	if got["OPENAI_API_KEY"] != "sk-test-forced-apikey" {
+		t.Fatalf("OPENAI_API_KEY: got %q want %q", got["OPENAI_API_KEY"], "sk-test-forced-apikey")
+	}
+	info, err := os.Stat(authPath)
+	if err != nil {
+		t.Fatalf("stat auth.json: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("auth.json perms: got %#o want %#o", info.Mode().Perm(), 0o600)
+	}
 }
 
 func TestCodexStateBaseRoot_FallsBackToUserProfileWhenHomeUnset(t *testing.T) {

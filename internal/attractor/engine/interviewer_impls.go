@@ -336,7 +336,8 @@ func (i *RecordingInterviewer) Inform(message string, stage string) {
 	i.Inner.Inform(message, stage)
 }
 
-func acceleratorKey(label string) string {
+// AcceleratorKey extracts a single-character accelerator key from a label.
+func AcceleratorKey(label string) string {
 	s := strings.TrimSpace(label)
 	if s == "" {
 		return ""

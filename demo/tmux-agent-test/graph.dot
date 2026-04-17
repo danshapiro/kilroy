@@ -1,0 +1,12 @@
+digraph tmux_agent_test {
+  graph [goal="Test tmux agent handler with real Claude"]
+
+  start [shape=Mdiamond, label="Start"]
+  agent [shape=box, label="Agent Task", agent_tool="claude", llm_provider="anthropic", llm_model="claude-sonnet-4-20250514", auto_status="true", prompt="Create a file called hello.txt containing exactly the text 'KILROY_TMUX_TEST_PASS'. Do not add any other content. Do not explain what you did."]
+  verify [shape=parallelogram, label="Verify Output", tool_command="cat hello.txt"]
+  done [shape=Msquare, label="Done"]
+
+  start -> agent
+  agent -> verify
+  verify -> done
+}

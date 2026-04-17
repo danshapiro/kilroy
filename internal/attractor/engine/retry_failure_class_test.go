@@ -122,14 +122,14 @@ digraph G {
 		WorktreeDir: filepath.Join(logsRoot, "worktree"),
 	}
 	eng := &Engine{
-		Graph:           g,
-		Options:         opts,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     opts.WorktreeDir,
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		Graph:        g,
+		Options:      opts,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  opts.WorktreeDir,
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.Registry.Register("retry_gate_test", handler)
 	node := g.Nodes["r"]
@@ -232,14 +232,14 @@ digraph G {
 				t.Fatalf("Prepare: %v", err)
 			}
 			eng := &Engine{
-				Graph:           g,
-				Options:         RunOptions{RunID: "api-err-class", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "wt")},
-				LogsRoot:        logsRoot,
-				WorktreeDir:     filepath.Join(logsRoot, "wt"),
-				Context:         runtime.NewContext(),
-				Registry:        NewDefaultRegistry(),
-				Interviewer:     &AutoApproveInterviewer{},
-				CodergenBackend: &apiErrorBackend{err: tc.err},
+				Graph:        g,
+				Options:      RunOptions{RunID: "api-err-class", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "wt")},
+				LogsRoot:     logsRoot,
+				WorktreeDir:  filepath.Join(logsRoot, "wt"),
+				Context:      runtime.NewContext(),
+				Registry:     NewDefaultRegistry(),
+				Interviewer:  &AutoApproveInterviewer{},
+				AgentBackend: &apiErrorBackend{err: tc.err},
 			}
 			node := g.Nodes["a"]
 			if node == nil {

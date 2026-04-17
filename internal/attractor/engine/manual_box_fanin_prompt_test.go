@@ -64,7 +64,7 @@ digraph G {
 	runID := "test-manual-box-fan-in-handoff"
 	logsRoot := filepath.Join(t.TempDir(), runID)
 	eng := newReliabilityFixtureEngine(t, repo, logsRoot, runID, dot)
-	eng.CodergenBackend = backend
+	eng.AgentBackend = backend
 	_, err := eng.runLoop(ctx, "start", nil, map[string]int{}, map[string]runtime.Outcome{})
 	if err != nil {
 		t.Fatalf("runLoop() error: %v", err)

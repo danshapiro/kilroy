@@ -24,14 +24,14 @@ func TestCopyFirstValidFallbackStatus_CanonicalStageStatusWins(t *testing.T) {
 		t.Fatalf("write fallback status: %v", err)
 	}
 
-	source, diagnostic, err := copyFirstValidFallbackStatus(stageStatusPath, []fallbackStatusPath{
-		{path: fallbackPath, source: statusSourceWorktree},
+	source, diagnostic, err := CopyFirstValidFallbackStatus(stageStatusPath, []FallbackStatusPath{
+		{Path: fallbackPath, Source: StatusSourceWorktree},
 	})
 	if err != nil {
-		t.Fatalf("copyFirstValidFallbackStatus: %v", err)
+		t.Fatalf("CopyFirstValidFallbackStatus: %v", err)
 	}
-	if source != statusSourceCanonical {
-		t.Fatalf("source=%q want %q", source, statusSourceCanonical)
+	if source != StatusSourceCanonical {
+		t.Fatalf("source=%q want %q", source, StatusSourceCanonical)
 	}
 	if strings.TrimSpace(diagnostic) != "" {
 		t.Fatalf("diagnostic=%q want empty", diagnostic)
@@ -55,13 +55,13 @@ func TestCopyFirstValidFallbackStatus_MissingFallbackIsDiagnosed(t *testing.T) {
 	stageStatusPath := filepath.Join(tmp, "logs", "a", "status.json")
 	missingPath := filepath.Join(tmp, "missing-status.json")
 
-	source, diagnostic, err := copyFirstValidFallbackStatus(stageStatusPath, []fallbackStatusPath{
-		{path: missingPath, source: statusSourceWorktree},
+	source, diagnostic, err := CopyFirstValidFallbackStatus(stageStatusPath, []FallbackStatusPath{
+		{Path: missingPath, Source: StatusSourceWorktree},
 	})
 	if err != nil {
-		t.Fatalf("copyFirstValidFallbackStatus: %v", err)
+		t.Fatalf("CopyFirstValidFallbackStatus: %v", err)
 	}
-	if source != statusSourceNone {
+	if source != StatusSourceNone {
 		t.Fatalf("source=%q want empty", source)
 	}
 	if !strings.Contains(diagnostic, "missing status artifact") {
@@ -78,13 +78,13 @@ func TestCopyFirstValidFallbackStatus_PermanentCorruptFallbackIsDiagnosed(t *tes
 		t.Fatalf("write corrupt fallback: %v", err)
 	}
 
-	source, diagnostic, err := copyFirstValidFallbackStatus(stageStatusPath, []fallbackStatusPath{
-		{path: fallbackPath, source: statusSourceWorktree},
+	source, diagnostic, err := CopyFirstValidFallbackStatus(stageStatusPath, []FallbackStatusPath{
+		{Path: fallbackPath, Source: StatusSourceWorktree},
 	})
 	if err != nil {
-		t.Fatalf("copyFirstValidFallbackStatus: %v", err)
+		t.Fatalf("CopyFirstValidFallbackStatus: %v", err)
 	}
-	if source != statusSourceNone {
+	if source != StatusSourceNone {
 		t.Fatalf("source=%q want empty", source)
 	}
 	if !strings.Contains(diagnostic, "corrupt status artifact") {
@@ -106,14 +106,14 @@ func TestCopyFirstValidFallbackStatus_RetryDecodeSucceedsAfterTransientCorruptio
 		_ = os.WriteFile(fallbackPath, []byte(`{"status":"fail","failure_reason":"transient decode retry success"}`), 0o644)
 	}()
 
-	source, diagnostic, err := copyFirstValidFallbackStatus(stageStatusPath, []fallbackStatusPath{
-		{path: fallbackPath, source: statusSourceWorktree},
+	source, diagnostic, err := CopyFirstValidFallbackStatus(stageStatusPath, []FallbackStatusPath{
+		{Path: fallbackPath, Source: StatusSourceWorktree},
 	})
 	if err != nil {
-		t.Fatalf("copyFirstValidFallbackStatus: %v", err)
+		t.Fatalf("CopyFirstValidFallbackStatus: %v", err)
 	}
-	if source != statusSourceWorktree {
-		t.Fatalf("source=%q want %q", source, statusSourceWorktree)
+	if source != StatusSourceWorktree {
+		t.Fatalf("source=%q want %q", source, StatusSourceWorktree)
 	}
 	if strings.TrimSpace(diagnostic) != "" {
 		t.Fatalf("diagnostic=%q want empty", diagnostic)
@@ -145,13 +145,13 @@ func TestCopyFirstValidFallbackStatus_TypeMismatchIsInvalidPayload(t *testing.T)
 		t.Fatalf("write invalid payload fallback: %v", err)
 	}
 
-	source, diagnostic, err := copyFirstValidFallbackStatus(stageStatusPath, []fallbackStatusPath{
-		{path: fallbackPath, source: statusSourceWorktree},
+	source, diagnostic, err := CopyFirstValidFallbackStatus(stageStatusPath, []FallbackStatusPath{
+		{Path: fallbackPath, Source: StatusSourceWorktree},
 	})
 	if err != nil {
-		t.Fatalf("copyFirstValidFallbackStatus: %v", err)
+		t.Fatalf("CopyFirstValidFallbackStatus: %v", err)
 	}
-	if source != statusSourceNone {
+	if source != StatusSourceNone {
 		t.Fatalf("source=%q want empty", source)
 	}
 	if !strings.Contains(diagnostic, "invalid status payload") {

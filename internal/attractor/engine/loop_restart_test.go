@@ -65,15 +65,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-restart", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-restart", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-restart"
 
@@ -170,15 +170,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-retry-reset", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-retry-reset", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-retry-reset"
 
@@ -262,15 +262,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-limit", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-limit", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-limit"
 
@@ -322,15 +322,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-final-on-limit", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-final-on-limit", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-final-on-limit"
 
@@ -411,15 +411,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-deterministic-block", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-deterministic-block", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-deterministic-block"
 
@@ -489,15 +489,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-circuit-breaker", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-circuit-breaker", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-circuit-breaker"
 
@@ -607,15 +607,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-stuck-cycle", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-stuck-cycle", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-stuck-cycle"
 
@@ -809,15 +809,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-persist", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-persist", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-persist"
 
@@ -900,15 +900,15 @@ digraph G {
 
 	logsRoot := t.TempDir()
 	eng := &Engine{
-		Graph:           g,
-		Options:         RunOptions{RepoPath: repo, RunID: "test-persist-progress", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
-		DotSource:       dot,
-		LogsRoot:        logsRoot,
-		WorktreeDir:     filepath.Join(logsRoot, "worktree"),
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: backend,
+		Graph:        g,
+		Options:      RunOptions{RepoPath: repo, RunID: "test-persist-progress", LogsRoot: logsRoot, WorktreeDir: filepath.Join(logsRoot, "worktree"), RunBranchPrefix: "attractor/run", RequireClean: true},
+		DotSource:    dot,
+		LogsRoot:     logsRoot,
+		WorktreeDir:  filepath.Join(logsRoot, "worktree"),
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: backend,
 	}
 	eng.RunBranch = "attractor/run/test-persist-progress"
 

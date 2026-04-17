@@ -52,15 +52,15 @@ digraph G {
 		t.Fatalf("applyDefaults: %v", err)
 	}
 	eng := &Engine{
-		Graph:           g,
-		Options:         opts,
-		DotSource:       []byte(""),
-		LogsRoot:        opts.LogsRoot,
-		WorktreeDir:     opts.WorktreeDir,
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		Graph:        g,
+		Options:      opts,
+		DotSource:    []byte(""),
+		LogsRoot:     opts.LogsRoot,
+		WorktreeDir:  opts.WorktreeDir,
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	eng.Registry.Register("setctx", &setContextHandler{})
 	eng.RunBranch = "attractor/run/" + opts.RunID

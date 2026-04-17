@@ -33,13 +33,16 @@ func TestRun_FailsWhenRepoIsDirty(t *testing.T) {
 	}
 }
 
-func TestRun_FailsWhenNotAGitRepo(t *testing.T) {
+func TestRun_SucceedsInNonGitDir(t *testing.T) {
 	dir := t.TempDir()
 	dot := []byte(`digraph G { start [shape=Mdiamond] exit [shape=Msquare] start -> exit }`)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	_, err := runForTest(t, ctx, dot, RunOptions{RepoPath: dir})
-	if err == nil {
-		t.Fatalf("expected error, got nil")
+	res, err := runForTest(t, ctx, dot, RunOptions{RepoPath: dir})
+	if err != nil {
+		t.Fatalf("expected success in non-git dir, got error: %v", err)
+	}
+	if res.FinalCommitSHA != "" {
+		t.Fatalf("expected empty commit SHA in no-git mode, got %q", res.FinalCommitSHA)
 	}
 }

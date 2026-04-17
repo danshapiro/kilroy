@@ -76,8 +76,8 @@ func runToolHook(ctx context.Context, hookCmd string, worktreeDir string, env []
 			"hook_cmd":  hookCmd,
 			"call_id":   callID,
 			"exit_code": exitCode,
-			"stdout":    truncate(stdoutBuf.String(), 4000),
-			"stderr":    truncate(stderrBuf.String(), 4000),
+			"stdout":    Truncate(stdoutBuf.String(), 4000),
+			"stderr":    Truncate(stderrBuf.String(), 4000),
 			"timed_out": cctx.Err() == context.DeadlineExceeded,
 		})
 	}
@@ -99,7 +99,7 @@ func buildToolHookStdinJSON(toolName, callID, argsJSON, resultOutput string, isE
 		data["arguments_json"] = argsJSON
 	}
 	if hookType == "post" {
-		data["output"] = truncate(resultOutput, 8000)
+		data["output"] = Truncate(resultOutput, 8000)
 		data["is_error"] = isError
 	}
 	b, err := json.Marshal(data)

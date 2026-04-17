@@ -26,7 +26,7 @@ import (
 	"github.com/danshapiro/kilroy/internal/modelmeta"
 )
 
-type CodergenRouter struct {
+type AgentRouter struct {
 	cfg     *RunConfigFile
 	catalog *modeldb.Catalog
 
@@ -38,12 +38,12 @@ type CodergenRouter struct {
 	apiErr    error
 }
 
-func NewCodergenRouter(cfg *RunConfigFile, catalog *modeldb.Catalog) *CodergenRouter {
-	return NewCodergenRouterWithRuntimes(cfg, catalog, nil)
+func NewAgentRouter(cfg *RunConfigFile, catalog *modeldb.Catalog) *AgentRouter {
+	return NewAgentRouterWithRuntimes(cfg, catalog, nil)
 }
 
-func NewCodergenRouterWithRuntimes(cfg *RunConfigFile, catalog *modeldb.Catalog, runtimes map[string]ProviderRuntime) *CodergenRouter {
-	return &CodergenRouter{
+func NewAgentRouterWithRuntimes(cfg *RunConfigFile, catalog *modeldb.Catalog, runtimes map[string]ProviderRuntime) *AgentRouter {
+	return &AgentRouter{
 		cfg:              cfg,
 		catalog:          catalog,
 		providerRuntimes: cloneProviderRuntimeMap(runtimes),
@@ -66,7 +66,7 @@ func cloneProviderRuntimeMap(in map[string]ProviderRuntime) map[string]ProviderR
 	return out
 }
 
-func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.Node, prompt string) (string, *runtime.Outcome, error) {
+func (r *AgentRouter) Run(ctx context.Context, exec *Execution, node *model.Node, prompt string) (string, *runtime.Outcome, error) {
 	_ = r.catalog // used later for context window + pricing metadata
 
 	prov := normalizeProviderKey(node.Attr("llm_provider", ""))
@@ -85,7 +85,7 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 	if exec != nil && exec.Engine != nil {
 		if forcedModelID, forced := forceModelForProvider(exec.Engine.Options.ForceModels, prov); forced {
 			if !strings.EqualFold(modelID, forcedModelID) {
-				warnEngine(exec, fmt.Sprintf("force-model override applied: node=%s provider=%s model=%s (was %s)", node.ID, prov, forcedModelID, modelID))
+				WarnEngine(exec, fmt.Sprintf("force-model override applied: node=%s provider=%s model=%s (was %s)", node.ID, prov, forcedModelID, modelID))
 			}
 			modelID = forcedModelID
 			selectionSource = "force_model"
@@ -99,7 +99,7 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 	// CLI-only model override: force CLI backend when a model is marked
 	// CLI-only in the registry.
 	if isCLIOnlyModel(modelID) && backend != BackendCLI {
-		warnEngine(exec, fmt.Sprintf("cli-only model override: node=%s model=%s backend=%s->cli", node.ID, modelID, backend))
+		WarnEngine(exec, fmt.Sprintf("cli-only model override: node=%s model=%s backend=%s->cli", node.ID, modelID, backend))
 		backend = BackendCLI
 		if selectionSource == "graph_attrs" {
 			selectionSource = "cli_only_override"
@@ -127,7 +127,7 @@ func (r *CodergenRouter) Run(ctx context.Context, exec *Execution, node *model.N
 	}
 }
 
-func (r *CodergenRouter) backendForProvider(provider string) BackendKind {
+func (r *AgentRouter) backendForProvider(provider string) BackendKind {
 	key := normalizeProviderKey(provider)
 	if key == "" {
 		return ""
@@ -147,7 +147,7 @@ func (r *CodergenRouter) backendForProvider(provider string) BackendKind {
 	return ""
 }
 
-func (r *CodergenRouter) ensureAPIClient() (*llm.Client, error) {
+func (r *AgentRouter) ensureAPIClient() (*llm.Client, error) {
 	r.apiOnce.Do(func() {
 		if len(r.providerRuntimes) > 0 && r.apiClientFactory != nil {
 			client, err := r.apiClientFactory(r.providerRuntimes)
@@ -165,13 +165,17 @@ func (r *CodergenRouter) ensureAPIClient() (*llm.Client, error) {
 	return r.apiClient, r.apiErr
 }
 
-func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *model.Node, provider string, modelID string, prompt string) (string, *runtime.Outcome, error) {
+func (r *AgentRouter) runAPI(ctx context.Context, execCtx *Execution, node *model.Node, provider string, modelID string, prompt string) (string, *runtime.Outcome, error) {
 	client, err := r.ensureAPIClient()
 	if err != nil {
 		return "", nil, err
 	}
-	contract := buildStageStatusContract(execCtx.WorktreeDir)
-	mode := strings.ToLower(strings.TrimSpace(node.Attr("codergen_mode", "")))
+	contract := BuildStageStatusContract(execCtx.WorktreeDir)
+	mode := strings.ToLower(strings.TrimSpace(node.Attr("agent_mode", "")))
+	if mode == "" {
+		// Fall back to agent_mode for backward compatibility.
+		mode = strings.ToLower(strings.TrimSpace(node.Attr("agent_mode", "")))
+	}
 	if mode == "" {
 		mode = "agent_loop" // metaspec default for API backend
 	}
@@ -205,7 +209,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 				MaxTokens:       maxTokensPtr,
 			}
 			if err := writeJSON(filepath.Join(stageDir, "api_request.json"), req); err != nil {
-				warnEngine(execCtx, fmt.Sprintf("write api_request.json: %v", err))
+				WarnEngine(execCtx, fmt.Sprintf("write api_request.json: %v", err))
 			}
 			policy := attractorLLMRetryPolicy(execCtx, node.ID, prov, mid)
 			stream, err := llm.Retry(ctx, policy, nil, nil, func() (llm.Stream, error) {
@@ -282,7 +286,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			}
 
 			if err := writeJSON(filepath.Join(stageDir, "api_response.json"), resp.Raw); err != nil {
-				warnEngine(execCtx, fmt.Sprintf("write api_response.json: %v", err))
+				WarnEngine(execCtx, fmt.Sprintf("write api_response.json: %v", err))
 			}
 
 			// WP-5: Record AssistantMessage CXDB turn for one_shot.
@@ -293,7 +297,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 					if _, _, cxErr := eng.CXDB.Append(ctx, "com.kilroy.attractor.AssistantMessage", 1, map[string]any{
 						"run_id":        eng.Options.RunID,
 						"node_id":       node.ID,
-						"text":          truncate(text, 8_000),
+						"text":          Truncate(text, 8_000),
 						"input_tokens":  resp.Usage.InputTokens,
 						"output_tokens": resp.Usage.OutputTokens,
 						"timestamp_ms":  nowMS(),
@@ -324,7 +328,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		for k, v := range contract.EnvVars {
 			stageEnv[k] = v
 		}
-		for k, v := range buildStageRuntimeEnv(execCtx, node.ID) {
+		for k, v := range BuildStageRuntimeEnv(execCtx, node.ID) {
 			stageEnv[k] = v
 		}
 		overrides := buildAgentLoopOverrides(artifactPolicyFromExecution(execCtx), stageEnv)
@@ -420,7 +424,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 					if !encodeFailed {
 						if err := enc.Encode(ev); err != nil {
 							encodeFailed = true
-							warnEngine(execCtx, fmt.Sprintf("write %s: %v", eventsPath, err))
+							WarnEngine(execCtx, fmt.Sprintf("write %s: %v", eventsPath, err))
 						}
 					}
 					// Best-effort: emit normalized tool call/result turns to CXDB.
@@ -449,7 +453,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			apiStart := time.Now()
 			go func() {
 				defer close(heartbeatDone)
-				interval := codergenHeartbeatIntervalForExecution(execCtx)
+				interval := agentHeartbeatIntervalForExecution(execCtx)
 				if interval <= 0 {
 					return
 				}
@@ -497,7 +501,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 			<-heartbeatDone
 			eventsMu.Lock()
 			if err := writeJSON(eventsJSONPath, events); err != nil {
-				warnEngine(execCtx, fmt.Sprintf("write %s: %v", eventsJSONPath, err))
+				WarnEngine(execCtx, fmt.Sprintf("write %s: %v", eventsJSONPath, err))
 			}
 			eventsMu.Unlock()
 			if runErr != nil {
@@ -516,7 +520,7 @@ func (r *CodergenRouter) runAPI(ctx context.Context, execCtx *Execution, node *m
 		})
 		return text, nil, nil
 	default:
-		return "", nil, fmt.Errorf("invalid codergen_mode: %q (want one_shot|agent_loop)", mode)
+		return "", nil, fmt.Errorf("invalid agent_mode: %q (want one_shot|agent_loop)", mode)
 	}
 }
 
@@ -555,7 +559,7 @@ type providerModel struct {
 	Model    string
 }
 
-func (r *CodergenRouter) withFailoverText(
+func (r *AgentRouter) withFailoverText(
 	ctx context.Context,
 	execCtx *Execution,
 	node *model.Node,
@@ -619,7 +623,7 @@ func (r *CodergenRouter) withFailoverText(
 			}
 			prev := cands[i-1]
 			msg := fmt.Sprintf("FAILOVER: node=%s provider=%s model=%s -> provider=%s model=%s (reason=%v)", node.ID, prev.Provider, prev.Model, c.Provider, c.Model, lastErr)
-			warnEngine(execCtx, msg)
+			WarnEngine(execCtx, msg)
 			// Noisy by design: failover is preferable to hard failure, but should be visible.
 			_, _ = fmt.Fprintln(os.Stderr, msg)
 			if execCtx != nil && execCtx.Engine != nil {
@@ -668,7 +672,7 @@ func attractorLLMRetryPolicy(execCtx *Execution, nodeID string, provider string,
 	maxRetries := p.MaxRetries
 	p.OnRetry = func(err error, attempt int, delay time.Duration) {
 		msg := fmt.Sprintf("llm retry (node=%s provider=%s model=%s attempt=%d/%d delay=%s): %v", nodeID, provider, modelID, attempt, maxRetries+1, delay, err)
-		warnEngine(execCtx, msg)
+		WarnEngine(execCtx, msg)
 		if execCtx != nil && execCtx.Engine != nil {
 			execCtx.Engine.appendProgress(map[string]any{
 				"event":     "llm_retry",
@@ -1078,14 +1082,14 @@ func profileForProvider(provider string, modelID string) (agent.ProviderProfile,
 	}
 }
 
-func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *model.Node, provider string, modelID string, prompt string) (string, *runtime.Outcome, error) {
+func (r *AgentRouter) runCLI(ctx context.Context, execCtx *Execution, node *model.Node, provider string, modelID string, prompt string) (string, *runtime.Outcome, error) {
 	stageDir := filepath.Join(execCtx.LogsRoot, node.ID)
-	contract := buildStageStatusContract(execCtx.WorktreeDir)
+	contract := BuildStageStatusContract(execCtx.WorktreeDir)
 	stageEnv := map[string]string{}
 	for k, v := range contract.EnvVars {
 		stageEnv[k] = v
 	}
-	for k, v := range buildStageRuntimeEnv(execCtx, node.ID) {
+	for k, v := range BuildStageRuntimeEnv(execCtx, node.ID) {
 		stageEnv[k] = v
 	}
 	providerKey := normalizeProviderKey(provider)
@@ -1241,7 +1245,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		if preflightMeta != nil {
 			inv["rust_sandbox_preflight"] = preflightMeta
 			if err := writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv); err != nil {
-				warnEngine(execCtx, fmt.Sprintf("write cli_invocation.json rust preflight metadata: %v", err))
+				WarnEngine(execCtx, fmt.Sprintf("write cli_invocation.json rust preflight metadata: %v", err))
 			}
 		}
 		if preflightOut != nil {
@@ -1315,12 +1319,12 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		}
 
 		// Emit periodic heartbeat events so operators monitoring detached runs
-		// have visibility into long-running codergen nodes.
+		// have visibility into long-running agent nodes.
 		heartbeatStop := make(chan struct{})
 		heartbeatDone := make(chan struct{})
 		go func() {
 			defer close(heartbeatDone)
-			interval := codergenHeartbeatIntervalForExecution(execCtx)
+			interval := agentHeartbeatIntervalForExecution(execCtx)
 			if interval <= 0 {
 				return
 			}
@@ -1404,7 +1408,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 	if runErr != nil && codexSemantics && hasArg(runArgs, "--output-schema") {
 		stderrBytes, readErr := os.ReadFile(stderrPath)
 		if readErr == nil && isSchemaValidationFailure(string(stderrBytes)) {
-			warnEngine(execCtx, "codex schema validation failed; retrying once without --output-schema")
+			WarnEngine(execCtx, "codex schema validation failed; retrying once without --output-schema")
 			_ = copyFileContents(stdoutPath, filepath.Join(stageDir, "stdout.schema_failure.log"))
 			_ = copyFileContents(stderrPath, filepath.Join(stageDir, "stderr.schema_failure.log"))
 
@@ -1413,7 +1417,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			inv["schema_fallback_reason"] = "schema_validation_failure"
 			inv["argv_schema_retry"] = retryArgs
 			if err := writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv); err != nil {
-				warnEngine(execCtx, fmt.Sprintf("write cli_invocation.json fallback metadata: %v", err))
+				WarnEngine(execCtx, fmt.Sprintf("write cli_invocation.json fallback metadata: %v", err))
 			}
 
 			retryErr, retryExitCode, retryDur, retryRunErr := runOnce(retryArgs)
@@ -1433,13 +1437,13 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			return "", classifiedFailure(contractErr, readStderr()), nil
 		}
 		if len(unknownKeys) > 0 {
-			warnEngine(execCtx, fmt.Sprintf("codex structured output has unknown keys; retrying once without --output-schema (keys=%s)", strings.Join(unknownKeys, ",")))
+			WarnEngine(execCtx, fmt.Sprintf("codex structured output has unknown keys; retrying once without --output-schema (keys=%s)", strings.Join(unknownKeys, ",")))
 			artifact := map[string]any{
 				"unknown_keys": unknownKeys,
 				"payload":      payload,
 			}
 			if err := writeJSON(filepath.Join(stageDir, "structured_output_unknown_keys.json"), artifact); err != nil {
-				warnEngine(execCtx, fmt.Sprintf("write structured_output_unknown_keys.json: %v", err))
+				WarnEngine(execCtx, fmt.Sprintf("write structured_output_unknown_keys.json: %v", err))
 			}
 
 			retryArgs := removeArgWithValue(runArgs, "--output-schema")
@@ -1448,7 +1452,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			inv["structured_output_unknown_keys"] = unknownKeys
 			inv["argv_schema_retry"] = retryArgs
 			if err := writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv); err != nil {
-				warnEngine(execCtx, fmt.Sprintf("write cli_invocation.json unknown-keys metadata: %v", err))
+				WarnEngine(execCtx, fmt.Sprintf("write cli_invocation.json unknown-keys metadata: %v", err))
 			}
 
 			retryErr, retryExitCode, retryDur, retryRunErr := runOnce(retryArgs)
@@ -1469,7 +1473,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			if readErr != nil || !isStateDBDiscrepancy(string(stderrBytes)) {
 				break
 			}
-			warnEngine(execCtx, fmt.Sprintf("codex state-db discrepancy detected; retrying with fresh state root (%d/%d)", stateDBAttempt, maxStateDBRetries))
+			WarnEngine(execCtx, fmt.Sprintf("codex state-db discrepancy detected; retrying with fresh state root (%d/%d)", stateDBAttempt, maxStateDBRetries))
 			_ = copyFileContents(stdoutPath, filepath.Join(stageDir, fmt.Sprintf("stdout.state_db_failure_%d.log", stateDBAttempt)))
 			_ = copyFileContents(stderrPath, filepath.Join(stageDir, fmt.Sprintf("stderr.state_db_failure_%d.log", stateDBAttempt)))
 
@@ -1485,7 +1489,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 				inv["state_db_retry_state_root"] = retryRoot
 			}
 			if err := writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv); err != nil {
-				warnEngine(execCtx, fmt.Sprintf("write cli_invocation.json state-db metadata: %v", err))
+				WarnEngine(execCtx, fmt.Sprintf("write cli_invocation.json state-db metadata: %v", err))
 			}
 
 			retryErr, retryExitCode, retryDur, retryRunErr := runOnce(runArgs)
@@ -1503,7 +1507,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 			if !isCodexTimeoutFailure(runErr) {
 				break
 			}
-			warnEngine(execCtx, fmt.Sprintf("codex timeout/stuck detected; retrying with fresh state root (%d/%d)", timeoutAttempt, maxTimeoutRetries))
+			WarnEngine(execCtx, fmt.Sprintf("codex timeout/stuck detected; retrying with fresh state root (%d/%d)", timeoutAttempt, maxTimeoutRetries))
 			_ = copyFileContents(stdoutPath, filepath.Join(stageDir, fmt.Sprintf("stdout.timeout_failure_%d.log", timeoutAttempt)))
 			_ = copyFileContents(stderrPath, filepath.Join(stageDir, fmt.Sprintf("stderr.timeout_failure_%d.log", timeoutAttempt)))
 
@@ -1519,7 +1523,7 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 				inv["timeout_retry_state_root"] = retryRoot
 			}
 			if err := writeJSON(filepath.Join(stageDir, "cli_invocation.json"), inv); err != nil {
-				warnEngine(execCtx, fmt.Sprintf("write cli_invocation.json timeout metadata: %v", err))
+				WarnEngine(execCtx, fmt.Sprintf("write cli_invocation.json timeout metadata: %v", err))
 			}
 
 			retryErr, retryExitCode, retryDur, retryRunErr := runOnce(runArgs)
@@ -1538,18 +1542,18 @@ func (r *CodergenRouter) runCLI(ctx context.Context, execCtx *Execution, node *m
 		return "", classifiedFailure(ndErr, readStderr()), nil
 	}
 	if hadContent && !wroteJSON {
-		warnEngine(execCtx, "stdout was not valid ndjson; wrote events.ndjson only")
+		WarnEngine(execCtx, "stdout was not valid ndjson; wrote events.ndjson only")
 	}
 	if err := writeJSON(filepath.Join(stageDir, "cli_timing.json"), map[string]any{
 		"duration_ms": dur.Milliseconds(),
 		"exit_code":   exitCode,
 	}); err != nil {
-		warnEngine(execCtx, fmt.Sprintf("write cli_timing.json: %v", err))
+		WarnEngine(execCtx, fmt.Sprintf("write cli_timing.json: %v", err))
 	}
 
 	outStr := ""
 	if outBytes, rerr := os.ReadFile(stdoutPath); rerr != nil {
-		warnEngine(execCtx, fmt.Sprintf("read stdout.log: %v", rerr))
+		WarnEngine(execCtx, fmt.Sprintf("read stdout.log: %v", rerr))
 	} else {
 		outStr = string(outBytes)
 	}
@@ -1622,20 +1626,45 @@ func buildCodexIsolatedEnvWithName(stageDir string, homeDirName string, baseEnv 
 
 	seeded := []string{}
 	seedErrors := []string{}
-	// Seed codex config from the ORIGINAL home (before isolation).
-	// Prefer HOME, then Windows home vars, then os.UserHomeDir().
-	srcHome := codexSourceHome(baseEnv)
-	if srcHome != "" {
-		for _, name := range []string{"auth.json", "config.toml"} {
-			src := filepath.Join(srcHome, ".codex", name)
-			dst := filepath.Join(codexStateRoot, name)
-			copied, err := copyIfExists(src, dst)
+	// Auth setup for the isolated codex home. Kilroy runs use API-key auth
+	// for codex whenever OPENAI_API_KEY is available, because gpt-5-codex and
+	// other exec-mode models aren't accessible under ChatGPT subscription
+	// auth. Writing a fresh auth.json here forces apikey mode and matches
+	// what tmux_handler.go + templates/codex.go does for non-probe runs, so
+	// probe results are consistent with what the real run will see.
+	//
+	// We deliberately do NOT copy config.toml from the user's real ~/.codex/.
+	// Kilroy's guiding principle: a run's configuration comes from kilroy
+	// and the .dot graph, not by accident from whatever shell or user
+	// preferences happen to be in the environment. Leaking the user's
+	// config.toml would smuggle settings like model_reasoning_effort into
+	// kilroy runs, which can break specific models upstream (e.g. the
+	// xhigh-rejects-gpt-5-codex case).
+	apiKey := envValueFromBase(baseEnv, "OPENAI_API_KEY")
+	authDst := filepath.Join(codexStateRoot, "auth.json")
+	if apiKey != "" {
+		auth := map[string]string{"auth_mode": "apikey", "OPENAI_API_KEY": apiKey}
+		data, err := json.Marshal(auth)
+		if err != nil {
+			return nil, nil, fmt.Errorf("marshal isolated codex auth.json: %w", err)
+		}
+		if err := os.WriteFile(authDst, data, 0o600); err != nil {
+			return nil, nil, fmt.Errorf("write isolated codex auth.json: %w", err)
+		}
+		seeded = append(seeded, authDst)
+	} else {
+		// No API key available — fall back to copying the original auth.json
+		// (subscription auth). Probes under this path cannot exercise
+		// gpt-5-codex and similar apikey-only models, but we still want the
+		// rest of codex preflight to run against something plausible.
+		srcHome := codexSourceHome(baseEnv)
+		if srcHome != "" {
+			src := filepath.Join(srcHome, ".codex", "auth.json")
+			copied, err := copyIfExists(src, authDst)
 			if err != nil {
-				seedErrors = append(seedErrors, fmt.Sprintf("%s: %v", name, err))
-				continue
-			}
-			if copied {
-				seeded = append(seeded, dst)
+				seedErrors = append(seedErrors, fmt.Sprintf("auth.json: %v", err))
+			} else if copied {
+				seeded = append(seeded, authDst)
 			}
 		}
 	}
@@ -1798,6 +1827,20 @@ func envHasKey(env []string, key string) bool {
 	return false
 }
 
+// envValueFromBase extracts a single KEY=VALUE from a []string environment
+// slice, returning the value (or empty string if not present). Falls back to
+// os.Getenv so callers can find values that live in the parent process's
+// environment but haven't been placed in baseEnv yet.
+func envValueFromBase(env []string, key string) string {
+	prefix := key + "="
+	for _, e := range env {
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix)
+		}
+	}
+	return os.Getenv(key)
+}
+
 // conflictingProviderEnvKeys returns env var names that must be stripped when
 // launching a given provider's CLI. The Claude CLI uses OAuth/session-based auth
 // by default; an inherited ANTHROPIC_API_KEY causes it to attempt (and fail)
@@ -1805,7 +1848,7 @@ func envHasKey(env []string, key string) bool {
 func conflictingProviderEnvKeys(providerKey string) []string {
 	// CLAUDECODE prevents the Claude CLI from launching (nested session
 	// protection). Strip it for all providers so preflight probes and
-	// codergen runs succeed when Kilroy is invoked from inside Claude Code.
+	// agent runs succeed when Kilroy is invoked from inside Claude Code.
 	common := []string{"CLAUDECODE"}
 	switch normalizeProviderKey(providerKey) {
 	case "anthropic":
@@ -1841,31 +1884,31 @@ func scrubConflictingProviderEnvKeys(base []string, providerKey string) []string
 }
 
 const (
-	codergenHeartbeatDefaultInterval = 60 * time.Second
-	codergenHeartbeatMinInterval     = 50 * time.Millisecond
+	agentHeartbeatDefaultInterval = 60 * time.Second
+	agentHeartbeatMinInterval     = 50 * time.Millisecond
 )
 
-func codergenHeartbeatIntervalForExecution(exec *Execution) time.Duration {
+func agentHeartbeatIntervalForExecution(exec *Execution) time.Duration {
 	stallTimeout := time.Duration(0)
 	if exec != nil && exec.Engine != nil {
 		stallTimeout = exec.Engine.Options.StallTimeout
 	}
-	return codergenHeartbeatIntervalWithStallTimeout(stallTimeout)
+	return agentHeartbeatIntervalWithStallTimeout(stallTimeout)
 }
 
-func codergenHeartbeatIntervalWithStallTimeout(stallTimeout time.Duration) time.Duration {
-	if override := parseCodergenHeartbeatEnv(); override > 0 {
+func agentHeartbeatIntervalWithStallTimeout(stallTimeout time.Duration) time.Duration {
+	if override := parseAgentHeartbeatEnv(); override > 0 {
 		return override
 	}
 	if stallTimeout <= 0 {
-		return codergenHeartbeatDefaultInterval
+		return agentHeartbeatDefaultInterval
 	}
 	interval := stallTimeout / 3
-	if interval < codergenHeartbeatMinInterval {
-		interval = codergenHeartbeatMinInterval
+	if interval < agentHeartbeatMinInterval {
+		interval = agentHeartbeatMinInterval
 	}
-	if interval > codergenHeartbeatDefaultInterval {
-		interval = codergenHeartbeatDefaultInterval
+	if interval > agentHeartbeatDefaultInterval {
+		interval = agentHeartbeatDefaultInterval
 	}
 	return interval
 }
@@ -1880,7 +1923,7 @@ func recordStageActivity(exec *Execution, at time.Time) {
 	exec.Engine.setLastProgressTime(at)
 }
 
-func parseCodergenHeartbeatEnv() time.Duration {
+func parseAgentHeartbeatEnv() time.Duration {
 	v := strings.TrimSpace(os.Getenv("KILROY_CODERGEN_HEARTBEAT_INTERVAL"))
 	if v == "" {
 		return 0
@@ -2098,7 +2141,7 @@ func emitCXDBToolTurns(ctx context.Context, eng *Engine, nodeID string, ev agent
 		if _, _, err := eng.CXDB.Append(ctx, "com.kilroy.attractor.AssistantMessage", 1, map[string]any{
 			"run_id":         runID,
 			"node_id":        nodeID,
-			"text":           truncate(text, 8_000),
+			"text":           Truncate(text, 8_000),
 			"model":          "",
 			"input_tokens":   uint64(0),
 			"output_tokens":  uint64(0),
@@ -2136,7 +2179,7 @@ func emitCXDBToolTurns(ctx context.Context, eng *Engine, nodeID string, ev agent
 			"node_id":   nodeID,
 			"tool_name": toolName,
 			"call_id":   callID,
-			"output":    truncate(fullOutput, 8_000),
+			"output":    Truncate(fullOutput, 8_000),
 			"is_error":  isErr,
 		}); err != nil {
 			eng.Warn(fmt.Sprintf("cxdb append ToolResult failed (node=%s tool=%s call_id=%s): %v", nodeID, toolName, callID, err))
@@ -2343,7 +2386,7 @@ func bestEffortNDJSON(stageDir string, stdoutPath string) (wroteJSON bool, hadCo
 	return true, hadContent, nil
 }
 
-func warnEngine(execCtx *Execution, msg string) {
+func WarnEngine(execCtx *Execution, msg string) {
 	if execCtx == nil || execCtx.Engine == nil {
 		return
 	}

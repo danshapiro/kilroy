@@ -71,7 +71,7 @@ func TestKimiCodingAndZai_APIIntegration(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=%s, llm_model=%s, codergen_mode=one_shot, auto_status=true, prompt="say hi"]
+  a [shape=box, llm_provider=%s, llm_model=%s, agent_mode=one_shot, auto_status=true, prompt="say hi"]
   start -> a -> exit
 }
 `, provider, model))
@@ -162,7 +162,7 @@ func TestKimiAgentLoop_UsesNativeKimiProviderRouting(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=kimi, llm_model=kimi-k2.5, codergen_mode=agent_loop, auto_status=true, prompt="say hi"]
+  a [shape=box, llm_provider=kimi, llm_model=kimi-k2.5, agent_mode=agent_loop, auto_status=true, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -230,7 +230,7 @@ func TestKimiCoding_APIIntegration_EnforcesStreamingAndMinMaxTokensContract(t *t
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider="kimi", llm_model="kimi-k2.5", codergen_mode=one_shot, auto_status=true, prompt="say hi"]
+  a [shape=box, llm_provider="kimi", llm_model="kimi-k2.5", agent_mode=one_shot, auto_status=true, prompt="say hi"]
   start -> a -> exit
 }
 `)
@@ -321,7 +321,7 @@ func TestKimiAgentLoop_ToolRoundTrip_DoesNotDropToolResponses(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
-  a [shape=box, llm_provider=kimi, llm_model=kimi-k2.5, codergen_mode=agent_loop, auto_status=true, prompt="use tools as needed and then finish"]
+  a [shape=box, llm_provider=kimi, llm_model=kimi-k2.5, agent_mode=agent_loop, auto_status=true, prompt="use tools as needed and then finish"]
   start -> a -> exit
 }
 `)

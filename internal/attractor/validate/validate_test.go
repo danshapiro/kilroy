@@ -170,7 +170,7 @@ digraph G {
 	assertHasRule(t, diags, "tool_command_required", SeverityError)
 }
 
-func TestValidate_PromptOnCodergenNodes_WarnsWhenMissingPrompt(t *testing.T) {
+func TestValidate_PromptOnAgentNodes_WarnsWhenMissingPrompt(t *testing.T) {
 	g, err := dot.Parse([]byte(`
 digraph G {
   start [shape=Mdiamond]
@@ -797,14 +797,14 @@ func TestValidate_TypeKnownRule_RecognizedType_NoWarning(t *testing.T) {
 digraph G {
   start [shape=Mdiamond]
   exit [shape=Msquare]
-  a [shape=box, type=codergen, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
+  a [shape=box, type=agent, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a -> exit
 }
 `))
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	rule := NewTypeKnownRule([]string{"codergen", "conditional", "start", "exit"})
+	rule := NewTypeKnownRule([]string{"agent", "conditional", "start", "exit"})
 	diags := Validate(g, rule)
 	assertNoRule(t, diags, "type_known")
 }
@@ -821,7 +821,7 @@ digraph G {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	rule := NewTypeKnownRule([]string{"codergen", "conditional", "start", "exit"})
+	rule := NewTypeKnownRule([]string{"agent", "conditional", "start", "exit"})
 	diags := Validate(g, rule)
 	assertHasRule(t, diags, "type_known", SeverityWarning)
 }
@@ -838,7 +838,7 @@ digraph G {
 	if err != nil {
 		t.Fatalf("parse: %v", err)
 	}
-	rule := NewTypeKnownRule([]string{"codergen"})
+	rule := NewTypeKnownRule([]string{"agent"})
 	diags := Validate(g, rule)
 	assertNoRule(t, diags, "type_known")
 }

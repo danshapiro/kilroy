@@ -54,12 +54,12 @@ func (a *scriptedStreamAdapter) Stream(ctx context.Context, req llm.Request) (ll
 	return st, nil
 }
 
-func TestCodergenRouter_RunAPI_OneShot_StreamErrorEventTakesPrecedence(t *testing.T) {
+func TestAgentRouter_RunAPI_OneShot_StreamErrorEventTakesPrecedence(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai": {Backend: BackendAPI},
 	}
-	r := NewCodergenRouterWithRuntimes(cfg, nil, map[string]ProviderRuntime{
+	r := NewAgentRouterWithRuntimes(cfg, nil, map[string]ProviderRuntime{
 		"openai": {Key: "openai", Backend: BackendAPI},
 	})
 	r.apiClientFactory = func(map[string]ProviderRuntime) (*llm.Client, error) {
@@ -84,7 +84,7 @@ func TestCodergenRouter_RunAPI_OneShot_StreamErrorEventTakesPrecedence(t *testin
 	}
 	node := &model.Node{
 		ID:    "stage-a",
-		Attrs: map[string]string{"codergen_mode": "one_shot"},
+		Attrs: map[string]string{"agent_mode": "one_shot"},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -102,12 +102,12 @@ func TestCodergenRouter_RunAPI_OneShot_StreamErrorEventTakesPrecedence(t *testin
 	}
 }
 
-func TestCodergenRouter_RunAPI_OneShot_EmitsProviderToolLifecycleProgress(t *testing.T) {
+func TestAgentRouter_RunAPI_OneShot_EmitsProviderToolLifecycleProgress(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai": {Backend: BackendAPI},
 	}
-	r := NewCodergenRouterWithRuntimes(cfg, nil, map[string]ProviderRuntime{
+	r := NewAgentRouterWithRuntimes(cfg, nil, map[string]ProviderRuntime{
 		"openai": {Key: "openai", Backend: BackendAPI},
 	})
 	r.apiClientFactory = func(map[string]ProviderRuntime) (*llm.Client, error) {
@@ -170,7 +170,7 @@ func TestCodergenRouter_RunAPI_OneShot_EmitsProviderToolLifecycleProgress(t *tes
 	}
 	node := &model.Node{
 		ID:    "stage-a",
-		Attrs: map[string]string{"codergen_mode": "one_shot"},
+		Attrs: map[string]string{"agent_mode": "one_shot"},
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -220,7 +220,7 @@ func TestCodergenRouter_RunAPI_OneShot_EmitsProviderToolLifecycleProgress(t *tes
 	}
 }
 
-func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing.T) {
+func TestAgentRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai":      {Backend: BackendAPI, Failover: []string{"google"}},
@@ -240,7 +240,7 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 	if err != nil {
 		t.Fatalf("resolveProviderRuntimes: %v", err)
 	}
-	r := NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
+	r := NewAgentRouterWithRuntimes(cfg, catalog, runtimes)
 
 	client := llm.NewClient()
 	client.Register(&okAdapter{name: "openai"})
@@ -287,7 +287,7 @@ func TestCodergenRouter_WithFailoverText_FailsOverToDifferentProvider(t *testing
 	}
 }
 
-func TestCodergenRouter_WithFailoverText_AppliesForceModelToFailoverProvider(t *testing.T) {
+func TestAgentRouter_WithFailoverText_AppliesForceModelToFailoverProvider(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai": {Backend: BackendAPI, Failover: []string{"google"}},
@@ -303,7 +303,7 @@ func TestCodergenRouter_WithFailoverText_AppliesForceModelToFailoverProvider(t *
 	if err != nil {
 		t.Fatalf("resolveProviderRuntimes: %v", err)
 	}
-	r := NewCodergenRouterWithRuntimes(cfg, catalog, runtimes)
+	r := NewAgentRouterWithRuntimes(cfg, catalog, runtimes)
 	client := llm.NewClient()
 	client.Register(&okAdapter{name: "openai"})
 	client.Register(&okAdapter{name: "google"})
@@ -387,7 +387,7 @@ func TestFailoverOrder_ExplicitEmptyFailoverPreserved(t *testing.T) {
 	}
 }
 
-func TestCodergenRouter_WithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t *testing.T) {
+func TestAgentRouter_WithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai": {
@@ -402,7 +402,7 @@ func TestCodergenRouter_WithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t 
 	if err != nil {
 		t.Fatalf("resolveProviderRuntimes: %v", err)
 	}
-	r := NewCodergenRouterWithRuntimes(cfg, nil, runtimes)
+	r := NewAgentRouterWithRuntimes(cfg, nil, runtimes)
 
 	client := llm.NewClient()
 	client.Register(&okAdapter{name: "openai"})
@@ -424,7 +424,7 @@ func TestCodergenRouter_WithFailoverText_ExplicitEmptyFailoverDoesNotFallback(t 
 	}
 }
 
-func TestCodergenRouter_WithFailoverText_OmittedFailoverDoesNotFallback(t *testing.T) {
+func TestAgentRouter_WithFailoverText_OmittedFailoverDoesNotFallback(t *testing.T) {
 	cfg := &RunConfigFile{Version: 1}
 	cfg.LLM.Providers = map[string]ProviderConfig{
 		"openai": {Backend: BackendAPI},
@@ -434,7 +434,7 @@ func TestCodergenRouter_WithFailoverText_OmittedFailoverDoesNotFallback(t *testi
 	if err != nil {
 		t.Fatalf("resolveProviderRuntimes: %v", err)
 	}
-	r := NewCodergenRouterWithRuntimes(cfg, nil, runtimes)
+	r := NewAgentRouterWithRuntimes(cfg, nil, runtimes)
 
 	attempted := []string{}
 	_, used, err := r.withFailoverText(context.Background(), nil, &model.Node{ID: "n1"}, llm.NewClient(), "openai", "gpt-5.4", func(provider, model string) (string, error) {
@@ -512,7 +512,7 @@ func TestPickFailoverModelFromRuntime_CerebrasPinnedToZAIGLM47(t *testing.T) {
 
 func TestEnsureAPIClient_UsesSyncOnce(t *testing.T) {
 	var calls atomic.Int32
-	r := NewCodergenRouterWithRuntimes(&RunConfigFile{}, nil, map[string]ProviderRuntime{
+	r := NewAgentRouterWithRuntimes(&RunConfigFile{}, nil, map[string]ProviderRuntime{
 		"openai": {
 			Key:     "openai",
 			Backend: BackendAPI,

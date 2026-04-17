@@ -1,0 +1,16 @@
+digraph failure_routing_test {
+  graph [goal="Test failure routing: tool fails, conditional routes to fail exit"]
+
+  start [shape=Mdiamond, label="Start"]
+  agent [shape=box, label="Agent", agent_tool="claude", llm_provider="anthropic", llm_model="claude-sonnet-4-20250514", auto_status="true", prompt="Create a file called output.txt containing the word 'hello'. Nothing else."]
+  check [shape=parallelogram, label="Check Wrong File", tool_command="cat nonexistent-file.txt"]
+  route [shape=diamond, label="Route"]
+  success_exit [shape=Msquare, label="Success"]
+  fail_exit [shape=Msquare, label="Fail Exit"]
+
+  start -> agent
+  agent -> check
+  check -> route
+  route -> success_exit [label="success"]
+  route -> fail_exit [label="fail"]
+}

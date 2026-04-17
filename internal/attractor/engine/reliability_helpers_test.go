@@ -116,17 +116,17 @@ digraph G {
 	out, decErr := readFixtureOutcome(filepath.Join(logsRoot, "a", "status.json"))
 	if decErr != nil {
 		if fallbackCopied {
-			return runtime.Outcome{}, string(statusSourceWorktree), logsRoot
+			return runtime.Outcome{}, string(StatusSourceWorktree), logsRoot
 		}
-		return runtime.Outcome{}, string(statusSourceNone), logsRoot
+		return runtime.Outcome{}, string(StatusSourceNone), logsRoot
 	}
 
-	source := string(statusSourceNone)
+	source := string(StatusSourceNone)
 	switch {
 	case canonical && out.Status == runtime.StatusSuccess:
-		source = string(statusSourceCanonical)
+		source = string(StatusSourceCanonical)
 	case fallbackCopied:
-		source = string(statusSourceWorktree)
+		source = string(StatusSourceWorktree)
 	}
 	return out, source, logsRoot
 }
@@ -459,17 +459,17 @@ func newReliabilityFixtureEngine(t *testing.T, repo, logsRoot, runID string, dot
 		RunBranchPrefix: "attractor/run",
 	}
 	eng := &Engine{
-		Graph:           g,
-		Options:         opts,
-		DotSource:       dotSource,
-		LogsRoot:        logsRoot,
-		baseLogsRoot:    logsRoot,
-		WorktreeDir:     repo,
-		RunBranch:       opts.RunBranchPrefix + "/" + runID,
-		Context:         runtime.NewContext(),
-		Registry:        NewDefaultRegistry(),
-		Interviewer:     &AutoApproveInterviewer{},
-		CodergenBackend: &SimulatedCodergenBackend{},
+		Graph:        g,
+		Options:      opts,
+		DotSource:    dotSource,
+		LogsRoot:     logsRoot,
+		baseLogsRoot: logsRoot,
+		WorktreeDir:  repo,
+		RunBranch:    opts.RunBranchPrefix + "/" + runID,
+		Context:      runtime.NewContext(),
+		Registry:     NewDefaultRegistry(),
+		Interviewer:  &AutoApproveInterviewer{},
+		AgentBackend: &SimulatedAgentBackend{},
 	}
 	for k, v := range g.Attrs {
 		eng.Context.Set("graph."+k, v)

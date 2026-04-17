@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/danshapiro/kilroy/internal/attractor/gitutil"
 	"github.com/danshapiro/kilroy/internal/attractor/model"
+	"github.com/danshapiro/kilroy/internal/attractor/runtime"
 	"github.com/danshapiro/kilroy/internal/attractor/modeldb"
 	"github.com/danshapiro/kilroy/internal/cxdb"
 )
@@ -64,7 +64,7 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 	eng.RunConfig = boot.Config
 	eng.ArtifactPolicy = boot.ResolvedArtifactPolicy
 	eng.Context = NewContextWithGraphAttrs(boot.Graph)
-	eng.CodergenBackend = NewCodergenRouterWithRuntimes(boot.Config, boot.Catalog, boot.Runtimes)
+	eng.AgentBackend = NewAgentRouterWithRuntimes(boot.Config, boot.Catalog, boot.Runtimes)
 	eng.CXDB = sink
 	eng.ModelCatalogSHA = boot.Catalog.SHA256
 	eng.ModelCatalogSource = boot.ModelCatalogSource
@@ -91,6 +91,8 @@ func RunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfigFile, ov
 
 	res, err := eng.run(ctx)
 	if err != nil {
+		// Record the failure in the run DB so it doesn't stay "running" forever.
+		eng.rundbRecordRunComplete(runtime.FinalFail, err.Error(), "")
 		return nil, err
 	}
 	if boot.Startup != nil {
@@ -117,9 +119,12 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 	}
 	applyConfigDefaults(cfg)
 
-	// Create handler registry early so we can wire KnownTypes into validation
-	// and use it for provider requirement checks below.
-	reg := NewDefaultRegistry()
+	// Use the registry from options if provided (layered composition from cmd/kilroy/),
+	// otherwise fall back to the full default registry.
+	reg := overrides.Registry
+	if reg == nil {
+		reg = NewDefaultRegistry()
+	}
 
 	// Load catalog early (best-effort) so that model ID lint rules fire during
 	// PrepareWithOptions. The full ResolveModelCatalog snapshot still runs later
@@ -142,6 +147,7 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 	// Prepare graph (parse + transforms + validate).
 	g, _, err := PrepareWithOptions(dotSource, PrepareOptions{
 		RepoPath:   cfg.Repo.Path,
+		GraphDir:   overrides.GraphDir,
 		KnownTypes: reg.KnownTypes(),
 		Catalog:    earlyCatalog,
 	})
@@ -220,10 +226,24 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 		opts.RunBranchPrefix = overrides.RunBranchPrefix
 	}
 	opts.AllowTestShim = overrides.AllowTestShim
+	opts.SkipPreflight = overrides.SkipPreflight
 	opts.ForceModels = normalizeForceModels(overrides.ForceModels)
 	opts.ProgressSink = overrides.ProgressSink
 	opts.Interviewer = overrides.Interviewer
 	opts.OnEngineReady = overrides.OnEngineReady
+	opts.RunDB = overrides.RunDB
+	opts.Registry = overrides.Registry
+	opts.Labels = overrides.Labels
+	opts.Inputs = overrides.Inputs
+	opts.GraphDir = overrides.GraphDir
+	opts.GitOps = overrides.GitOps
+	opts.PackageDir = overrides.PackageDir
+	if overrides.Workspace != "" {
+		opts.Workspace = overrides.Workspace
+		if opts.RepoPath == "" {
+			opts.RepoPath = overrides.Workspace
+		}
+	}
 
 	if err := opts.applyDefaults(); err != nil {
 		return nil, err
@@ -240,28 +260,28 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 		return nil, err
 	}
 
+	// Auto-detect git mode when GitOps is not explicitly set.
+	if opts.GitOps == nil && AutoDetectGitOps != nil && opts.RepoPath != "" {
+		if detected := AutoDetectGitOps(opts.RepoPath); detected != nil {
+			opts.GitOps = detected
+		}
+	}
+
 	// Repo validation: cheap local checks that must pass before any expensive
 	// preflight work (provider probes, model catalog fetch, CXDB startup).
-	if opts.RepoPath == "" {
-		return nil, fmt.Errorf("repo.path is required")
-	}
-	if !gitutil.IsRepo(opts.RepoPath) {
-		return nil, fmt.Errorf("not a git repo: %s", opts.RepoPath)
-	}
-	if opts.RequireClean {
-		clean, err := gitutil.IsClean(opts.RepoPath)
-		if err != nil {
+	if opts.GitOps != nil {
+		if opts.RepoPath == "" {
+			return nil, fmt.Errorf("repo.path is required")
+		}
+		if err := opts.GitOps.ValidateRepo(opts.RepoPath, opts.RequireClean); err != nil {
 			return nil, err
 		}
-		if !clean {
-			return nil, fmt.Errorf("repo has uncommitted changes (require_clean=true)")
+		// Verify the repo has at least one commit (HeadSHA fails on empty repos).
+		// eng.run() needs this later for branch creation; catching it here avoids
+		// wasting minutes on provider probes and CXDB startup first.
+		if _, err := opts.GitOps.HeadSHA(opts.RepoPath); err != nil {
+			return nil, fmt.Errorf("repo has no commits or HEAD is unresolvable: %w", err)
 		}
-	}
-	// Verify the repo has at least one commit (HeadSHA fails on empty repos).
-	// eng.run() needs this later for branch creation; catching it here avoids
-	// wasting minutes on provider probes and CXDB startup first.
-	if _, err := gitutil.HeadSHA(opts.RepoPath); err != nil {
-		return nil, fmt.Errorf("repo has no commits or HEAD is unresolvable: %w", err)
 	}
 	// Ensure the logs directory is writable before expensive preflight work.
 	// Several preflight steps write into LogsRoot, but an outright unwritable
@@ -342,8 +362,12 @@ func bootstrapRunWithConfig(ctx context.Context, dotSource []byte, cfg *RunConfi
 		_ = writePreflightReport(opts.LogsRoot, report)
 		return nil, catalogErr
 	}
-	if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts, catalog, catalogChecks); err != nil {
-		return nil, err
+	if opts.SkipPreflight {
+		// Skip CLI prompt probes — caller asserts tools are configured.
+	} else {
+		if _, err := runProviderCLIPreflight(ctx, g, runtimes, cfg, opts, catalog, catalogChecks); err != nil {
+			return nil, err
+		}
 	}
 
 	var (
@@ -410,7 +434,10 @@ func validateProviderModelPairs(g *model.Graph, runtimes map[string]ProviderRunt
 	if g == nil || catalog == nil {
 		return nil, nil
 	}
-	reg := NewDefaultRegistry()
+	reg := opts.Registry
+	if reg == nil {
+		reg = NewDefaultRegistry()
+	}
 	var checks []providerPreflightCheck
 	warnedUncovered := map[string]bool{}
 	for _, n := range g.Nodes {

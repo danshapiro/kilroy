@@ -1,0 +1,19 @@
+# Multi-tool exercise workflow. Tests agent_tool routing, input/output
+# contracts, .kilroy/ convention files, and per-node observability.
+
+name = "multi-tool-exercise"
+description = "Exercise workflow: 3 CLI tools write files about a topic, tool node combines them"
+version = "0.1.0"
+
+[[inputs]]
+name = "topic"
+description = "Subject for the agents to write about"
+required = true
+
+[[inputs]]
+name = "style"
+description = "Writing style (e.g. technical, poetic, humorous)"
+required = false
+
+[defaults.labels]
+type = "exercise"
