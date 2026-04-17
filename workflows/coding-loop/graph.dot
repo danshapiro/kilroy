@@ -29,7 +29,7 @@ digraph coding_loop {
         shape=trapezium,
         label="Loop Begin",
         loop_id="main",
-        loop_max=8,
+        loop_max=12,
         loop_until_file_contains=".kilroy/decision.md:COMPLETE"
     ]
 
@@ -49,11 +49,16 @@ Steps:
 3. Run: git log --oneline -10
 4. Run: git status
 5. If .reviews/latest.md exists, read it for prior feedback and what remains incomplete.
-6. Choose the single most impactful next sub-task. Prefer unimplemented required features. On the first iteration (no .reviews/latest.md), start with the most foundational work.
+6. Choose EXACTLY ONE smallest-possible self-contained sub-task. Do NOT bundle multiple features into one iteration.
+   - If no code files exist yet, pick ONLY the foundation step (e.g. go.mod bootstrap, or the type + constructor) and STOP there. Do not also implement any features.
+   - If foundation exists, pick the SINGLE smallest unimplemented feature. Not two. Not three. Exactly one.
+   - If all features exist but the reviewer flagged a bug, pick JUST that bug and nothing else.
+   The explicit goal is to force multiple tight iterations. Each iteration should produce the minimum-viable increment — a single method, a single test, a single bugfix.
 7. Write a concise task description to .kilroy/task.md. Include:
-   - What to implement (one focused thing)
-   - Acceptance criteria (bullet list)
-   - Files likely affected (your best guess)
+   - What to implement: ONE thing, explicitly and narrowly scoped.
+   - Acceptance criteria for THIS sub-task only (2-4 bullets, focused solely on what's being added this iteration).
+   - Files likely affected (your best guess).
+   - Explicit guardrail line, quoted verbatim: Do NOT implement any other features in this iteration. Stop immediately after the scoped sub-task is complete, even if other unimplemented items are visible in the spec.
    Keep .kilroy/task.md under 30 lines.
 
 When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails."
@@ -72,9 +77,10 @@ Your job: read the task and implement it in the codebase.
 Steps:
 1. Read .kilroy/task.md for the current sub-task and its acceptance criteria.
 2. Read .kilroy/INPUT.md to find the spec path ('## spec' section), then read the spec for broader context.
-3. Implement the task. Write clean, idiomatic code. Make targeted changes — do not refactor unrelated code.
-4. Run any applicable tests or build commands to verify your work does not break existing functionality.
-5. Stage and commit ALL changes with a clear message describing what was done (e.g., 'feat: add X per spec').
+3. Implement ONLY what .kilroy/task.md asks for. Do NOT implement any other features you see in the spec or guess at next steps — the chooser is responsible for scheduling and will hand you the next sub-task on the next iteration. Stay strictly in your lane.
+4. Write clean, idiomatic code. Make targeted changes — do not refactor unrelated code.
+5. Run any applicable tests or build commands to verify your work does not break existing functionality.
+6. Stage and commit ALL changes with a clear message describing what was done (e.g., 'feat: add X per spec').
    If there is genuinely nothing to implement (task already done), write a note to .kilroy/implementer-note.md and commit that.
 
 When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails."
@@ -154,7 +160,7 @@ When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $K
         shape=invtrapezium,
         label="Loop End",
         loop_id="main",
-        loop_max=8,
+        loop_max=12,
         loop_until_file_contains=".kilroy/decision.md:COMPLETE"
     ]
 
