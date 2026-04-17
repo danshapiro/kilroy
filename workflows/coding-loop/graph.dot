@@ -1,0 +1,200 @@
+// coding-loop: iterative coding agent with reviewer feedback and LLM done-gate.
+//
+// Inputs: spec (absolute path to a spec file).
+// Output: result.md at the workspace root.
+//
+// Flow (up to loop_max=8 iterations):
+//   start → loop_begin → task_chooser → implementer → reviewer → done_gate → loop_end → report → done
+//
+// Termination: done_gate writes COMPLETE or CONTINUE to .kilroy/decision.md.
+// loop_end checks for COMPLETE and either loops back to loop_begin or exits.
+
+digraph coding_loop {
+    graph [
+        inputs="spec",
+        outputs="result.md",
+        model_stylesheet="
+            * { llm_provider: anthropic; llm_model: claude-haiku-4.5; }
+            .implementer { llm_model: claude-sonnet-4.6; }
+            .reviewer { llm_model: claude-sonnet-4.6; }
+        "
+    ]
+
+    start [shape=Mdiamond, label="Start"]
+    done  [shape=Msquare,  label="Done"]
+
+    // Loop sentinel: marks the top of the iteration scope.
+    // The engine jumps back here when loop_end decides to continue.
+    loop_begin [
+        shape=trapezium,
+        label="Loop Begin",
+        loop_id="main",
+        loop_max=8,
+        loop_until_file_contains=".kilroy/decision.md:COMPLETE"
+    ]
+
+    // Task chooser: lightweight model reads spec + latest review,
+    // decides the most impactful next sub-task, writes .kilroy/task.md.
+    task_chooser [
+        shape=box,
+        label="Task Chooser",
+        agent_mode="agent_loop",
+        prompt="You are the task chooser in an iterative coding workflow.
+
+Your job: read the spec and latest review, then decide the single most important next sub-task for the implementer to work on this iteration.
+
+Steps:
+1. Read .kilroy/INPUT.md. Find the '## spec' section — it contains the absolute path to the spec file.
+2. Read the spec file at that path.
+3. Run: git log --oneline -10
+4. Run: git status
+5. If .reviews/latest.md exists, read it for prior feedback and what remains incomplete.
+6. Choose the single most impactful next sub-task. Prefer unimplemented required features. On the first iteration (no .reviews/latest.md), start with the most foundational work.
+7. Write a concise task description to .kilroy/task.md. Include:
+   - What to implement (one focused thing)
+   - Acceptance criteria (bullet list)
+   - Files likely affected (your best guess)
+   Keep .kilroy/task.md under 30 lines.
+
+When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails."
+    ]
+
+    // Implementer: reads .kilroy/task.md, implements the task, commits.
+    implementer [
+        shape=box,
+        label="Implementer",
+        class="implementer",
+        agent_tool="claude",
+        prompt="You are the implementer in an iterative coding workflow.
+
+Your job: read the task and implement it in the codebase.
+
+Steps:
+1. Read .kilroy/task.md for the current sub-task and its acceptance criteria.
+2. Read .kilroy/INPUT.md to find the spec path ('## spec' section), then read the spec for broader context.
+3. Implement the task. Write clean, idiomatic code. Make targeted changes — do not refactor unrelated code.
+4. Run any applicable tests or build commands to verify your work does not break existing functionality.
+5. Stage and commit ALL changes with a clear message describing what was done (e.g., 'feat: add X per spec').
+   If there is genuinely nothing to implement (task already done), write a note to .kilroy/implementer-note.md and commit that.
+
+When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails."
+    ]
+
+    // Reviewer: reads task + diff, writes .reviews/iter-NNN.md and .reviews/latest.md, commits.
+    reviewer [
+        shape=box,
+        label="Reviewer",
+        class="reviewer",
+        agent_tool="claude",
+        prompt="You are the reviewer in an iterative coding workflow.
+
+Your job: review the latest commit against the spec and record structured feedback.
+
+Steps:
+1. Read .kilroy/task.md to understand what was supposed to be implemented this iteration.
+2. Read .kilroy/INPUT.md to find the spec path ('## spec' section), then read the spec for acceptance criteria.
+3. Run: git log --oneline -5
+4. Run: git show HEAD   (shows the commit message + full diff of the implementer's latest commit; works regardless of commit depth)
+5. Compute the iteration number:
+   mkdir -p .reviews
+   N=$(ls .reviews/iter-*.md 2>/dev/null | wc -l | tr -d ' ')
+   ITER=$((N + 1))
+   PADDED=$(printf '%03d' $ITER)
+6. Write your review to both .reviews/iter-${PADDED}.md AND .reviews/latest.md (overwrite latest.md each time).
+   Review format:
+   ## Iteration ${PADDED}
+   ## What Changed
+   (summary of the diff — what files, what logic)
+   ## Against Spec
+   - Done: (list items completed)
+   - Remaining: (list required items not yet implemented)
+   ## Quality Notes
+   (code quality, edge cases, test coverage observations)
+   ## Recommendation
+   CONTINUE — if required spec items remain unimplemented.
+   COMPLETE — ONLY if ALL required spec items are done and the implementation is correct.
+7. Stage and commit the .reviews/ changes:
+   git add .reviews/
+   git commit -m \"review: iteration ${PADDED} feedback\"
+
+When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails."
+    ]
+
+    // Done-gate: lightweight LLM decides COMPLETE vs CONTINUE, writes to .kilroy/decision.md.
+    done_gate [
+        shape=box,
+        label="Done Gate",
+        agent_mode="agent_loop",
+        prompt="You are the done-gate in an iterative coding workflow.
+
+Your job: decide whether the spec is fully implemented based on the latest review.
+
+Steps:
+1. Read .kilroy/INPUT.md to find the spec path ('## spec' section), then read the spec.
+2. Run: ls .reviews/
+3. Read .reviews/latest.md (the most recent review).
+4. Optionally read additional .reviews/iter-NNN.md files if you need more context.
+5. Decide:
+   - COMPLETE: ALL required spec items are implemented and the latest review confirms it.
+   - CONTINUE: Required spec items remain unimplemented or the reviewer says CONTINUE.
+
+CRITICAL: Write EXACTLY one of these two words to .kilroy/decision.md — nothing else, no whitespace, no newline:
+  echo -n COMPLETE > .kilroy/decision.md
+  OR
+  echo -n CONTINUE > .kilroy/decision.md
+
+The engine reads this file byte-by-byte to decide loop termination. Any extra characters (spaces, newlines, punctuation) will prevent termination detection.
+
+When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails."
+    ]
+
+    // Loop sentinel: marks the end of the iteration scope.
+    // Checks termination conditions; if not met, jumps back to loop_begin.
+    loop_end [
+        shape=invtrapezium,
+        label="Loop End",
+        loop_id="main",
+        loop_max=8,
+        loop_until_file_contains=".kilroy/decision.md:COMPLETE"
+    ]
+
+    // Report: summarizes all work done, iterations run, final status.
+    report [
+        shape=box,
+        label="Report",
+        agent_mode="agent_loop",
+        prompt="You are the final reporter in an iterative coding workflow.
+
+Your job: write a comprehensive summary of the completed work.
+
+Steps:
+1. Read .kilroy/INPUT.md to find the spec path ('## spec' section), then read the spec.
+2. Read .reviews/latest.md for the final review and recommendation.
+3. Count iterations: ls .reviews/iter-*.md 2>/dev/null | wc -l
+4. Run: git log --oneline -20
+5. Read .kilroy/decision.md to confirm the final decision (COMPLETE or CONTINUE/loop_max exceeded).
+6. Write result.md at the workspace root with these sections:
+   ## Summary
+   What was implemented and how it maps to the spec requirements.
+   ## Iterations
+   How many loops ran and what changed in each (brief, one line per iteration).
+   ## Final Review
+   Key points from .reviews/latest.md.
+   ## Commits
+   List of commits made during this run (from git log).
+   ## Status
+   COMPLETE — all required spec items implemented.
+   OR INCOMPLETE — what remains and why the loop stopped.
+
+When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $KILROY_STAGE_STATUS_FALLBACK_PATH if that fails."
+    ]
+
+    start         -> loop_begin
+    loop_begin    -> task_chooser
+    task_chooser  -> implementer
+    implementer   -> reviewer
+    reviewer      -> done_gate
+    done_gate     -> loop_end
+    loop_end      -> report
+    report        -> done
+}
