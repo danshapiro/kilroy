@@ -96,6 +96,7 @@ func ValidateWithOptions(g *model.Graph, opts ValidateOptions, extraRules ...Lin
 	diags = append(diags, lintConcurrentSplitHasJoin(g)...)
 	diags = append(diags, lintNoNestedConcurrentRegions(g)...)
 	diags = append(diags, lintNoLoopsInConcurrentRegions(g)...)
+	diags = append(diags, lintTerminalConditionEdge(g)...)
 
 	// Run custom lint rules (spec §7.3: extra_rules appended after built-in rules).
 	for _, rule := range extraRules {
