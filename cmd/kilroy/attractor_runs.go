@@ -38,7 +38,7 @@ func runsUsage() {
 	fmt.Fprintln(os.Stderr, "  kilroy attractor runs list [--json] [--label KEY=VALUE] [--status STATUS] [--graph PATTERN] [--limit N]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor runs show (<id-or-prefix> | --latest [--label KEY=VALUE]) [--json] [--outputs] [--print <file>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor runs wait (<id-or-prefix> | --latest [--label KEY=VALUE]) [--timeout <duration>] [--interval <duration>] [--json]")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor runs prune [--before YYYY-MM-DD] [--graph PATTERN] [--label KEY=VALUE] [--orphans] [--dry-run | --yes]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs prune [--before YYYY-MM-DD] [--older-than <duration>] [--graph PATTERN] [--label KEY=VALUE] [--orphans] [--dry-run | --yes]")
 }
 
 // runManifest is the subset of manifest.json fields we care about for list/prune.

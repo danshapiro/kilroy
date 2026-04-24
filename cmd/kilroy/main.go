@@ -163,7 +163,7 @@ func graphDeclaredInputs(dotSource []byte) bool {
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage:")
 	fmt.Fprintln(os.Stderr, "  kilroy --version")
-	fmt.Fprintln(os.Stderr, "  kilroy [--env-file <path>] attractor run [--detach] [--validate|--preflight|--test-run] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] --graph <file.dot> [--config <run.yaml>] [--run-id <id>] [--logs-root <dir>]")
+	fmt.Fprintln(os.Stderr, "  kilroy [--env-file <path>] attractor run (--graph <file.dot> | --package <dir>) [--tmux] [--detach] [--validate|--preflight|--test-run] [--skip-preflight] [--allow-test-shim] [--confirm-stale-build] [--no-cxdb] [--force-model <provider=model>] [--config <run.yaml>] [--run-id <id>] [--logs-root <dir>] [--input <path|json>] [--prompt-file <file>] [--workspace <dir>] [--label KEY=VALUE ...]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --logs-root <dir>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --cxdb <http_base_url> --context-id <id>")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor resume --run-branch <attractor/run/...> [--repo <path>]")
@@ -175,8 +175,10 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  kilroy attractor serve [--addr <host:port>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor modeldb suggest [--refresh] [--ttl <duration>] [--provider <name>]")
 	fmt.Fprintln(os.Stderr, "  kilroy attractor review --graph <file.dot> [--output <file>] [--json] [--max-turns <n>]")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor runs list [--json]")
-	fmt.Fprintln(os.Stderr, "  kilroy attractor runs prune [--before YYYY-MM-DD] [--graph PATTERN] [--label KEY=VALUE] [--orphans] [--dry-run | --yes]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs list [--json] [--label KEY=VALUE] [--status STATUS] [--graph PATTERN] [--limit N]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs show (<id-or-prefix> | --latest [--label KEY=VALUE]) [--json] [--outputs] [--print <file>]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs wait (<id-or-prefix> | --latest [--label KEY=VALUE]) [--timeout <duration>] [--interval <duration>] [--json]")
+	fmt.Fprintln(os.Stderr, "  kilroy attractor runs prune [--before YYYY-MM-DD] [--older-than <duration>] [--graph PATTERN] [--label KEY=VALUE] [--orphans] [--dry-run | --yes]")
 }
 
 func attractor(args []string) {
