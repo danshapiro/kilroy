@@ -461,6 +461,117 @@ func TestToolGraph_PartialConfigAutoDetectsProviders(t *testing.T) {
 	}
 }
 
+// TestToolGraph_PredecessorEnvVars verifies that KILROY_PREDECESSOR_NODE and
+// KILROY_PREDECESSOR_OUTCOME are injected into the tool-command environment.
+//
+// Graph: start -> a (fails) -> b (handler on fail edge) -> done
+// When b runs, its predecessor is a with outcome "fail".
+func TestToolGraph_PredecessorEnvVars(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+	outFile := filepath.Join(t.TempDir(), "predecessor_check.txt")
+
+	dot := []byte(fmt.Sprintf(`digraph predecessor_env {
+  graph [goal="Test KILROY_PREDECESSOR_NODE and KILROY_PREDECESSOR_OUTCOME injection"]
+  start [shape=Mdiamond]
+  a     [shape=parallelogram, tool_command="exit 1"]
+  b     [shape=parallelogram, tool_command="printf '%%s\n%%s\n' \"$KILROY_PREDECESSOR_NODE\" \"$KILROY_PREDECESSOR_OUTCOME\" > %s"]
+  done  [shape=Msquare]
+  start -> a
+  a -> b    [condition="outcome=fail"]
+  a -> done
+  b -> done
+}`, outFile))
+
+	cfg := minimalToolGraphConfig(repo, pinned)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       "predecessor-env-test",
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("expected success, got %q", res.FinalStatus)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read predecessor_check.txt: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected 2 lines in output, got %d: %q", len(lines), string(data))
+	}
+	gotNode := strings.TrimSpace(lines[0])
+	gotOutcome := strings.TrimSpace(lines[1])
+	if gotNode != "a" {
+		t.Errorf("KILROY_PREDECESSOR_NODE: got %q, want %q", gotNode, "a")
+	}
+	if gotOutcome != "fail" {
+		t.Errorf("KILROY_PREDECESSOR_OUTCOME: got %q, want %q", gotOutcome, "fail")
+	}
+}
+
+// TestToolGraph_PredecessorEnvVarsSuccessPath verifies that KILROY_PREDECESSOR_NODE
+// and KILROY_PREDECESSOR_OUTCOME reflect the correct values when the predecessor
+// succeeded. When the first real node (check) runs, its predecessor is "start" with
+// outcome "success".
+func TestToolGraph_PredecessorEnvVarsSuccessPath(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	repo := initTestRepo(t)
+	logsRoot := t.TempDir()
+	pinned := writePinnedCatalog(t)
+	outFile := filepath.Join(t.TempDir(), "predecessor_success_check.txt")
+
+	dot := []byte(fmt.Sprintf(`digraph predecessor_success_env {
+  graph [goal="Test KILROY_PREDECESSOR_NODE and KILROY_PREDECESSOR_OUTCOME on success path"]
+  start [shape=Mdiamond]
+  check [shape=parallelogram, tool_command="printf '%%s\n%%s\n' \"$KILROY_PREDECESSOR_NODE\" \"$KILROY_PREDECESSOR_OUTCOME\" > %s"]
+  done  [shape=Msquare]
+  start -> check -> done
+}`, outFile))
+
+	cfg := minimalToolGraphConfig(repo, pinned)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	res, err := RunWithConfig(ctx, dot, cfg, RunOptions{
+		RunID:       "predecessor-env-success-test",
+		LogsRoot:    logsRoot,
+		DisableCXDB: true,
+	})
+	if err != nil {
+		t.Fatalf("RunWithConfig: %v", err)
+	}
+	if res.FinalStatus != runtime.FinalSuccess {
+		t.Fatalf("expected success, got %q", res.FinalStatus)
+	}
+
+	data, err := os.ReadFile(outFile)
+	if err != nil {
+		t.Fatalf("read predecessor_success_check.txt: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("expected 2 lines in output, got %d: %q", len(lines), string(data))
+	}
+	gotNode := strings.TrimSpace(lines[0])
+	gotOutcome := strings.TrimSpace(lines[1])
+	if gotNode != "start" {
+		t.Errorf("KILROY_PREDECESSOR_NODE: got %q, want %q (first real node after start should see start as predecessor)", gotNode, "start")
+	}
+	if gotOutcome != "success" {
+		t.Errorf("KILROY_PREDECESSOR_OUTCOME: got %q, want %q", gotOutcome, "success")
+	}
+}
+
 // minimalToolGraphConfig returns a RunConfigFile suitable for tool-node-only graphs.
 func minimalToolGraphConfig(repoPath, pinnedCatalogPath string) *RunConfigFile {
 	cfg := &RunConfigFile{}

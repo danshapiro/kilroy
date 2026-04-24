@@ -7,13 +7,15 @@ import (
 )
 
 const (
-	runIDEnvKey          = "KILROY_RUN_ID"
-	nodeIDEnvKey         = "KILROY_NODE_ID"
-	logsRootEnvKey       = "KILROY_LOGS_ROOT"
-	stageLogsDirEnvKey   = "KILROY_STAGE_LOGS_DIR"
-	worktreeDirEnvKey    = "KILROY_WORKTREE_DIR"
-	inputsManifestEnvKey = "KILROY_INPUTS_MANIFEST_PATH"
-	dataDirEnvKey        = "KILROY_DATA_DIR"
+	runIDEnvKey              = "KILROY_RUN_ID"
+	nodeIDEnvKey             = "KILROY_NODE_ID"
+	logsRootEnvKey           = "KILROY_LOGS_ROOT"
+	stageLogsDirEnvKey       = "KILROY_STAGE_LOGS_DIR"
+	worktreeDirEnvKey        = "KILROY_WORKTREE_DIR"
+	inputsManifestEnvKey     = "KILROY_INPUTS_MANIFEST_PATH"
+	dataDirEnvKey            = "KILROY_DATA_DIR"
+	predecessorNodeEnvKey    = "KILROY_PREDECESSOR_NODE"
+	predecessorOutcomeEnvKey = "KILROY_PREDECESSOR_OUTCOME"
 )
 
 var baseNodeEnvStripKeys = []string{
@@ -27,6 +29,8 @@ var baseNodeEnvStripKeys = []string{
 	stageStatusPathEnvKey,
 	stageStatusFallbackPathEnvKey,
 	dataDirEnvKey,
+	predecessorNodeEnvKey,
+	predecessorOutcomeEnvKey,
 }
 
 // buildBaseNodeEnv constructs the base environment for any node execution.
@@ -104,6 +108,16 @@ func BuildStageRuntimeEnv(execCtx *Execution, nodeID string) map[string]string {
 				out[inputsManifestEnvKey] = manifestPath
 			}
 		}
+	}
+	// Predecessor node and outcome: expose to handlers so fail_report-style
+	// nodes can route based on which predecessor failed without probing
+	// filesystem state. Set unconditionally (possibly empty) so the key is
+	// always present; callers need not special-case absence vs empty string.
+	if execCtx.Context != nil {
+		predNode := execCtx.Context.GetString("previous_node", "")
+		out[predecessorNodeEnvKey] = predNode
+		predOutcome := execCtx.Context.GetString("previous_outcome", "")
+		out[predecessorOutcomeEnvKey] = predOutcome
 	}
 	return out
 }
