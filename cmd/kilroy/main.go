@@ -551,6 +551,17 @@ func attractorRun(args []string) {
 			childArgs = append(childArgs, "--force-model", spec)
 		}
 
+		// Pre-register the run in the DB with status=running so that
+		// `runs list`, `runs show`, and `runs wait --latest --label ...` can
+		// find the run immediately — before the child process calls
+		// RecordRunStart inside the engine. The child will overwrite this row
+		// (INSERT OR REPLACE) with full metadata once it starts.
+		detachRepoPath := workspace
+		if detachRepoPath == "" {
+			detachRepoPath = gitDetectDir
+		}
+		registerDetachedRunInDB(runID, graphPath, logsRoot, detachRepoPath, labels, inputs, os.Args)
+
 		if err := launchDetached(childArgs, logsRoot); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
