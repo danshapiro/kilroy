@@ -60,6 +60,13 @@ func (h *TmuxAgentHandler) Execute(ctx context.Context, exec *engine.Execution, 
 	if prompt == "" {
 		prompt = node.Label()
 	}
+	if wtPreamble := strings.TrimSpace(engine.BuildWorktreeContextPreamble(exec.WorktreeDir)); wtPreamble != "" {
+		if strings.TrimSpace(prompt) == "" {
+			prompt = wtPreamble
+		} else {
+			prompt = wtPreamble + "\n\n" + strings.TrimSpace(prompt)
+		}
+	}
 
 	// Session name: kilroy-{runID}-{nodeID} (unique per node execution).
 	runID := ""

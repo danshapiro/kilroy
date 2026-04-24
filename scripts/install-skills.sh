@@ -12,31 +12,35 @@
 #   Workflow package root (stable path for --package):
 #     ~/.local/share/kilroy/workflows             -> <repo>/workflows
 #
-#   Claude Code skills + slash command:
-#     ~/.claude/skills/quick-launch               -> <repo>/skills/quick-launch
+#   Claude Code skills:
 #     ~/.claude/skills/using-kilroy               -> <repo>/skills/using-kilroy
-#     ~/.claude/commands/kilroy-quick.md          -> <repo>/skills/quick-launch/commands/kilroy-quick.md
 #
 #   Codex skills (codex discovers from ~/.agents/skills/, not ~/.codex/skills/):
-#     ~/.agents/skills/quick-launch               -> <repo>/skills/quick-launch
 #     ~/.agents/skills/using-kilroy               -> <repo>/skills/using-kilroy
 #
 #   Opencode skills (user-level opencode config dir):
-#     ~/.config/opencode/skills/quick-launch      -> <repo>/skills/quick-launch
 #     ~/.config/opencode/skills/using-kilroy      -> <repo>/skills/using-kilroy
 #
-# Codex and Opencode have no user-level slash-command system, so there is no
-# `/kilroy-quick` in those agents — invoke by asking the agent to use the
-# quick-launch skill by name.
+# The `quick-launch` and `pr-review` skills (and their workflow packages) now
+# live in the gf-software-factory repo at sibling location
+# `gf-software-factory/skills/{quick-launch,pr-review}` and
+# `gf-software-factory/workflows/{quick-launch,pr-review}`. Install those via
+# `gf-software-factory/scripts/install-kilroy-host.sh`.
 
 set -euo pipefail
 
 REPO="$(cd "$(dirname "$0")/.." && pwd)"
 BINARY="$REPO/kilroy"
 
+# Always build before installing so the binary on PATH reflects the current
+# checkout. Stale binaries are a silent failure mode for skills that depend on
+# newer flags (--tmux, --prompt-file, --label, ...). One extra compile at
+# install time is cheap insurance.
+echo "building kilroy binary..."
+(cd "$REPO" && go build -o "$BINARY" ./cmd/kilroy)
+
 if [ ! -x "$BINARY" ]; then
-    echo "error: kilroy binary not found or not executable at $BINARY" >&2
-    echo "build it first: (cd $REPO && go build -o ./kilroy ./cmd/kilroy)" >&2
+    echo "error: kilroy binary missing after build at $BINARY" >&2
     exit 1
 fi
 
@@ -58,18 +62,14 @@ link "$REPO/workflows"    "$HOME/.local/share/kilroy/workflows"
 
 echo
 echo "claude code"
-link "$REPO/skills/quick-launch"                            "$HOME/.claude/skills/quick-launch"
-link "$REPO/skills/using-kilroy"                            "$HOME/.claude/skills/using-kilroy"
-link "$REPO/skills/quick-launch/commands/kilroy-quick.md"   "$HOME/.claude/commands/kilroy-quick.md"
+link "$REPO/skills/using-kilroy"    "$HOME/.claude/skills/using-kilroy"
 
 echo
 echo "codex (~/.agents/skills/ is the native discovery path)"
-link "$REPO/skills/quick-launch"    "$HOME/.agents/skills/quick-launch"
 link "$REPO/skills/using-kilroy"    "$HOME/.agents/skills/using-kilroy"
 
 echo
 echo "opencode (user-level)"
-link "$REPO/skills/quick-launch"    "$HOME/.config/opencode/skills/quick-launch"
 link "$REPO/skills/using-kilroy"    "$HOME/.config/opencode/skills/using-kilroy"
 
 echo
@@ -81,7 +81,5 @@ else
 fi
 
 echo
-echo "done. invoke with:"
-echo "  claude:    /kilroy-quick <task description>"
-echo "  codex:     ask codex to use the quick-launch skill — mention it by name"
-echo "  opencode:  ask opencode to use the quick-launch skill — mention it by name"
+echo "done. for the quick-launch and pr-review skills, install them from"
+echo "gf-software-factory: gf-software-factory/scripts/install-kilroy-host.sh"

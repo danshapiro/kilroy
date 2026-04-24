@@ -122,7 +122,8 @@ func TestTmuxAgentHandler_FakeAgent_SuccessfulExecution(t *testing.T) {
 		t.Fatalf("response = %q, want to contain FAKE_AGENT_OUTPUT_OK", string(resp))
 	}
 
-	// Verify prompt.md was written.
+	// Verify prompt.md was written — the user prompt survives, and the
+	// worktree-context preamble is prepended so the agent stays in cwd.
 	promptPath := filepath.Join(logsRoot, "test_node", "prompt.md")
 	prompt, err := os.ReadFile(promptPath)
 	if err != nil {
@@ -130,6 +131,12 @@ func TestTmuxAgentHandler_FakeAgent_SuccessfulExecution(t *testing.T) {
 	}
 	if !strings.Contains(string(prompt), "do something") {
 		t.Fatalf("prompt = %q, want 'do something'", string(prompt))
+	}
+	if !strings.Contains(string(prompt), "WORKTREE CONTEXT") {
+		t.Fatalf("prompt = %q, want worktree-context preamble", string(prompt))
+	}
+	if !strings.Contains(string(prompt), workDir) {
+		t.Fatalf("prompt = %q, want worktree path %q", string(prompt), workDir)
 	}
 }
 

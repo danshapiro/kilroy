@@ -487,6 +487,24 @@ func BuildManualBoxFanInPromptPreamble(exec *Execution, node *model.Node) string
 	return strings.TrimSpace(b.String())
 }
 
+// BuildWorktreeContextPreamble returns a short preamble that pins the agent to
+// its isolated worktree. Without it, an agent following a prompt that mentions
+// absolute paths outside the worktree will happily `cd` out and clobber the
+// user's source tree. Returns "" if worktreeDir is empty.
+func BuildWorktreeContextPreamble(worktreeDir string) string {
+	worktreeDir = strings.TrimSpace(worktreeDir)
+	if worktreeDir == "" {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("WORKTREE CONTEXT\n")
+	b.WriteString(fmt.Sprintf("- You are running inside an isolated Kilroy worktree at %s.\n", worktreeDir))
+	b.WriteString("- All work must happen relative to cwd. Do not `cd` elsewhere.\n")
+	b.WriteString("- Do not pass `-C <path>` to git with a path outside cwd.\n")
+	b.WriteString("- If the task description mentions absolute paths outside this worktree, treat them as informational only — do not read, write, or run commands against them.\n")
+	return b.String()
+}
+
 func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *model.Node) (runtime.Outcome, error) {
 	stageDir := filepath.Join(exec.LogsRoot, node.ID)
 	stageStatusPath := filepath.Join(stageDir, "status.json")
@@ -536,6 +554,15 @@ func (h *CodergenHandler) Execute(ctx context.Context, exec *Execution, node *mo
 			promptText = preamble
 		} else {
 			promptText = preamble + "\n\n" + strings.TrimSpace(promptText)
+		}
+	}
+	if exec != nil {
+		if wtPreamble := strings.TrimSpace(BuildWorktreeContextPreamble(exec.WorktreeDir)); wtPreamble != "" {
+			if strings.TrimSpace(promptText) == "" {
+				promptText = wtPreamble
+			} else {
+				promptText = wtPreamble + "\n\n" + strings.TrimSpace(promptText)
+			}
 		}
 	}
 	if env := BuildStageRuntimeEnv(exec, node.ID); len(env) > 0 {
