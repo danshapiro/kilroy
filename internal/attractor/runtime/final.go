@@ -8,8 +8,9 @@ import (
 type FinalStatus string
 
 const (
-	FinalSuccess FinalStatus = "success"
-	FinalFail    FinalStatus = "fail"
+	FinalSuccess  FinalStatus = "success"
+	FinalFail     FinalStatus = "fail"
+	FinalCanceled FinalStatus = "canceled"
 )
 
 type FinalOutcome struct {

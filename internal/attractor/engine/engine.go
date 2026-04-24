@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -1960,9 +1961,13 @@ func (e *Engine) persistFatalOutcome(ctx context.Context, runErr error) {
 	}
 
 	failedTurnID, _ := e.cxdbRunFailed(ctx, nodeID, sha, reason)
+	status := runtime.FinalFail
+	if isCanceledError(runErr) {
+		status = runtime.FinalCanceled
+	}
 	final := runtime.FinalOutcome{
 		Timestamp:         time.Now().UTC(),
-		Status:            runtime.FinalFail,
+		Status:            status,
 		RunID:             e.Options.RunID,
 		FinalGitCommitSHA: sha,
 		FailureReason:     reason,
@@ -2039,6 +2044,49 @@ func (e *Engine) persistTerminalOutcome(ctx context.Context, final runtime.Final
 
 	// Best-effort push after terminal outcome so remote has final state.
 	e.gitPushIfConfigured()
+
+	// Emit the terminal progress event as the final line of progress.ndjson.
+	// This MUST be emitted after final.json is written so that any reader
+	// observing this event can immediately open final.json.
+	e.emitTerminalProgressEvent(final)
+}
+
+// emitTerminalProgressEvent appends the terminal lifecycle event to progress.ndjson.
+// It is called as the very last action of persistTerminalOutcome so that it is
+// always the final line in the stream.
+func (e *Engine) emitTerminalProgressEvent(final runtime.FinalOutcome) {
+	switch final.Status {
+	case runtime.FinalSuccess:
+		e.appendProgress(map[string]any{
+			"event":  "run_completed",
+			"status": "success",
+		})
+	case runtime.FinalFail:
+		ev := map[string]any{
+			"event":  "run_failed",
+			"status": "fail",
+		}
+		if reason := strings.TrimSpace(final.FailureReason); reason != "" {
+			ev["reason"] = reason
+		}
+		e.appendProgress(ev)
+	case runtime.FinalCanceled:
+		ev := map[string]any{
+			"event":  "run_failed",
+			"status": "canceled",
+		}
+		if reason := strings.TrimSpace(final.FailureReason); reason != "" {
+			ev["reason"] = reason
+		}
+		e.appendProgress(ev)
+	}
+}
+
+// isCanceledError reports whether err is a context cancellation error
+// (context.Canceled or context.DeadlineExceeded). Used to classify
+// externally-canceled runs as FinalCanceled vs internally-failed FinalFail.
+func isCanceledError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 // gitPushIfConfigured pushes the run branch to the configured remote.
