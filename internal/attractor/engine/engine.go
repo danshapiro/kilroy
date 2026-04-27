@@ -667,6 +667,15 @@ func (e *Engine) runLoop(ctx context.Context, current string, completed []string
 			prev = completed[len(completed)-1]
 		}
 		e.Context.Set("previous_node", prev)
+		// Expose predecessor outcome so handlers (tool-command, agent) receive
+		// KILROY_PREDECESSOR_OUTCOME alongside KILROY_PREDECESSOR_NODE.
+		prevOutcome := ""
+		if prev != "" {
+			if o, ok := nodeOutcomes[prev]; ok {
+				prevOutcome = string(o.Status)
+			}
+		}
+		e.Context.Set("previous_outcome", prevOutcome)
 		e.Context.Set("current_node", current)
 		e.Context.Set("completed_nodes", append([]string{}, completed...))
 
