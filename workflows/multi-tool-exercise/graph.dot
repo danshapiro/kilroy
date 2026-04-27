@@ -68,12 +68,12 @@ digraph multi_tool_exercise {
 
     start           -> prepare
     prepare         -> claude_write   [condition="outcome=success"]
-    prepare         -> done
+    prepare         -> done           [condition="outcome!=success"]
     claude_write    -> codex_write
     codex_write     -> opencode_write
     opencode_write  -> combine
     combine         -> validate       [condition="outcome=success"]
-    combine         -> done
+    combine         -> done           [condition="outcome!=success"]
     validate        -> check_validate
     check_validate  -> done           [condition="outcome=success"]
     check_validate  -> done           [condition="outcome=fail"]

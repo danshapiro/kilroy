@@ -202,5 +202,5 @@ When finished, write {\"status\":\"success\"} to $KILROY_STAGE_STATUS_PATH or $K
     reviewer      -> done_gate
     done_gate     -> loop_end
     loop_end      -> report
-    report        -> done
+    report        -> done [condition="outcome=success"]
 }

@@ -1506,9 +1506,11 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="y"]
   start -> a
-  a -> exit [condition="outcome=success"]
-  a -> exit [condition="outcome=fail"]
+  a -> b [condition="outcome=success"]
+  a -> b [condition="outcome=fail"]
+  b -> exit
 }
 `))
 	if err != nil {
@@ -1524,10 +1526,55 @@ digraph G {
   start [shape=Mdiamond]
   exit  [shape=Msquare]
   a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
+  b [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="y"]
+  start -> a
+  a -> b [condition="outcome=success"]
+  a -> b [condition="outcome=fail"]
+  a -> b
+  b -> exit
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := lintAllConditionalEdges(g)
+	assertNoRule(t, diags, "all_conditional_edges")
+}
+
+// A complementary `outcome=X` / `outcome!=X` pair covers the full outcome
+// space, so there is no routing gap even though every edge is conditional.
+func TestValidate_AllConditionalEdges_ExemptOnExhaustivePair(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=parallelogram, tool_command="echo hi"]
+  b [shape=parallelogram, tool_command="echo bye"]
+  start -> a
+  a -> b    [condition="outcome=success"]
+  a -> exit [condition="outcome!=success"]
+  b -> exit [condition="outcome=success"]
+}
+`))
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	diags := lintAllConditionalEdges(g)
+	assertNoRule(t, diags, "all_conditional_edges")
+}
+
+// When every outgoing edge from a node targets a terminal node, the engine
+// terminates the run on a missed condition by intent — the routing-gap concern
+// doesn't apply. terminal_condition_edge governs those edges instead.
+func TestValidate_AllConditionalEdges_ExemptWhenAllTargetsTerminal(t *testing.T) {
+	g, err := dot.Parse([]byte(`
+digraph G {
+  start [shape=Mdiamond]
+  exit  [shape=Msquare]
+  a [shape=box, llm_provider=openai, llm_model=gpt-5.4, prompt="x"]
   start -> a
   a -> exit [condition="outcome=success"]
   a -> exit [condition="outcome=fail"]
-  a -> exit
 }
 `))
 	if err != nil {

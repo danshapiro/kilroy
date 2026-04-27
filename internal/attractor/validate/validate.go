@@ -1376,23 +1376,72 @@ func lintAllConditionalEdges(g *model.Graph) []Diagnostic {
 			continue // no outgoing edges — other lint rules handle this
 		}
 		allConditional := true
+		allTargetsTerminal := true
 		for _, e := range edges {
 			if strings.TrimSpace(e.Condition()) == "" {
 				allConditional = false
-				break
+			}
+			if !exitIDs[strings.TrimSpace(e.To)] {
+				allTargetsTerminal = false
 			}
 		}
-		if allConditional {
-			diags = append(diags, Diagnostic{
-				Rule:     "all_conditional_edges",
-				Severity: SeverityError,
-				NodeID:   id,
-				Message:  fmt.Sprintf("node %q has %d outgoing edge(s) but all are conditional; add an unconditional fallback edge to avoid routing gaps", id, len(edges)),
-				Fix:      "Add an unconditional edge (no condition attribute) as a fallback route",
-			})
+		if !allConditional {
+			continue
 		}
+		// Exemption 1: every outgoing edge targets a terminal node. "No condition
+		// matched" terminates the run by intent — terminal_condition_edge governs
+		// those edges instead.
+		if allTargetsTerminal {
+			continue
+		}
+		// Exemption 2: conditions are exhaustive. A pair of edges with conditions
+		// `outcome=X` and `outcome!=X` (any value of X) covers the full outcome
+		// space, so there is no runtime routing gap.
+		if hasExhaustiveOutcomePair(edges) {
+			continue
+		}
+		diags = append(diags, Diagnostic{
+			Rule:     "all_conditional_edges",
+			Severity: SeverityError,
+			NodeID:   id,
+			Message:  fmt.Sprintf("node %q has %d outgoing edge(s) but all are conditional; add an unconditional fallback edge to avoid routing gaps", id, len(edges)),
+			Fix:      "Add an unconditional edge (no condition attribute) as a fallback route",
+		})
 	}
 	return diags
+}
+
+// hasExhaustiveOutcomePair reports whether the edges collectively cover the
+// full outcome space via a complementary `outcome=X` / `outcome!=X` pair.
+// Whitespace around tokens is tolerated; no other condition shapes are
+// recognised here.
+func hasExhaustiveOutcomePair(edges []*model.Edge) bool {
+	positive := make(map[string]bool)
+	negative := make(map[string]bool)
+	for _, e := range edges {
+		cond := strings.TrimSpace(e.Condition())
+		if cond == "" {
+			continue
+		}
+		if v, ok := strings.CutPrefix(cond, "outcome!="); ok {
+			negative[strings.TrimSpace(v)] = true
+			continue
+		}
+		if v, ok := strings.CutPrefix(cond, "outcome ="); ok {
+			positive[strings.TrimSpace(v)] = true
+			continue
+		}
+		if v, ok := strings.CutPrefix(cond, "outcome="); ok {
+			positive[strings.TrimSpace(v)] = true
+			continue
+		}
+	}
+	for v := range positive {
+		if negative[v] {
+			return true
+		}
+	}
+	return false
 }
 
 func lintTemplatePostmortemRecoveryRouting(g *model.Graph) []Diagnostic {

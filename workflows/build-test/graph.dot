@@ -61,7 +61,7 @@ digraph build_test {
   check_test -> report_test_fail [condition="outcome=fail"]
   check_test -> report_test_fail
 
-  report_success -> done
-  report_build_fail -> done
-  report_test_fail -> done
+  report_success -> done [condition="outcome=success"]
+  report_build_fail -> done [condition="outcome=success"]
+  report_test_fail -> done [condition="outcome=success"]
 }
